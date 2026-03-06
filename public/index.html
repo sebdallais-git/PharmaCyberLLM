@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PharmaLLM - Pharma Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Pharma</h1>
+      <p class="subtitle">Cyber Threat Expert Assistant</p>
+      <div class="header-controls">
+        <select id="model-select" title="LLM Model">
+          <option value="llama3.2">llama3.2</option>
+        </select>
+        <button id="knowledge-btn" class="btn-secondary" title="Knowledge Base">
+          Knowledge Base
+        </button>
+        <button id="agent-btn" class="btn-secondary" title="News Agent">
+          News Agent
+        </button>
+      </div>
+    </header>
+
+    <main class="chat-container" id="chat-container">
+      <div class="message assistant">
+        <div class="message-wrapper">
+          <div class="message-content">
+            Hello! I'm <strong>PharmaBot</strong>, your pharmaceutical industry cyber threat expert assistant.
+            I can help you with:
+            <ul>
+              <li><strong>Cyber</strong>: pharma cyber attacks, costs, systems compromised</li>
+              <li><strong>Business</strong>: mergers, acquisitions, pipelines, strategies</li>
+              <li><strong>Science</strong>: mechanisms of action, clinical trials, pharmacology</li>
+              <li><strong>News</strong>: FDA/EMA approvals, regulation (auto-updated daily)</li>
+            </ul>
+            Ask me a question!
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="input-area">
+      <div class="input-wrapper">
+        <textarea
+          id="user-input"
+          placeholder="Ask your pharma question..."
+          rows="1"
+        ></textarea>
+        <button id="send-btn" class="btn-primary" title="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-actions">
+        <label class="toggle-label">
+          <input type="checkbox" id="web-search-toggle" checked>
+          <span class="toggle-text">Web search</span>
+        </label>
+        <label class="upload-label" title="Add a document">
+          <input type="file" id="file-upload" accept=".txt,.md,.pdf,.csv,.json,.docx,.pptx,.ppt" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+          </svg>
+          Add a document
+        </label>
+        <span id="status" class="status"></span>
+      </div>
+    </footer>
+
+    <!-- Knowledge base modal -->
+    <div id="knowledge-modal" class="modal" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Knowledge Base</h2>
+          <button id="close-modal" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="knowledge-stats"></div>
+          <h3>Add Text</h3>
+          <input type="text" id="text-source" placeholder="Source name" class="input-field">
+          <textarea id="text-content" placeholder="Paste your text here..." rows="6" class="input-field"></textarea>
+          <button id="ingest-btn" class="btn-primary">Ingest Text</button>
+
+          <h3>Search</h3>
+          <input type="text" id="search-query" placeholder="Search the knowledge base..." class="input-field">
+          <button id="search-btn" class="btn-secondary">Search</button>
+          <div id="search-results"></div>
+        </div>
+      </div>
+    </div>
+    <!-- News Agent modal -->
+    <div id="agent-modal" class="modal" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>News Agent</h2>
+          <button id="close-agent-modal" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="agent-description">The news agent automatically scrubs Google News every 24 hours for pharma business, science, and cyber threat news.</p>
+          <div id="agent-status"></div>
+          <button id="run-agent-btn" class="btn-primary">Run Now</button>
+          <h3>Monitored Topics</h3>
+          <div id="agent-topics"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

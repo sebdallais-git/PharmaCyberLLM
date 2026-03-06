@@ -1,0 +1,6 @@
+node_modules/
+dist/
+knowledge/.index.json
+.env
+*.log
+knowledge/.agent-state.json
