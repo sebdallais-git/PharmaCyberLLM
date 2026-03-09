@@ -30,7 +30,8 @@ const DEFAULT_OPTIONS = {
 
 export async function chatWithOllama(
   messages: OllamaMessage[],
-  model: string = DEFAULT_MODEL
+  model: string = DEFAULT_MODEL,
+  optionsOverride?: Record<string, unknown>
 ): Promise<string> {
   const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: "POST",
@@ -40,7 +41,7 @@ export async function chatWithOllama(
       messages,
       stream: false,
       keep_alive: "30m",
-      options: DEFAULT_OPTIONS,
+      options: { ...DEFAULT_OPTIONS, ...optionsOverride },
     }),
   });
 

@@ -6,7 +6,9 @@ import chatRouter from "./api/chat.js";
 import knowledgeRouter from "./api/knowledge.js";
 import agentRouter from "./api/agent.js";
 import { loadIndex, ingestKnowledgeDir, saveIndex } from "./services/knowledge-store.js";
+import { isChromaDBAvailable, getChromaStatus } from "./services/chromadb-store.js";
 import { runNewsAgent } from "./services/news-agent.js";
+import { initGapDB } from "./services/gap-detector.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -35,12 +37,22 @@ function scheduleNewsAgent(): void {
 }
 
 async function start(): Promise<void> {
+  initGapDB();
   await loadIndex();
 
   const added = await ingestKnowledgeDir();
   if (added > 0) {
     await saveIndex();
     console.log(`${added} new chunks ingested from files`);
+  }
+
+  // Check ChromaDB availability
+  const chromaOk = await isChromaDBAvailable();
+  if (chromaOk) {
+    const status = await getChromaStatus();
+    console.log(`ChromaDB: connected (${status.totalChunks} chunks, ${status.sources.length} sources)`);
+  } else {
+    console.log("ChromaDB: not available — RAG will use in-memory store only");
   }
 
   const HOST = process.env.HOST ?? "0.0.0.0";

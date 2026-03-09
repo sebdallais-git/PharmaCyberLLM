@@ -5,7 +5,10 @@ import type { Request, Response } from "express";
 import { streamChatWithOllama, listModels } from "../services/ollama.js";
 import type { OllamaMessage } from "../services/ollama.js";
 import { searchKnowledge } from "../services/knowledge-store.js";
+import { searchChromaDB, isChromaDBAvailable } from "../services/chromadb-store.js";
+import type { ChromaQueryResult } from "../services/chromadb-store.js";
 import { searchWeb } from "../services/web-search.js";
+import { handleGapDetection } from "../services/gap-detector.js";
 
 const router = Router();
 
@@ -53,14 +56,17 @@ You answer questions on the following topics:
 - Pharma news: FDA/EMA approvals, product launches, regulation
 - Drug pipeline: Phase 3 candidates, peak sales estimates, market value forecasts, revenue projections
 - Cyber threats: ransomware, data breaches, IP theft, manufacturing shutdowns, market impact
+- Manufacturing: top pharma plants worldwide, facility investment value, production capacity, downtime costs per hour/day, batch loss values, geographic concentration risk (Basel, Ireland, RTP, Singapore)
 - IT vendors: Dell, Pure Storage, NetApp, HPE, NVIDIA, VAST, WEKA, CrowdStrike, Splunk, SAP, ServiceNow, Snowflake, Databricks
 
 Rules:
-- Answer precisely and factually using the provided context
-- When the context contains relevant data (tables, lists, numbers), use it directly in your answer
-- Cite sources when using the provided context
-- If you are unsure, say so clearly
-- Respond in the same language as the question`;
+- Use the following context to answer the user's question.
+- If the context doesn't contain relevant information, say so honestly and answer based on your general knowledge, clearly stating that you're not confident in the answer.
+- When the context contains relevant data (tables, lists, numbers, costs, facility names), use it directly and specifically in your answer.
+- Cite sources when using the provided context.
+- Respond in the same language as the question.`;
+
+const GAP_DISCLAIMER = "\n\n---\n*I'm not fully confident in this answer. I'm researching this topic now and should know more soon.*";
 
 // POST /api/chat - Envoie un message et reçoit une réponse en streaming
 router.post("/", async (req: Request, res: Response): Promise<void> => {
@@ -76,14 +82,34 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // Search knowledge base
-  const relevantChunks = await searchKnowledge(message, 8);
+  // Search knowledge base — ChromaDB (primary) + in-memory (fallback)
   let contextBlock = "";
-  if (relevantChunks.length > 0) {
-    contextBlock = "\n\nRelevant context from the knowledge base:\n" +
-      relevantChunks
-        .map((c) => `[Source: ${c.source}]\n${c.content}`)
-        .join("\n\n---\n\n");
+  try {
+    const chromaAvailable = await isChromaDBAvailable();
+    if (chromaAvailable) {
+      const chromaResults = await searchChromaDB(message, 5);
+      if (chromaResults.length > 0) {
+        contextBlock = "\n\nRelevant context from the knowledge base:\n" +
+          chromaResults
+            .map((r: ChromaQueryResult) => `[Source: ${String(r.metadata.source ?? "unknown")}]\n${r.document}`)
+            .join("\n\n---\n\n");
+        console.log(`[RAG] ChromaDB returned ${chromaResults.length} chunks`);
+      }
+    }
+  } catch (err) {
+    console.error("[RAG] ChromaDB search failed, falling back to in-memory:", err);
+  }
+
+  // Fallback to in-memory knowledge store if ChromaDB returned nothing
+  if (!contextBlock) {
+    const relevantChunks = await searchKnowledge(message, 8);
+    if (relevantChunks.length > 0) {
+      contextBlock = "\n\nRelevant context from the knowledge base:\n" +
+        relevantChunks
+          .map((c) => `[Source: ${c.source}]\n${c.content}`)
+          .join("\n\n---\n\n");
+      console.log(`[RAG] In-memory store returned ${relevantChunks.length} chunks`);
+    }
   }
 
   // Web search if enabled
@@ -114,9 +140,24 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   res.setHeader("Connection", "keep-alive");
 
   try {
+    // Collecter la réponse complète pendant le streaming
+    let fullResponse = "";
+
     for await (const token of streamChatWithOllama(messages, model)) {
+      fullResponse += token;
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     }
+
+    // Vérification de confiance après la réponse complète
+    const gapDetected = await handleGapDetection(message, fullResponse, model);
+
+    if (gapDetected) {
+      // Envoyer le disclaimer comme tokens supplémentaires
+      res.write(`data: ${JSON.stringify({ token: GAP_DISCLAIMER })}\n\n`);
+      res.write(`data: ${JSON.stringify({ gap_detected: true })}\n\n`);
+      console.log(`[Gap Detector] Knowledge gap detected for: "${message.slice(0, 80)}..."`);
+    }
+
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   } catch (error) {

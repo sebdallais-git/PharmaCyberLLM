@@ -4,3 +4,7 @@ knowledge/.index.json
 .env
 *.log
 knowledge/.agent-state.json
+data/
+python/.venv/
+__pycache__/
+*.pyc
