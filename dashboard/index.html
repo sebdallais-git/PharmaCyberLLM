@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PharmaLLM Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+a{color:#4fc3f7;text-decoration:none}
+a:hover{text-decoration:underline}
+
+.header{background:#16213e;border-bottom:2px solid #0f3460;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:20px;font-weight:600;color:#e94560}
+.header-right{display:flex;align-items:center;gap:16px;font-size:13px;color:#888}
+.health-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px}
+.health-dot.green{background:#4caf50}
+.health-dot.yellow{background:#ff9800}
+.health-dot.red{background:#f44336}
+
+.container{max-width:1400px;margin:0 auto;padding:20px}
+
+.row{display:grid;gap:16px;margin-bottom:16px}
+.row-4{grid-template-columns:repeat(4,1fr)}
+.row-2{grid-template-columns:repeat(2,1fr)}
+
+.card{background:#16213e;border-radius:10px;padding:20px;border:1px solid #0f3460;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#e94560,#0f3460)}
+.card-label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px}
+.card-value{font-size:32px;font-weight:700;color:#fff}
+.card-sub{font-size:13px;color:#888;margin-top:4px}
+.trend-up{color:#4caf50}
+.trend-down{color:#f44336}
+
+.panel{background:#16213e;border-radius:10px;padding:20px;border:1px solid #0f3460}
+.panel h3{font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#e94560;margin-bottom:16px}
+
+.chart-container{position:relative;height:280px}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 10px;border-bottom:1px solid #0f3460;color:#888;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+td{padding:8px 10px;border-bottom:1px solid rgba(15,52,96,0.4)}
+tr:hover td{background:rgba(15,52,96,0.3)}
+
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;text-transform:uppercase}
+.badge-resolved{background:rgba(76,175,80,0.2);color:#4caf50}
+.badge-triggered{background:rgba(255,152,0,0.2);color:#ff9800}
+.badge-unresolved{background:rgba(244,67,54,0.2);color:#f44336}
+.badge-detected{background:rgba(33,150,243,0.2);color:#2196f3}
+.badge-skipped{background:rgba(158,158,158,0.2);color:#9e9e9e}
+
+.truncate{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom}
+
+.skeleton{background:linear-gradient(90deg,#16213e 25%,#1e2d50 50%,#16213e 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px;height:32px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.skeleton-text{height:16px;margin:6px 0;width:60%}
+.skeleton-chart{height:280px}
+
+.rss-list{list-style:none;max-height:300px;overflow-y:auto}
+.rss-list li{padding:8px 0;border-bottom:1px solid rgba(15,52,96,0.4);font-size:13px}
+.rss-list .rss-source{font-size:11px;color:#888}
+.rss-list .rss-date{font-size:11px;color:#666;float:right}
+
+@media(max-width:1024px){
+  .row-4{grid-template-columns:repeat(2,1fr)}
+  .row-2{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  .row-4{grid-template-columns:1fr}
+  .container{padding:12px}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>PharmaLLM Dashboard</h1>
+  <div class="header-right">
+    <span id="health-indicator"><span class="health-dot" id="health-dot"></span><span id="health-text">checking...</span></span>
+    <span id="last-updated">Loading...</span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Top row: 4 key metrics -->
+  <div class="row row-4" id="metrics-cards">
+    <div class="card" id="card-questions">
+      <div class="card-label">Questions Today</div>
+      <div class="card-value" id="val-questions"><div class="skeleton" style="width:80px"></div></div>
+      <div class="card-sub" id="sub-questions"></div>
+    </div>
+    <div class="card" id="card-confidence">
+      <div class="card-label">Confidence Rate (7d)</div>
+      <div class="card-value" id="val-confidence"><div class="skeleton" style="width:100px"></div></div>
+      <div class="card-sub" id="sub-confidence"></div>
+    </div>
+    <div class="card" id="card-rating">
+      <div class="card-label">Avg User Rating (7d)</div>
+      <div class="card-value" id="val-rating"><div class="skeleton" style="width:70px"></div></div>
+      <div class="card-sub" id="sub-rating"></div>
+    </div>
+    <div class="card" id="card-kb">
+      <div class="card-label">Knowledge Base</div>
+      <div class="card-value" id="val-kb"><div class="skeleton" style="width:90px"></div></div>
+      <div class="card-sub" id="sub-kb"></div>
+    </div>
+  </div>
+
+  <!-- Second row: 2 charts -->
+  <div class="row row-2">
+    <div class="panel">
+      <h3>Questions & Confidence (30 days)</h3>
+      <div class="chart-container"><canvas id="chart-questions"></canvas></div>
+    </div>
+    <div class="panel">
+      <h3>User Ratings (30 days)</h3>
+      <div class="chart-container"><canvas id="chart-ratings"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Third row: gaps table + bar chart -->
+  <div class="row row-2">
+    <div class="panel">
+      <h3>Recent Knowledge Gaps</h3>
+      <div id="gaps-table-container">
+        <div class="skeleton skeleton-chart"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Top Gap Topics</h3>
+      <div class="chart-container"><canvas id="chart-topics"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Bottom row: donut + RSS list -->
+  <div class="row row-2">
+    <div class="panel">
+      <h3>Knowledge Sources</h3>
+      <div class="chart-container" style="max-width:320px;margin:0 auto"><canvas id="chart-sources"></canvas></div>
+    </div>
+    <div class="panel">
+      <h3>System Info</h3>
+      <div id="system-info">
+        <div class="skeleton skeleton-chart"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let questionsChart, ratingsChart, topicsChart, sourcesChart;
+
+const CHART_COLORS = {
+  cyan: '#00bcd4',
+  pink: '#e94560',
+  blue: '#2196f3',
+  green: '#4caf50',
+  orange: '#ff9800',
+  purple: '#9c27b0',
+  teal: '#009688',
+  amber: '#ffc107',
+};
+const GRID_COLOR = 'rgba(255,255,255,0.06)';
+const FONT_COLOR = '#888';
+
+Chart.defaults.color = FONT_COLOR;
+Chart.defaults.borderColor = GRID_COLOR;
+Chart.defaults.font.family = '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif';
+
+function badgeFor(status) {
+  const map = {
+    resolved: 'badge-resolved',
+    triggered: 'badge-triggered',
+    unresolved: 'badge-unresolved',
+    detected: 'badge-detected',
+    skipped: 'badge-skipped',
+  };
+  return `<span class="badge ${map[status] || 'badge-detected'}">${status}</span>`;
+}
+
+function trendArrow(current, previous) {
+  if (previous === null || previous === undefined || current === null) return '';
+  if (current > previous) return `<span class="trend-up">&#9650;</span>`;
+  if (current < previous) return `<span class="trend-down">&#9660;</span>`;
+  return `<span style="color:#888">&#9654;</span>`;
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function fillDays(data, field, days) {
+  const map = new Map();
+  data.forEach(d => map.set(d.date, d));
+  const result = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    result.push(map.get(key) || { date: key, [field]: 0, count: 0, confident_count: 0, total_count: 0, avg_rating: null });
+  }
+  return result;
+}
+
+function createQuestionsChart(data) {
+  const ctx = document.getElementById('chart-questions').getContext('2d');
+  const filled = fillDays(data.questions_by_day, 'count', 30);
+  const confFilled = fillDays(data.confidence_by_day, 'confident_count', 30);
+  const labels = filled.map(d => d.date.slice(5));
+  const counts = filled.map(d => d.count);
+  const confRates = confFilled.map(d =>
+    d.total_count > 0 ? Math.round((d.confident_count / d.total_count) * 100) : null
+  );
+
+  if (questionsChart) questionsChart.destroy();
+  questionsChart = new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Questions',
+          data: counts,
+          backgroundColor: 'rgba(0,188,212,0.3)',
+          borderColor: CHART_COLORS.cyan,
+          borderWidth: 1,
+          borderRadius: 3,
+          yAxisID: 'y',
+        },
+        {
+          type: 'line',
+          label: 'Confidence %',
+          data: confRates,
+          borderColor: CHART_COLORS.pink,
+          backgroundColor: 'rgba(233,69,96,0.1)',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: true,
+          yAxisID: 'y1',
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { boxWidth: 12, padding: 16 } } },
+      scales: {
+        y: { beginAtZero: true, grid: { color: GRID_COLOR }, title: { display: true, text: 'Questions' } },
+        y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'Confidence %' } },
+        x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+      },
+    },
+  });
+}
+
+function createRatingsChart(data) {
+  const ctx = document.getElementById('chart-ratings').getContext('2d');
+  const filled = fillDays(data.ratings_by_day, 'avg_rating', 30);
+  const labels = filled.map(d => d.date.slice(5));
+  const ratings = filled.map(d => d.avg_rating);
+
+  if (ratingsChart) ratingsChart.destroy();
+  ratingsChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Avg Rating',
+          data: ratings,
+          borderColor: CHART_COLORS.amber,
+          backgroundColor: 'rgba(255,193,7,0.1)',
+          borderWidth: 2,
+          pointRadius: 2,
+          pointBackgroundColor: CHART_COLORS.amber,
+          tension: 0.3,
+          fill: true,
+          spanGaps: true,
+        },
+        {
+          label: 'Baseline (3.0)',
+          data: new Array(30).fill(3),
+          borderColor: 'rgba(255,255,255,0.15)',
+          borderWidth: 1,
+          borderDash: [5, 5],
+          pointRadius: 0,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12, padding: 16 } } },
+      scales: {
+        y: { min: 1, max: 5, grid: { color: GRID_COLOR }, title: { display: true, text: 'Rating' } },
+        x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+      },
+    },
+  });
+}
+
+function createTopicsChart(data) {
+  const ctx = document.getElementById('chart-topics').getContext('2d');
+  const topics = (data.top_gap_topics || []).slice(0, 10).reverse();
+  const labels = topics.map(t => t.topic.length > 30 ? t.topic.slice(0, 30) + '...' : t.topic);
+  const counts = topics.map(t => t.count);
+
+  if (topicsChart) topicsChart.destroy();
+  topicsChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Gap Frequency',
+        data: counts,
+        backgroundColor: 'rgba(233,69,96,0.5)',
+        borderColor: CHART_COLORS.pink,
+        borderWidth: 1,
+        borderRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { beginAtZero: true, grid: { color: GRID_COLOR } },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      },
+    },
+  });
+}
+
+function createSourcesChart(data) {
+  const ctx = document.getElementById('chart-sources').getContext('2d');
+  const src = data.knowledge_by_source || {};
+  const labels = Object.keys(src);
+  const values = Object.values(src);
+
+  if (labels.length === 0) {
+    labels.push('in-memory');
+    values.push(data.total_knowledge_chunks || 0);
+  }
+
+  const colors = [CHART_COLORS.cyan, CHART_COLORS.pink, CHART_COLORS.green, CHART_COLORS.orange, CHART_COLORS.purple, CHART_COLORS.teal];
+
+  if (sourcesChart) sourcesChart.destroy();
+  sourcesChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors.slice(0, labels.length),
+        borderColor: '#16213e',
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+      },
+    },
+  });
+}
+
+function renderGapsTable(data) {
+  const gaps = data.recent_gaps || [];
+  if (gaps.length === 0) {
+    document.getElementById('gaps-table-container').innerHTML = '<p style="color:#666;text-align:center;padding:40px">No gaps detected yet</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Time</th><th>Question</th><th>Topic</th><th>Status</th></tr></thead><tbody>';
+  for (const g of gaps) {
+    const q = g.original_query.length > 60 ? g.original_query.slice(0, 60) + '...' : g.original_query;
+    const t = (g.search_topic || '-').length > 25 ? g.search_topic.slice(0, 25) + '...' : (g.search_topic || '-');
+    html += `<tr><td>${formatTime(g.timestamp)}</td><td><span class="truncate" title="${g.original_query.replace(/"/g, '&quot;')}">${q}</span></td><td>${t}</td><td>${badgeFor(g.status)}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('gaps-table-container').innerHTML = html;
+}
+
+function renderSystemInfo(data, health) {
+  const checks = health.checks || {};
+  let html = '<table><thead><tr><th>Component</th><th>Status</th><th>Latency</th></tr></thead><tbody>';
+  for (const [name, info] of Object.entries(checks)) {
+    const st = info.status === 'ok' ? '<span style="color:#4caf50">OK</span>' : `<span style="color:#f44336">${info.status}</span>`;
+    const lat = info.latency_ms !== undefined ? info.latency_ms + 'ms' : '-';
+    html += `<tr><td style="text-transform:capitalize">${name}</td><td>${st}</td><td>${lat}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  html += `<div style="margin-top:16px;font-size:12px;color:#666">`;
+  html += `<p>Avg response time: <strong style="color:#e0e0e0">${data.avg_response_time_ms !== null ? data.avg_response_time_ms + 'ms' : 'N/A'}</strong></p>`;
+  html += `<p>Questions (30d): <strong style="color:#e0e0e0">${data.questions_30d}</strong></p>`;
+  html += `<p>Gaps detected (7d): <strong style="color:#e0e0e0">${data.gaps_detected_7d}</strong> | Resolved: <strong style="color:#4caf50">${data.gaps_resolved_7d}</strong> | Open: <strong style="color:#f44336">${data.gaps_unresolved}</strong></p>`;
+  html += `</div>`;
+  document.getElementById('system-info').innerHTML = html;
+}
+
+function updateCards(data) {
+  document.getElementById('val-questions').textContent = data.questions_today;
+  document.getElementById('sub-questions').innerHTML = `7d: ${data.questions_7d} ${trendArrow(data.questions_7d, data.questions_30d / 4.3)}`;
+
+  document.getElementById('val-confidence').textContent = data.confidence_rate_7d + '%';
+  document.getElementById('sub-confidence').innerHTML = `30d: ${data.confidence_rate_30d}% ${trendArrow(data.confidence_rate_7d, data.confidence_rate_30d)}`;
+
+  const rating = data.avg_rating_7d !== null ? data.avg_rating_7d.toFixed(1) : '-';
+  document.getElementById('val-rating').textContent = rating + '/5';
+  const rating30 = data.avg_rating_30d !== null ? data.avg_rating_30d.toFixed(1) : '-';
+  document.getElementById('sub-rating').innerHTML = `30d: ${rating30} ${data.avg_rating_7d !== null && data.avg_rating_30d !== null ? trendArrow(data.avg_rating_7d, data.avg_rating_30d) : ''}`;
+
+  document.getElementById('val-kb').textContent = (data.total_knowledge_chunks || 0).toLocaleString();
+  const srcKeys = Object.keys(data.knowledge_by_source || {});
+  document.getElementById('sub-kb').textContent = srcKeys.length > 0
+    ? srcKeys.map(k => `${k}: ${data.knowledge_by_source[k]}`).join(' | ')
+    : 'chunks across all sources';
+}
+
+async function fetchData() {
+  try {
+    const [metricsRes, healthRes] = await Promise.all([
+      fetch(API_BASE + '/api/dashboard/metrics'),
+      fetch(API_BASE + '/api/health'),
+    ]);
+    const metrics = await metricsRes.json();
+    const health = await healthRes.json();
+
+    // Health indicator
+    const dot = document.getElementById('health-dot');
+    const text = document.getElementById('health-text');
+    dot.className = 'health-dot ' + (health.status === 'healthy' ? 'green' : health.status === 'degraded' ? 'yellow' : 'red');
+    text.textContent = health.status;
+
+    // Update cards
+    updateCards(metrics);
+
+    // Charts
+    createQuestionsChart(metrics);
+    createRatingsChart(metrics);
+    createTopicsChart(metrics);
+    createSourcesChart(metrics);
+
+    // Tables
+    renderGapsTable(metrics);
+    renderSystemInfo(metrics, health);
+
+    // Timestamp
+    document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    console.error('Dashboard fetch error:', err);
+    document.getElementById('health-dot').className = 'health-dot red';
+    document.getElementById('health-text').textContent = 'error';
+  }
+}
+
+// Initial load + auto-refresh every 60 seconds
+fetchData();
+setInterval(fetchData, 60000);
+</script>
+</body>
+</html>

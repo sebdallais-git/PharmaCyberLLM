@@ -5,10 +5,14 @@ import { join } from "node:path";
 import chatRouter from "./api/chat.js";
 import knowledgeRouter from "./api/knowledge.js";
 import agentRouter from "./api/agent.js";
+import feedbackRouter from "./api/feedback.js";
+import dashboardRouter from "./api/dashboard.js";
 import { loadIndex, ingestKnowledgeDir, saveIndex } from "./services/knowledge-store.js";
 import { isChromaDBAvailable, getChromaStatus } from "./services/chromadb-store.js";
 import { runNewsAgent } from "./services/news-agent.js";
 import { initGapDB } from "./services/gap-detector.js";
+import { initFeedbackDB } from "./services/feedback-store.js";
+import { initRequestLog } from "./services/request-log.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -22,6 +26,10 @@ app.use(express.static(join(process.cwd(), "public")));
 app.use("/api/chat", chatRouter);
 app.use("/api/knowledge", knowledgeRouter);
 app.use("/api/agent", agentRouter);
+app.use("/api/feedback", feedbackRouter);
+app.use("/api/dashboard", dashboardRouter);
+app.use("/api", dashboardRouter); // /api/health
+app.use("/dashboard", express.static(join(process.cwd(), "dashboard")));
 
 // Start the daily news agent loop
 function scheduleNewsAgent(): void {
@@ -38,6 +46,8 @@ function scheduleNewsAgent(): void {
 
 async function start(): Promise<void> {
   initGapDB();
+  initFeedbackDB();
+  initRequestLog();
   await loadIndex();
 
   const added = await ingestKnowledgeDir();

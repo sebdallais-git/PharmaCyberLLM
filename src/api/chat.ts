@@ -9,6 +9,8 @@ import { searchChromaDB, isChromaDBAvailable } from "../services/chromadb-store.
 import type { ChromaQueryResult } from "../services/chromadb-store.js";
 import { searchWeb } from "../services/web-search.js";
 import { handleGapDetection } from "../services/gap-detector.js";
+import { createResponseEntry } from "../services/response-cache.js";
+import { logRequest } from "../services/request-log.js";
 
 const router = Router();
 
@@ -82,8 +84,13 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  const requestStart = Date.now();
+
   // Search knowledge base — ChromaDB (primary) + in-memory (fallback)
   let contextBlock = "";
+  let chunkIds: string[] = [];
+  let hadRagContext = false;
+
   try {
     const chromaAvailable = await isChromaDBAvailable();
     if (chromaAvailable) {
@@ -93,6 +100,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
           chromaResults
             .map((r: ChromaQueryResult) => `[Source: ${String(r.metadata.source ?? "unknown")}]\n${r.document}`)
             .join("\n\n---\n\n");
+        chunkIds = chromaResults.map((r: ChromaQueryResult) => r.id);
+        hadRagContext = true;
         console.log(`[RAG] ChromaDB returned ${chromaResults.length} chunks`);
       }
     }
@@ -108,6 +117,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
         relevantChunks
           .map((c) => `[Source: ${c.source}]\n${c.content}`)
           .join("\n\n---\n\n");
+      chunkIds = relevantChunks.map((c) => c.source);
+      hadRagContext = true;
       console.log(`[RAG] In-memory store returned ${relevantChunks.length} chunks`);
     }
   }
@@ -152,13 +163,34 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     const gapDetected = await handleGapDetection(message, fullResponse, model);
 
     if (gapDetected) {
-      // Envoyer le disclaimer comme tokens supplémentaires
       res.write(`data: ${JSON.stringify({ token: GAP_DISCLAIMER })}\n\n`);
       res.write(`data: ${JSON.stringify({ gap_detected: true })}\n\n`);
       console.log(`[Gap Detector] Knowledge gap detected for: "${message.slice(0, 80)}..."`);
     }
 
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    // Store response metadata and generate response_id for feedback
+    const responseId = createResponseEntry(
+      message,
+      fullResponse,
+      chunkIds,
+      hadRagContext,
+      model ?? "gemma2:9b"
+    );
+
+    // Log request async (don't block response)
+    const responseTimeMs = Date.now() - requestStart;
+    setImmediate(() => {
+      logRequest({
+        query: message,
+        responseTimeMs,
+        hadRagContext,
+        wasConfident: !gapDetected,
+        chunksUsedCount: chunkIds.length,
+        responseLength: fullResponse.length,
+      });
+    });
+
+    res.write(`data: ${JSON.stringify({ done: true, response_id: responseId })}\n\n`);
     res.end();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Erreur inconnue";

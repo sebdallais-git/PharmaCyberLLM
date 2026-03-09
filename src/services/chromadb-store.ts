@@ -283,4 +283,28 @@ export async function isChromaDBAvailable(): Promise<boolean> {
   }
 }
 
+/**
+ * Delete the collection and reset the cached ID.
+ */
+export async function deleteChromaCollection(): Promise<void> {
+  const id = await getCollectionId().catch(() => null);
+  if (!id) return;
+
+  const resp = await fetch(`${BASE}/${id}`, { method: "DELETE" });
+  if (!resp.ok && resp.status !== 404) {
+    throw new Error(`ChromaDB: failed to delete collection (${resp.status})`);
+  }
+  collectionId = null;
+}
+
+/**
+ * Delete and recreate the collection (empty).
+ */
+export async function recreateChromaCollection(): Promise<void> {
+  await deleteChromaCollection();
+  // Force re-creation
+  collectionId = null;
+  await getCollectionId();
+}
+
 export type { ChromaQueryResult };

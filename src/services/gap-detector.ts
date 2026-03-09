@@ -27,6 +27,20 @@ export function initGapDB(): void {
       status TEXT NOT NULL DEFAULT 'detected'
     )
   `);
+
+  // Add columns if they don't exist (safe migration)
+  const columns = db.prepare("PRAGMA table_info(gap_log)").all() as Array<{ name: string }>;
+  const colNames = new Set(columns.map((c) => c.name));
+
+  if (!colNames.has("retry_count")) {
+    db.exec("ALTER TABLE gap_log ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!colNames.has("resolved_at")) {
+    db.exec("ALTER TABLE gap_log ADD COLUMN resolved_at TEXT");
+  }
+  if (!colNames.has("resolved_response")) {
+    db.exec("ALTER TABLE gap_log ADD COLUMN resolved_response TEXT");
+  }
 }
 
 interface ConfidenceResult {
@@ -83,15 +97,15 @@ function isOnCooldown(searchTopic: string): boolean {
   return row.count > 0;
 }
 
-// Enregistre une détection de lacune dans la base
+// Enregistre une détection de lacune dans la base — returns the gap ID
 export function logGap(
   originalQuery: string,
   searchTopic: string,
   reason: string,
   gemmaResponse: string,
   wasTriggered: boolean
-): void {
-  db.prepare(
+): number {
+  const result = db.prepare(
     `INSERT INTO gap_log (timestamp, original_query, search_topic, reason, was_triggered, gemma_response, status)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
@@ -103,6 +117,7 @@ export function logGap(
     gemmaResponse,
     wasTriggered ? "triggered" : "skipped"
   );
+  return result.lastInsertRowid as number;
 }
 
 // Envoie le webhook N8N de manière asynchrone
@@ -110,7 +125,8 @@ export async function triggerWebhook(
   originalQuery: string,
   searchTopic: string,
   gemmaResponse: string,
-  reason: string
+  reason: string,
+  gapId: number
 ): Promise<void> {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
   if (!webhookUrl) {
@@ -123,6 +139,7 @@ export async function triggerWebhook(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        gap_id: gapId,
         original_query: originalQuery,
         search_topic: searchTopic,
         timestamp: new Date().toISOString(),
@@ -131,7 +148,7 @@ export async function triggerWebhook(
       }),
       signal: AbortSignal.timeout(10000),
     });
-    console.log(`[Gap Detector] Webhook triggered for topic: "${searchTopic}"`);
+    console.log(`[Gap Detector] Webhook triggered for topic: "${searchTopic}" (gap_id: ${gapId})`);
   } catch (err) {
     console.error("[Gap Detector] Webhook failed:", err);
   }
@@ -150,11 +167,11 @@ export async function handleGapDetection(
   }
 
   const onCooldown = isOnCooldown(result.search_topic);
-  logGap(originalQuery, result.search_topic, result.reason, gemmaResponse, !onCooldown);
+  const gapId = logGap(originalQuery, result.search_topic, result.reason, gemmaResponse, !onCooldown);
 
   if (!onCooldown) {
     // Webhook asynchrone — ne bloque pas la réponse
-    triggerWebhook(originalQuery, result.search_topic, gemmaResponse, result.reason)
+    triggerWebhook(originalQuery, result.search_topic, gemmaResponse, result.reason, gapId)
       .catch((err: unknown) => console.error("[Gap Detector] Async webhook error:", err));
   } else {
     console.log(`[Gap Detector] Topic "${result.search_topic}" on cooldown, skipped webhook`);
@@ -201,6 +218,38 @@ export interface GapStats {
   total_triggered: number;
   total_resolved: number;
   most_common_topics: Array<{ topic: string; count: number }>;
+}
+
+// Mark a gap as resolved
+export function resolveGap(gapId: number, newResponse: string): void {
+  db.prepare(
+    `UPDATE gap_log SET status = 'resolved', resolved_at = ?, resolved_response = ? WHERE id = ?`
+  ).run(new Date().toISOString(), newResponse, gapId);
+}
+
+// Mark a gap as unresolved and increment retry count
+export function markUnresolved(gapId: number): void {
+  db.prepare(
+    `UPDATE gap_log SET status = 'unresolved', retry_count = retry_count + 1 WHERE id = ?`
+  ).run(gapId);
+}
+
+// Get a single gap by ID
+export function getGapById(gapId: number): GapLogEntry | undefined {
+  const row = db.prepare("SELECT * FROM gap_log WHERE id = ?").get(gapId) as {
+    id: number;
+    timestamp: string;
+    original_query: string;
+    search_topic: string;
+    reason: string;
+    was_triggered: number;
+    gemma_response: string;
+    status: string;
+  } | undefined;
+
+  if (!row) return undefined;
+
+  return { ...row, was_triggered: row.was_triggered === 1 };
 }
 
 export function getGapStats(): GapStats {
