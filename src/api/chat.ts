@@ -86,7 +86,7 @@ You answer questions on the following topics:
 
 Rules:
 - Use the following context to answer the user's question.
-- If the context doesn't contain relevant information, say so honestly and answer based on your general knowledge, clearly stating that you're not confident in the answer.
+- If the context doesn't contain relevant information, say so honestly and answer based on your general knowledge. Do NOT add disclaimers about confidence — the system handles that automatically.
 - When the context contains relevant data (tables, lists, numbers, costs, facility names), use it directly and specifically in your answer.
 - Cite sources when using the provided context.
 - Respond in the same language as the question.`;
