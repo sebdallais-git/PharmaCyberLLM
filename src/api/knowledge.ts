@@ -1,4 +1,4 @@
-// Routes API pour la gestion de la base de connaissances
+// API routes for knowledge base management
 
 import { Router } from "express";
 import type { Request, Response } from "express";
@@ -31,6 +31,8 @@ import {
 } from "../services/gap-detector.js";
 import { chatWithOllama } from "../services/ollama.js";
 import type { OllamaMessage } from "../services/ollama.js";
+import { isNeo4jAvailable, writeEntities } from "../services/graph-store.js";
+import type { GraphEntity, GraphRelationship } from "../services/graph-store.js";
 
 const router = Router();
 
@@ -57,10 +59,67 @@ async function saveRawDocument(
   await writeFile(join(RAW_DOCUMENTS_DIR, filename), payload, "utf-8");
 }
 
-// Configuration multer pour l'upload de fichiers
+async function extractAndWriteEntities(text: string, source: string): Promise<void> {
+  try {
+    const neo4jOk = await isNeo4jAvailable();
+    if (!neo4jOk) return;
+
+    const extractionPrompt = `You are an entity extraction engine. Extract entities and relationships from this text.
+Entity types: Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology
+Return ONLY valid JSON: {"entities": [{"type": "...", "name": "...", "properties": {...}}], "relationships": [{"from": "...", "fromType": "...", "to": "...", "toType": "...", "type": "...", "properties": {...}}]}`;
+
+    const response = await chatWithOllama(
+      [
+        { role: "system", content: extractionPrompt },
+        { role: "user", content: text.slice(0, 12000) },
+      ],
+      undefined,
+      { temperature: 0.1 }
+    );
+
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+
+    const data = JSON.parse(jsonMatch[0]) as {
+      entities?: Array<{ type: string; name: string; properties: Record<string, unknown> }>;
+      relationships?: Array<{
+        from: string; fromType: string; to: string; toType: string;
+        type: string; properties: Record<string, unknown>;
+      }>;
+    };
+
+    const entities: GraphEntity[] = (data.entities ?? []).map((e) => ({
+      type: e.type,
+      name: e.name,
+      properties: Object.fromEntries(
+        Object.entries(e.properties ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number")
+      ),
+    }));
+
+    const relationships: GraphRelationship[] = (data.relationships ?? []).map((r) => ({
+      from: r.from,
+      fromType: r.fromType,
+      to: r.to,
+      toType: r.toType,
+      type: r.type.replace(/\s+/g, "_").toUpperCase(),
+      properties: Object.fromEntries(
+        Object.entries(r.properties ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number")
+      ),
+    }));
+
+    if (entities.length > 0 || relationships.length > 0) {
+      const result = await writeEntities(entities, relationships);
+      console.log(`[Graph] Extracted ${result.nodesProcessed} nodes, ${result.relsProcessed} rels from ${source}`);
+    }
+  } catch (err) {
+    console.error(`[Graph] Entity extraction failed for ${source}:`, err instanceof Error ? err.message : err);
+  }
+}
+
+// Multer configuration for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
-// GET /api/knowledge/stats - Statistiques de la base
+// GET /api/knowledge/stats - Knowledge base statistics
 router.get("/stats", (_req: Request, res: Response): void => {
   res.json(getStats());
 });
@@ -78,28 +137,36 @@ router.post("/search", async (req: Request, res: Response): Promise<void> => {
   res.json({ results });
 });
 
-// POST /api/knowledge/ingest-text - Ingère du texte brut
+// POST /api/knowledge/ingest-text - Ingest raw text
 router.post("/ingest-text", async (req: Request, res: Response): Promise<void> => {
   const { text, source } = req.body as { text: string; source: string };
 
   if (!text || !source) {
-    res.status(400).json({ error: "Les champs 'text' et 'source' sont requis" });
+    res.status(400).json({ error: "The 'text' and 'source' fields are required" });
     return;
   }
 
   const added = ingestText(text, source);
   await saveIndex();
-  res.json({ message: `${added} chunks ajoutés depuis '${source}'`, added });
+
+  // Async graph entity extraction (non-blocking)
+  setImmediate(() => {
+    extractAndWriteEntities(text, source).catch((err) =>
+      console.error("[Graph] Async extraction error:", err)
+    );
+  });
+
+  res.json({ message: `${added} chunks added from '${source}'`, added });
 });
 
-// POST /api/knowledge/upload - Upload un fichier de connaissances
+// POST /api/knowledge/upload - Upload a knowledge file
 router.post(
   "/upload",
   upload.single("file"),
   async (req: Request, res: Response): Promise<void> => {
     const file = req.file;
     if (!file) {
-      res.status(400).json({ error: "Aucun fichier fourni" });
+      res.status(400).json({ error: "No file provided" });
       return;
     }
 
@@ -120,8 +187,15 @@ router.post(
     const added = await ingestText(text, file.originalname);
     await saveIndex();
 
+    // Async graph entity extraction (non-blocking)
+    setImmediate(() => {
+      extractAndWriteEntities(text, file.originalname).catch((err) =>
+        console.error("[Graph] Async extraction error:", err)
+      );
+    });
+
     res.json({
-      message: `Fichier '${file.originalname}' ingéré (${added} chunks)`,
+      message: `File '${file.originalname}' ingested (${added} chunks)`,
       added,
     });
   }
@@ -246,7 +320,7 @@ router.post("/add", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// GET /api/knowledge/gaps - Lacunes de connaissances récentes
+// GET /api/knowledge/gaps - Recent knowledge gaps
 router.get("/gaps", (_req: Request, res: Response): void => {
   try {
     const gaps = getRecentGaps(50);
@@ -257,7 +331,7 @@ router.get("/gaps", (_req: Request, res: Response): void => {
   }
 });
 
-// GET /api/knowledge/gaps/stats - Statistiques des lacunes
+// GET /api/knowledge/gaps/stats - Gap statistics
 router.get("/gaps/stats", (_req: Request, res: Response): void => {
   try {
     const stats = getGapStats();

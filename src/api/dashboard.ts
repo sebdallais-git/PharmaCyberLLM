@@ -2,8 +2,9 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getDashboardMetrics } from "../services/request-log.js";
+import { getDashboardMetrics, getChromaDBMisses, getChromaDBMissStats } from "../services/request-log.js";
 import { isChromaDBAvailable, getChromaStatus } from "../services/chromadb-store.js";
+import { isNeo4jAvailable } from "../services/graph-store.js";
 import { getStats } from "../services/knowledge-store.js";
 
 const router = Router();
@@ -96,6 +97,18 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
     checks.searxng = { status: "unreachable" };
   }
 
+  // Neo4j
+  try {
+    const start = Date.now();
+    const neo4jOk = await isNeo4jAvailable();
+    checks.neo4j = {
+      status: neo4jOk ? "ok" : "unreachable",
+      latency_ms: Date.now() - start,
+    };
+  } catch {
+    checks.neo4j = { status: "unreachable" };
+  }
+
   // SQLite
   try {
     checks.sqlite = { status: "ok" };
@@ -115,6 +128,82 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   }
 
   res.json({ status: overall, checks });
+});
+
+// GET /api/dashboard/chromadb-misses — queries that ChromaDB couldn't answer
+router.get("/chromadb-misses", (_req: Request, res: Response): void => {
+  const stats = getChromaDBMissStats();
+  const recent = getChromaDBMisses(50);
+  res.json({ stats, recent });
+});
+
+// Knowledge base health reports from N8N workflow
+
+interface KBHealthReport {
+  timestamp: string;
+  health: string;
+  knowledge_base: { total_chunks: number; sources_count: number };
+  quality_scores: {
+    avg_score: number;
+    min_score: number;
+    max_score: number;
+    queries_tested: number;
+    with_sources: number;
+    hallucinations_detected: number;
+  };
+  low_score_queries: Array<{ query: string; score: number; reason: string }>;
+  gap_stats: { total_questions: number; total_gaps: number; gap_rate: number };
+}
+
+const kbHealthHistory: KBHealthReport[] = [];
+const MAX_HEALTH_HISTORY = 168; // 7 days at 6h intervals
+
+// POST /api/dashboard/kb-health - Receive health report from N8N
+router.post("/kb-health", (req: Request, res: Response): void => {
+  const report = req.body as KBHealthReport;
+
+  if (!report.timestamp || !report.health) {
+    res.status(400).json({ error: "Invalid health report" });
+    return;
+  }
+
+  kbHealthHistory.push(report);
+
+  // Keep only last 7 days
+  while (kbHealthHistory.length > MAX_HEALTH_HISTORY) {
+    kbHealthHistory.shift();
+  }
+
+  console.log(
+    `[KB Health] ${report.health} — avg score: ${report.quality_scores.avg_score}/10, ` +
+    `${report.quality_scores.hallucinations_detected} hallucinations, ` +
+    `${report.knowledge_base.total_chunks} chunks`
+  );
+
+  res.json({ status: "stored", total_reports: kbHealthHistory.length });
+});
+
+// GET /api/dashboard/kb-health - Get health report history
+router.get("/kb-health", (_req: Request, res: Response): void => {
+  const latest = kbHealthHistory.length > 0
+    ? kbHealthHistory[kbHealthHistory.length - 1]
+    : null;
+
+  // Compute trend over last 4 reports (24h at 6h intervals)
+  const recent = kbHealthHistory.slice(-4);
+  const avgTrend = recent.length > 0
+    ? recent.reduce((sum, r) => sum + r.quality_scores.avg_score, 0) / recent.length
+    : 0;
+
+  res.json({
+    latest,
+    trend: {
+      avg_score_24h: Math.round(avgTrend * 10) / 10,
+      reports_count: kbHealthHistory.length,
+      last_check: latest?.timestamp ?? null,
+    },
+    history: kbHealthHistory.slice(-24), // Last 6 days
+  });
 });
 
 export default router;
