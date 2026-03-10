@@ -4,11 +4,12 @@
 
 ### AI-Powered Cyber Threat Intelligence for the Pharmaceutical Industry
 
-**Local LLM** | **Voice Input** | **Self-Healing RAG** | **Reasoning Transparency** | **KB Health Monitoring** | **Zero Cloud**
+**Local LLM** | **Voice Input** | **Self-Healing RAG** | **Knowledge Graph** | **Reasoning Transparency** | **KB Health Monitoring** | **Zero Cloud**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-3178C6?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![Ollama](https://img.shields.io/badge/Ollama-Mistral%2024B-000000?logo=ollama&logoColor=white)](https://ollama.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-FF6F61?logo=data:image/svg+xml;base64,&logoColor=white)](https://www.trychroma.com)
+[![Neo4j](https://img.shields.io/badge/Neo4j-Graph%20RAG-008CC1?logo=neo4j&logoColor=white)](https://neo4j.com)
 [![N8N](https://img.shields.io/badge/N8N-Workflow-EA4B71?logo=n8n&logoColor=white)](https://n8n.io)
 [![Chart.js](https://img.shields.io/badge/Chart.js-Dashboard-FF6384?logo=chartdotjs&logoColor=white)](https://www.chartjs.org)
 [![Express](https://img.shields.io/badge/Express-4.21-000000?logo=express&logoColor=white)](https://expressjs.com)
@@ -17,7 +18,7 @@
 
 ---
 
-*A fully offline, self-healing RAG chatbot with voice input, real-time reasoning transparency, KB health monitoring, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
+*A fully offline, self-healing RAG chatbot with voice input, real-time reasoning transparency, a Neo4j knowledge graph for Graph RAG, KB health monitoring, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
 
 </div>
 
@@ -35,6 +36,7 @@
 - [Monitoring Dashboard](#monitoring-dashboard)
 - [User Feedback System](#user-feedback-system)
 - [Architecture](#architecture)
+- [Knowledge Graph (Neo4j)](#knowledge-graph-neo4j)
 - [Knowledge Base](#knowledge-base)
 - [LLM Re-Ranking](#llm-re-ranking)
 - [Smart Chunking](#smart-chunking)
@@ -57,13 +59,14 @@ It combines:
 - A **local LLM** (Mistral 24B via Ollama, 8K context) for conversational intelligence
 - **Voice input** via Whisper for hands-free querying
 - **Real-time reasoning transparency** showing each RAG pipeline step as it happens
-- A **dual vector store** (embedded index + ChromaDB) with 36+ curated pharma/cyber documents
+- A **triple hybrid store** (embedded index + ChromaDB + Neo4j graph) with 36+ curated pharma/cyber documents
 - **LLM-powered re-ranking** for higher precision RAG retrieval
 - An **automated news agent** scraping **194 topics** from Google News every 24 hours
 - **Real-time web search** augmentation on every query
 - A **self-healing knowledge gap detector** with closed-loop resolution verification
 - **KB health monitoring** — automated QA every 6 hours with hallucination detection
 - **ChromaDB miss tracking** to identify knowledge base coverage gaps
+- A **Neo4j knowledge graph** (Graph RAG) with 14 entity types and 21 relationship types for entity-aware retrieval
 - A **real-time monitoring dashboard** with Chart.js visualizations
 - A **user feedback system** tracking response quality and identifying weak areas
 - A **company names toggle** (`/names`) for flexible incident reporting
@@ -114,6 +117,30 @@ export N8N_WEBHOOK_URL="http://localhost:5678/webhook/knowledge-gap"
 npm run dev
 ```
 
+### Optional: Enable Graph RAG (Neo4j)
+
+```bash
+# Start Neo4j Community Edition via Docker
+docker run -d \
+  --name neo4j-pharma \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/pharma2024 \
+  neo4j:community
+
+# Set environment variables
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_USER="neo4j"
+export NEO4J_PASSWORD="pharma2024"
+
+# Bulk-populate graph from knowledge/*.md (requires Python 3.8+)
+pip install -r python/requirements.txt
+python python/graph_builder.py
+
+# --> Neo4j Browser: http://localhost:7474  (explore the entity graph)
+```
+
+Graph data is also populated automatically as the news agent ingests new content.
+
 ---
 
 ## How It Works
@@ -125,8 +152,10 @@ flowchart TD
     subgraph P["Pipeline"]
         direction TB
         KS["Knowledge Search\n(Hybrid dual-store)"] --> MC["Merged Context"]
+        GS["Graph Search\n(Neo4j - 3s timeout)"] --> MC
         WS["Web Search\n(Google News)"] --> MC
         KS -.->|Steps streamed| REASON["Reasoning Panel\n(live pipeline steps)"]
+        GS -.->|Steps streamed| REASON
         WS -.->|Steps streamed| REASON
         MC --> LLM["Ollama Mistral 24B\n(8K context)"]
         LLM --> RESP["Streamed response\nwith sources + token stats"]
@@ -314,10 +343,11 @@ graph TB
         API_FB["/api/feedback"]
         API_DASH["/api/dashboard"]
         API_HEALTH["/api/health"]
+        API_GRAPH["/api/graph"]
     end
 
     subgraph INTELLIGENCE["Intelligence Layer"]
-        RAG["RAG Engine<br/><i>Dual Vector + LLM Re-ranking</i>"]
+        RAG["RAG Engine<br/><i>Triple Store + LLM Re-ranking</i>"]
         WEB["Web Search<br/><i>Google News RSS</i>"]
         AGENT["News Agent<br/><i>194 topics - 24h cycle</i>"]
         PARSE["File Parser<br/><i>PDF - DOCX - PPTX - CSV - MD</i>"]
@@ -340,6 +370,7 @@ graph TB
     subgraph STORE["Data Layer"]
         EMBEDDED["Embedded Index<br/><i>1000+ chunks - .index.json</i>"]
         CHROMA["ChromaDB<br/><i>Persistent vector DB</i>"]
+        NEO4J["Neo4j Graph<br/><i>14 entity types - 21 relationships</i>"]
         DOCS["36+ Curated Documents"]
         GAPDB["gap_log.db<br/><i>Gaps + feedback + request log</i>"]
         RAW["data/raw_documents/<br/><i>Original content for re-indexing</i>"]
@@ -360,6 +391,7 @@ graph TB
     API_AGENT --> AGENT
     API_FB --> RCACHE
     API_DASH --> GAPDB
+    API_GRAPH --> NEO4J
 
     GAP -->|Webhook| N8N_WH
     N8N_WH --> N8N_SEARCH
@@ -372,8 +404,10 @@ graph TB
     GAP --> GAPDB
     RAG --> EMBEDDED
     RAG --> CHROMA
+    RAG --> NEO4J
     AGENT --> WEB
     AGENT -->|Ingest| EMBEDDED
+    AGENT -->|Entities async| NEO4J
     PARSE -->|Embed & Store| EMBEDDED
     API_KB -->|Save raw| RAW
 
@@ -391,6 +425,44 @@ graph TB
     style LLM fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
     style STORE fill:#7f1d1d,stroke:#f43f5e,color:#e5e7eb
 ```
+
+---
+
+## Knowledge Graph (Neo4j)
+
+The chat pipeline runs ChromaDB vector search and Neo4j graph traversal **in parallel** via `Promise.all`, merging results before passing context to Mistral. Graph queries have a 3-second timeout so they never block a response.
+
+```mermaid
+flowchart LR
+    Q["User query\n(keywords extracted by regex)"] --> PARALLEL
+
+    subgraph PARALLEL["Parallel retrieval"]
+        direction TB
+        VS["ChromaDB\nvector search"]
+        GQ["Neo4j\ngraph traversal"]
+        WS["SearXNG\nweb search"]
+    end
+
+    PARALLEL --> MERGE["Merged context"]
+    MERGE --> LLM["Mistral 24B"]
+
+    style PARALLEL fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
+    style LLM fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+```
+
+### Entity Model
+
+| Entity Types (14) | Relationship Types (21, sample) |
+|-------------------|--------------------------------|
+| Company, Subsidiary, Drug | ACQUIRED, HEADQUARTERED_IN, PARTNERS_WITH |
+| TherapeuticArea, ManufacturingSite | MANUFACTURES, SELLS_IN, TARGETS |
+| Country, RegulatoryBody, Regulation | GOVERNS, REQUIRES_COMPLIANCE |
+| ThreatActor, Attack, AttackVector | ATTRIBUTED_TO, TARGETED, USED_VECTOR |
+| Vendor, Product, Technology | PROVIDES, INTEGRATES_WITH |
+
+Live updates: when the news agent or a manual upload ingests new content, entity extraction runs asynchronously via `setImmediate()` and writes to Neo4j without blocking the response.
+
+Explore the graph visually at **http://localhost:7474** (Neo4j Browser) once the Docker container is running.
 
 ---
 
@@ -446,6 +518,13 @@ mindmap
       OT/SCADA pharma threats
       Regulatory mandates
       Cloud security posture
+    Knowledge Graph
+      14 entity types
+      21 relationship types
+      Company & subsidiary links
+      Drug-to-threat mapping
+      ThreatActor attribution
+      Regulatory body links
 ```
 
 ### Curated Documents
@@ -553,13 +632,15 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_qa_workflow.json`
 | **Embeddings** | nomic-embed-text (via Ollama) | Vector embeddings (configurable) |
 | **Voice** | Whisper (whisper-node) | Local speech-to-text transcription |
 | **Vector DB** | ChromaDB | Persistent vector store |
+| **Graph DB** | Neo4j Community (Docker) | Knowledge graph — 14 entity types, 21 relationship types |
 | **Dashboard** | Chart.js + vanilla HTML/CSS/JS | Real-time monitoring |
 | **Orchestration** | N8N | Workflow automation + resolution check + KB QA |
 | **Web Search** | SearXNG + Google News RSS | Privacy-first web search |
 | **Gap Detection** | Custom + SQLite | Confidence + cooldown + resolution verification |
 | **Feedback** | SQLite + in-memory cache | User ratings + response tracking |
 | **Re-ranking** | Ollama (Python) | LLM relevance scoring (0-10) |
-| **Search** | Hybrid vector + keyword | Dual-store RAG retrieval |
+| **Search** | Hybrid vector + keyword + graph | Triple-store RAG retrieval (parallel Promise.all) |
+| **Graph RAG** | Python (graph_builder.py) + TypeScript (graph-store.ts) | Bulk extraction + runtime queries |
 | **Parsing** | pdf-parse, mammoth, JSZip | Multi-format document ingestion |
 | **Streaming** | Server-Sent Events | Token-by-token chat output |
 
@@ -576,7 +657,8 @@ PharmaCyberLLM/
 │   │   ├── knowledge.ts           # KB CRUD + gaps + resolution check + reindex
 │   │   ├── agent.ts               # News agent status + manual trigger
 │   │   ├── feedback.ts            # User feedback + stats + weekly digest
-│   │   └── dashboard.ts           # Dashboard metrics + health check + KB QA
+│   │   ├── dashboard.ts           # Dashboard metrics + health check + KB QA
+│   │   └── graph.ts               # Graph health, stats, search, rebuild endpoints
 │   └── services/
 │       ├── ollama.ts              # Ollama chat, streaming, token stats, embeddings
 │       ├── knowledge-store.ts     # In-memory vector store + hybrid search
@@ -585,7 +667,8 @@ PharmaCyberLLM/
 │       ├── feedback-store.ts      # Feedback table + stats + weekly digest
 │       ├── response-cache.ts      # In-memory response metadata (1h TTL)
 │       ├── request-log.ts         # Request logging + ChromaDB miss tracking + cache
-│       ├── news-agent.ts          # 194-topic Google News scraper
+│       ├── graph-store.ts         # Neo4j driver + queryGraphForChat() + writeEntities()
+│       ├── news-agent.ts          # 194-topic Google News scraper (writes to 3 stores)
 │       ├── web-search.ts          # Real-time Google News RSS search
 │       └── file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
 ├── certs/                         # SSL certificates (HTTPS support)
@@ -602,6 +685,8 @@ PharmaCyberLLM/
 │   ├── knowledge_qa_workflow.json       # N8N KB health monitoring (every 6h)
 │   └── README.md                        # N8N setup guide
 ├── python/
+│   ├── graph_builder.py           # Bulk entity extraction from knowledge/*.md into Neo4j
+│   ├── requirements.txt           # neo4j>=5.0.0, requests
 │   ├── utils/                     # Smart chunking, re-ranking, vector DB
 │   └── tests/                     # Integration + vector DB tests
 ├── data/
@@ -655,8 +740,16 @@ The `/names` command toggles whether responses name specific companies in cyber 
 | `/api/dashboard/chromadb-misses` | GET | Recent ChromaDB misses + top 20 missed queries |
 | `/api/dashboard/kb-health` | GET | KB health trends (24h average, history) |
 | `/api/dashboard/kb-health` | POST | Receive health report from N8N QA workflow |
-| `/api/health` | GET | Service health (Ollama, ChromaDB, SearXNG, SQLite) |
+| `/api/health` | GET | Service health (Ollama, ChromaDB, SearXNG, SQLite, Neo4j) |
 | `/dashboard` | GET | Monitoring dashboard UI |
+
+### Graph
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/graph/health` | GET | Neo4j connection check with latency |
+| `/api/graph/stats` | GET | Node and relationship counts by type |
+| `/api/graph/search` | POST | Search by entity name, returns neighbors |
+| `/api/graph/rebuild` | POST | Clear graph and run full Python extraction |
 
 ### Agent
 | Endpoint | Method | Description |
@@ -679,6 +772,9 @@ All optional — works out of the box with zero configuration.
 | `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `CHROMADB_URL` | `http://localhost:8100` | ChromaDB server endpoint |
 | `N8N_WEBHOOK_URL` | *(none)* | N8N webhook for gap auto-fill |
+| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt connection URI |
+| `NEO4J_USER` | `neo4j` | Neo4j username |
+| `NEO4J_PASSWORD` | *(none)* | Neo4j password (e.g. `pharma2024`) |
 
 ### HTTPS Setup (required for mobile voice input)
 
@@ -709,9 +805,9 @@ flowchart LR
 
 <div align="center">
 
-**100% local. Zero cloud. Self-healing. Observable. Voice-enabled. Always current.**
+**100% local. Zero cloud. Self-healing. Observable. Voice-enabled. Graph-powered. Always current.**
 
-*Mistral 24B* · *Voice Input* · *Reasoning Transparency* · *Dual RAG + Re-ranking* · *ChromaDB* · *KB Health QA* · *194 News Topics* · *N8N Orchestration*
+*Mistral 24B* · *Voice Input* · *Reasoning Transparency* · *Triple-Store RAG + Re-ranking* · *ChromaDB* · *Neo4j Graph* · *KB Health QA* · *194 News Topics* · *N8N Orchestration*
 
 <br/>
 
