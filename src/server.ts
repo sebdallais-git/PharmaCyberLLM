@@ -14,6 +14,14 @@ import { initGapDB } from "./services/gap-detector.js";
 import { initFeedbackDB } from "./services/feedback-store.js";
 import { initRequestLog } from "./services/request-log.js";
 
+// Prevent the process from crashing on unhandled errors
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection:", reason);
+});
+
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const AGENT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -75,4 +83,7 @@ async function start(): Promise<void> {
   scheduleNewsAgent();
 }
 
-start().catch(console.error);
+start().catch((err) => {
+  console.error("[FATAL] Startup failed:", err);
+  process.exit(1);
+});
