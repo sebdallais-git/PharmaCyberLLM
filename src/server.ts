@@ -1,6 +1,8 @@
 // PharmaLLM server entry point
 
 import express from "express";
+import { createServer as createHttpsServer } from "node:https";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import chatRouter from "./api/chat.js";
 import knowledgeRouter from "./api/knowledge.js";
@@ -13,6 +15,8 @@ import { runNewsAgent } from "./services/news-agent.js";
 import { initGapDB } from "./services/gap-detector.js";
 import { initFeedbackDB } from "./services/feedback-store.js";
 import { initRequestLog } from "./services/request-log.js";
+import graphRouter from "./api/graph.js";
+import { isNeo4jAvailable, getNeo4jStats } from "./services/graph-store.js";
 
 // Prevent the process from crashing on unhandled errors
 process.on("uncaughtException", (err) => {
@@ -36,6 +40,7 @@ app.use("/api/knowledge", knowledgeRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/feedback", feedbackRouter);
 app.use("/api/dashboard", dashboardRouter);
+app.use("/api/graph", graphRouter);
 app.use("/api", dashboardRouter); // /api/health
 app.use("/dashboard", express.static(join(process.cwd(), "dashboard")));
 
@@ -73,12 +78,39 @@ async function start(): Promise<void> {
     console.log("ChromaDB: not available — RAG will use in-memory store only");
   }
 
+  // Check Neo4j availability
+  const neo4jOk = await isNeo4jAvailable();
+  if (neo4jOk) {
+    const stats = await getNeo4jStats();
+    console.log(`Neo4j: connected (${stats.nodeCount} nodes, ${stats.relationshipCount} relationships)`);
+  } else {
+    console.log("Neo4j: not available — graph RAG will be skipped");
+  }
+
   const HOST = process.env.HOST ?? "0.0.0.0";
+  const HTTPS_PORT = parseInt(process.env.HTTPS_PORT ?? "3443", 10);
+  const CERT_DIR = join(process.cwd(), "certs");
+
+  // Start HTTP server
   app.listen(PORT, HOST, () => {
-    console.log(`\nPharmaLLM running on http://${HOST}:${PORT}`);
-    console.log(`Make sure Ollama is running (ollama serve)`);
-    console.log(`News agent will run every 24 hours\n`);
+    console.log(`PharmaLLM running on http://${HOST}:${PORT}`);
   });
+
+  // Start HTTPS server if certs exist (required for iPad mic access)
+  const keyPath = join(CERT_DIR, "key.pem");
+  const certPath = join(CERT_DIR, "cert.pem");
+  if (existsSync(keyPath) && existsSync(certPath)) {
+    const httpsOptions = {
+      key: readFileSync(keyPath),
+      cert: readFileSync(certPath),
+    };
+    createHttpsServer(httpsOptions, app).listen(HTTPS_PORT, HOST, () => {
+      console.log(`PharmaLLM HTTPS running on https://${HOST}:${HTTPS_PORT}`);
+    });
+  }
+
+  console.log(`Make sure Ollama is running (ollama serve)`);
+  console.log(`News agent will run every 24 hours\n`);
 
   scheduleNewsAgent();
 }

@@ -1,7 +1,7 @@
 {
   "name": "pharma-llm",
   "version": "1.0.0",
-  "description": "Chatbot pharma basé sur Ollama avec RAG",
+  "description": "Pharma chatbot powered by Ollama with RAG",
   "type": "module",
   "scripts": {
     "build": "tsc",
@@ -12,7 +12,9 @@
   "dependencies": {
     "better-sqlite3": "^12.6.2",
     "express": "^4.21.0",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "neo4j-driver": "^6.0.1",
+    "whisper-node": "^1.1.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
