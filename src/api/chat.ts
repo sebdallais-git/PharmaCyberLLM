@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { streamChatWithOllama, listModels, chatWithOllama } from "../services/ollama.js";
+import { streamChatWithOllama, listModels } from "../services/ollama.js";
 import type { OllamaMessage, TokenStats } from "../services/ollama.js";
 import { searchKnowledge } from "../services/knowledge-store.js";
 import { searchChromaDB, isChromaDBAvailable } from "../services/chromadb-store.js";
@@ -57,26 +57,18 @@ function extractSearchQuery(message: string): string {
   return keywords.slice(0, 5).join(" ");
 }
 
-// Extract entity names from a question for graph search
-async function extractGraphKeywords(message: string): Promise<string[]> {
-  try {
-    const response = await chatWithOllama([
-      {
-        role: "system",
-        content: "Extract the key entity names (company names, drug names, vendor names, threat actor names, country names, technology names) from this question. Return ONLY a JSON array of strings, nothing else. Example: [\"Pfizer\", \"Keytruda\", \"LockBit\"]",
-      },
-      { role: "user", content: message },
-    ], undefined, { temperature: 0, num_ctx: 2048 });
+// Extract keywords from a question for graph search (no LLM call — instant)
+function extractGraphKeywords(message: string): string[] {
+  // Reuse the same drop-word filtering as web search, but keep longer terms
+  // that are likely entity names (proper nouns, multi-word terms)
+  const words = message
+    .replace(/[^a-zA-Z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
 
-    const match = response.match(/\[[\s\S]*?\]/);
-    if (match) {
-      const keywords = JSON.parse(match[0]) as string[];
-      return keywords.filter((k) => typeof k === "string" && k.length > 1).slice(0, 5);
-    }
-  } catch {
-    // Fail silently — graph keywords are optional
-  }
-  return [];
+  // Keep capitalized words (likely entity names) and longer terms
+  const keywords = words.filter((w) => /^[A-Z]/.test(w) || w.length > 4);
+  return [...new Set(keywords)].slice(0, 5);
 }
 
 // Session-level toggle for naming companies in cyber incident responses
@@ -225,23 +217,29 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       const neo4jAvailable = await isNeo4jAvailable();
       if (!neo4jAvailable) return;
 
-      sendReasoning("Searching knowledge graph...");
-      const keywords = await extractGraphKeywords(message);
+      const keywords = extractGraphKeywords(message);
+      if (keywords.length === 0) return;
 
-      if (keywords.length > 0) {
-        graphContext = await queryGraphForChat(keywords);
-        if (graphContext) {
-          const entityNames = keywords.filter((k) => graphContext.toLowerCase().includes(k.toLowerCase()));
-          sendReasoning(
-            `Found ${entityNames.length} entities in knowledge graph`,
-            entityNames
-          );
-        } else {
-          sendReasoning("No graph matches found");
-        }
+      sendReasoning("Searching knowledge graph...");
+
+      // 3-second timeout — graph is a bonus, never block the response
+      const graphResult = await Promise.race([
+        queryGraphForChat(keywords),
+        new Promise<string>((resolve) => setTimeout(() => resolve(""), 3000)),
+      ]);
+
+      if (graphResult) {
+        graphContext = graphResult;
+        const entityNames = keywords.filter((k) => graphContext.toLowerCase().includes(k.toLowerCase()));
+        sendReasoning(
+          `Found ${entityNames.length} entities in knowledge graph`,
+          entityNames
+        );
+      } else {
+        sendReasoning("No graph matches found");
       }
     } catch {
-      sendReasoning("Knowledge graph unavailable, skipping...");
+      // Silent fail — graph is optional
     }
   })();
 
