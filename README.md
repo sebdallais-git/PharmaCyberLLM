@@ -4,19 +4,20 @@
 
 ### AI-Powered Cyber Threat Intelligence for the Pharmaceutical Industry
 
-**Local LLM** | **Self-Healing RAG** | **Monitoring Dashboard** | **User Feedback** | **N8N Orchestration** | **Zero Cloud**
+**Local LLM** | **Voice Input** | **Self-Healing RAG** | **Reasoning Transparency** | **KB Health Monitoring** | **Zero Cloud**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-3178C6?logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-000000?logo=ollama&logoColor=white)](https://ollama.com)
+[![Ollama](https://img.shields.io/badge/Ollama-Mistral%2024B-000000?logo=ollama&logoColor=white)](https://ollama.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-FF6F61?logo=data:image/svg+xml;base64,&logoColor=white)](https://www.trychroma.com)
 [![N8N](https://img.shields.io/badge/N8N-Workflow-EA4B71?logo=n8n&logoColor=white)](https://n8n.io)
 [![Chart.js](https://img.shields.io/badge/Chart.js-Dashboard-FF6384?logo=chartdotjs&logoColor=white)](https://www.chartjs.org)
 [![Express](https://img.shields.io/badge/Express-4.21-000000?logo=express&logoColor=white)](https://expressjs.com)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Whisper](https://img.shields.io/badge/Whisper-Voice%20Input-74aa9c?logo=openai&logoColor=white)](https://github.com/openai/whisper)
 
 ---
 
-*A fully offline, self-healing RAG chatbot with real-time monitoring, user feedback loop, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
+*A fully offline, self-healing RAG chatbot with voice input, real-time reasoning transparency, KB health monitoring, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
 
 </div>
 
@@ -27,14 +28,17 @@
 - [Why This Exists](#why-this-exists)
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
+- [Voice Input](#voice-input)
+- [Real-Time Reasoning](#real-time-reasoning)
 - [Self-Healing Knowledge Loop](#self-healing-knowledge-loop)
+- [KB Health Monitoring](#kb-health-monitoring)
 - [Monitoring Dashboard](#monitoring-dashboard)
 - [User Feedback System](#user-feedback-system)
 - [Architecture](#architecture)
 - [Knowledge Base](#knowledge-base)
 - [LLM Re-Ranking](#llm-re-ranking)
 - [Smart Chunking](#smart-chunking)
-- [N8N Workflow](#n8n-workflow-v2--closed-loop-gap-resolution)
+- [N8N Workflows](#n8n-workflows)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [API Reference](#api-reference)
@@ -50,15 +54,22 @@
 PharmaCyberLLM runs **entirely on your machine**. No API keys. No cloud. No data leaves your laptop.
 
 It combines:
-- A **local LLM** (via Ollama) for conversational intelligence
+- A **local LLM** (Mistral 24B via Ollama, 8K context) for conversational intelligence
+- **Voice input** via Whisper for hands-free querying
+- **Real-time reasoning transparency** showing each RAG pipeline step as it happens
 - A **dual vector store** (embedded index + ChromaDB) with 36+ curated pharma/cyber documents
 - **LLM-powered re-ranking** for higher precision RAG retrieval
-- An **automated news agent** scraping 90+ topics from Google News every 24 hours
+- An **automated news agent** scraping **194 topics** from Google News every 24 hours
 - **Real-time web search** augmentation on every query
 - A **self-healing knowledge gap detector** with closed-loop resolution verification
+- **KB health monitoring** — automated QA every 6 hours with hallucination detection
+- **ChromaDB miss tracking** to identify knowledge base coverage gaps
 - A **real-time monitoring dashboard** with Chart.js visualizations
 - A **user feedback system** tracking response quality and identifying weak areas
-- Full **N8N workflow orchestration** for automated gap research and ingestion
+- A **company names toggle** (`/names`) for flexible incident reporting
+- **Token statistics** showing throughput, prompt/completion breakdown per response
+- **HTTPS support** for secure mobile/tablet access
+- Full **N8N workflow orchestration** for gap research, ingestion, and KB quality assurance
 
 ---
 
@@ -67,7 +78,8 @@ It combines:
 ```bash
 # 1. Install Ollama
 brew install ollama
-ollama pull gemma2:9b
+ollama pull mistral-small:24b
+ollama pull nomic-embed-text   # embedding model
 
 # 2. Clone and install
 git clone https://github.com/sebdallais-git/PharmaCyberLLM.git
@@ -108,14 +120,16 @@ npm run dev
 
 ```mermaid
 flowchart TD
-    Q["User asks a question"] --> P["PharmaCyberLLM Pipeline"]
+    Q["User asks a question\n(text or voice)"] --> P["PharmaCyberLLM Pipeline"]
 
     subgraph P["Pipeline"]
         direction TB
         KS["Knowledge Search\n(Hybrid dual-store)"] --> MC["Merged Context"]
         WS["Web Search\n(Google News)"] --> MC
-        MC --> LLM["Ollama LLM\n(Local)"]
-        LLM --> RESP["Streamed response\nwith sources + response_id"]
+        KS -.->|Steps streamed| REASON["Reasoning Panel\n(live pipeline steps)"]
+        WS -.->|Steps streamed| REASON
+        MC --> LLM["Ollama Mistral 24B\n(8K context)"]
+        LLM --> RESP["Streamed response\nwith sources + token stats"]
         LLM --> GD["Gap Detector"]
     end
 
@@ -129,11 +143,59 @@ flowchart TD
     end
 
     RESP --> USER["User receives answer\n+ can rate 1-5"]
-    RESP --> DASH["Dashboard tracks:\nConfidence / Latency\nRatings / Gaps"]
+    RESP --> DASH["Dashboard tracks:\nConfidence / Latency\nRatings / Gaps / KB Health"]
 
     style P fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
     style HEAL fill:#4a1d6b,stroke:#d946ef,color:#e5e7eb
 ```
+
+---
+
+## Voice Input
+
+PharmaCyberLLM supports **hands-free querying** via a built-in microphone button. Audio is recorded in the browser (MediaRecorder API), sent to the backend, and transcribed locally using **whisper.cpp** — no cloud services involved.
+
+```mermaid
+flowchart LR
+    A["🎙 Mic Button\n(Browser)"] --> B["MediaRecorder\nWebM / MP4 / OGG"]
+    B --> C["POST /api/chat/transcribe"]
+    C --> D["ffmpeg\nconvert to WAV"]
+    D --> E["whisper.cpp\n(ggml-base.en model)"]
+    E --> F["Transcribed text\ninserted into chat"]
+
+    style A fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
+    style E fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+```
+
+- Pulsing animation indicates active recording
+- Supports WebM, MP4, and OGG audio formats (browser-dependent)
+- Uses the `ggml-base.en` Whisper model (English, bundled with `whisper-node`)
+- Requires `ffmpeg` installed locally for audio conversion
+- Requires HTTPS on mobile/tablet (browser security requirement — see [HTTPS support](#environment-variables))
+
+**API usage:**
+```
+POST /api/chat/transcribe
+Content-Type: multipart/form-data
+Body: audio file (max 25MB)
+
+Response: { "text": "transcribed text here" }
+```
+
+---
+
+## Real-Time Reasoning
+
+Every query shows a **live reasoning panel** revealing each step of the RAG pipeline as it executes:
+
+1. "Searching knowledge base..."
+2. "Found X relevant chunks from ChromaDB"
+3. "Searching the web for: [query]..."
+4. "Generating response with [model]..."
+
+The panel auto-collapses when the first response tokens arrive, and can be expanded again by clicking. Sources are displayed inline with each reasoning step.
+
+**Token statistics** (prompt tokens, completion tokens, tokens/sec) appear on hover at the bottom of each response.
 
 ---
 
@@ -164,6 +226,39 @@ flowchart TD
 ```
 
 The gap detector uses a 2-hour cooldown per topic, logs every detection in SQLite, and the v2 N8N workflow verifies resolution automatically.
+
+---
+
+## KB Health Monitoring
+
+An automated **Knowledge Base QA pipeline** runs every 6 hours via N8N to detect degradation before users notice.
+
+```mermaid
+flowchart TD
+    A["N8N Cron (every 6h)"] --> B["Get KB Stats"]
+    B --> C["Generate 5 random\ntest queries"]
+    C --> D["Send through\nfull RAG pipeline"]
+    D --> E["Ollama scores\neach response (1-10)"]
+    E --> F{"Hallucination\ndetected?"}
+    F -->|Yes| G["Flag in report"]
+    F -->|No| H["Pass"]
+    G & H --> I["Build health report"]
+    I --> J["POST /api/dashboard/kb-health"]
+
+    style A fill:#4a1d6b,stroke:#d946ef,color:#e5e7eb
+    style J fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+```
+
+| Metric | Description |
+|--------|-------------|
+| **Quality Score** | Average Ollama score (1-10) across test queries |
+| **Hallucination Rate** | % of responses flagged as containing fabricated facts |
+| **Gap Rate** | % of test queries with low-confidence answers |
+| **24h Average** | Rolling quality trend via `/api/dashboard/kb-health` |
+
+Stores up to 168 reports (7 days of history). The N8N workflow uses 10 baseline test queries covering FDA approvals, ransomware, GLP-1 drugs, ADCs, NIS2, shadow AI, and more.
+
+**ChromaDB miss tracking** also logs every query where the vector store returned no results, identifying coverage gaps for KB expansion.
 
 ---
 
@@ -206,13 +301,13 @@ GET /api/feedback/weekly-digest --> 7-day summary with improvement priorities
 ```mermaid
 graph TB
     subgraph CLIENT["Browser"]
-        CHAT["Chat Interface"]
+        CHAT["Chat Interface<br/><i>Voice + Reasoning Panel</i>"]
         KB["Knowledge Base Modal"]
         NA["News Agent Modal"]
         DASH["Monitoring Dashboard<br/><i>Chart.js - Auto-refresh</i>"]
     end
 
-    subgraph SERVER["Express Server -- Port 3000"]
+    subgraph SERVER["Express Server -- HTTP 3000 / HTTPS 3443"]
         API_CHAT["/api/chat"]
         API_KB["/api/knowledge"]
         API_AGENT["/api/agent"]
@@ -224,7 +319,7 @@ graph TB
     subgraph INTELLIGENCE["Intelligence Layer"]
         RAG["RAG Engine<br/><i>Dual Vector + LLM Re-ranking</i>"]
         WEB["Web Search<br/><i>Google News RSS</i>"]
-        AGENT["News Agent<br/><i>90+ topics - 24h cycle</i>"]
+        AGENT["News Agent<br/><i>194 topics - 24h cycle</i>"]
         PARSE["File Parser<br/><i>PDF - DOCX - PPTX - CSV - MD</i>"]
         GAP["Gap Detector<br/><i>Confidence + Resolution Check</i>"]
         RCACHE["Response Cache<br/><i>In-memory - 1h TTL</i>"]
@@ -239,7 +334,7 @@ graph TB
     end
 
     subgraph LLM["Local LLM -- Ollama"]
-        MODEL["gemma2:9b / llama3.2<br/><i>Chat + embeddings + re-ranking</i>"]
+        MODEL["mistral-small:24b<br/><i>Chat + re-ranking (8K ctx)</i><br/><i>nomic-embed-text embeddings</i>"]
     end
 
     subgraph STORE["Data Layer"]
@@ -339,10 +434,18 @@ mindmap
       CrowdStrike / SentinelOne
       Splunk / Microsoft Sentinel
     Auto-Updated
-      90+ RSS topics daily
+      194 RSS topics daily
       N8N gap-fill on demand
       SearXNG web research
       Resolution-verified
+      KB health QA every 6h
+    Extended Intel
+      Shadow IT & AI risks
+      Hacker groups tracking
+      Medical device security
+      OT/SCADA pharma threats
+      Regulatory mandates
+      Cloud security posture
 ```
 
 ### Curated Documents
@@ -353,7 +456,7 @@ mindmap
 | **Pharma Business** | 9 files | Drug market forecasts, Phase 3 pipeline, top 20 rankings (revenue, market cap, reputation), manufacturing plants, regulation |
 | **Vendor Intel** | 13 files | Dell, Snowflake, Databricks, ServiceNow, Pure Storage, NetApp, HPE, VAST, SAP, NVIDIA, WEKA, CrowdStrike, Splunk |
 | **PDF Reports** | 2 files | Everpure AI Pharma Challenge executive briefings |
-| **Auto-News** | Daily | 90+ search topics across business, science, cyber, and vendor categories |
+| **Auto-News** | Daily | 194 search topics across business, science, cyber, vendors, threat actors, OT/SCADA, and regulatory categories |
 | **Gap-Filled** | On-demand | Automatically researched via N8N, resolution-verified before marking complete |
 
 ---
@@ -395,11 +498,13 @@ The Python vectordb uses intelligent document chunking:
 
 ---
 
-## N8N Workflow v2 — Closed-Loop Gap Resolution
+## N8N Workflows
 
-An importable N8N workflow that fills knowledge gaps **and verifies the fix worked**.
+Two importable N8N workflows automate knowledge management and quality assurance.
 
-### Workflow Nodes (15 total)
+### Workflow 1: Closed-Loop Gap Resolution (15 nodes)
+
+Fills knowledge gaps **and verifies the fix worked**.
 
 | # | Node | Description |
 |---|------|-------------|
@@ -421,6 +526,21 @@ An importable N8N workflow that fills knowledge gaps **and verifies the fix work
 
 Import: **N8N > Workflows > Import** > `n8n/knowledge_gap_workflow_v2.json`
 
+### Workflow 2: Knowledge Base QA (automated every 6h)
+
+Monitors KB quality and detects degradation proactively.
+
+| Step | Description |
+|------|-------------|
+| Get KB stats | Fetches current knowledge base size and sources |
+| Generate test queries | 5 random queries from 10 baseline pharma/cyber topics |
+| RAG pipeline test | Sends queries through the full chat pipeline |
+| Quality scoring | Ollama scores each response 1-10 |
+| Hallucination check | Detects fabricated facts in responses |
+| Health report | Aggregates scores and POSTs to `/api/dashboard/kb-health` |
+
+Import: **N8N > Workflows > Import** > `n8n/knowledge_qa_workflow.json`
+
 ---
 
 ## Tech Stack
@@ -429,10 +549,12 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_gap_workflow_v2.json`
 |-------|-----------|---------|
 | **Runtime** | Node.js 22 + TypeScript 5.6 | Type-safe server |
 | **Server** | Express 4.21 | REST API + static file serving |
-| **LLM** | Ollama (gemma2:9b) | Inference + embeddings + re-ranking |
+| **LLM** | Ollama (mistral-small:24b, 8K ctx) | Inference + re-ranking |
+| **Embeddings** | nomic-embed-text (via Ollama) | Vector embeddings (configurable) |
+| **Voice** | Whisper (whisper-node) | Local speech-to-text transcription |
 | **Vector DB** | ChromaDB | Persistent vector store |
 | **Dashboard** | Chart.js + vanilla HTML/CSS/JS | Real-time monitoring |
-| **Orchestration** | N8N | Workflow automation with resolution check |
+| **Orchestration** | N8N | Workflow automation + resolution check + KB QA |
 | **Web Search** | SearXNG + Google News RSS | Privacy-first web search |
 | **Gap Detection** | Custom + SQLite | Confidence + cooldown + resolution verification |
 | **Feedback** | SQLite + in-memory cache | User ratings + response tracking |
@@ -448,34 +570,36 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_gap_workflow_v2.json`
 ```
 PharmaCyberLLM/
 ├── src/
-│   ├── server.ts                  # Express entry + news agent + DB init
+│   ├── server.ts                  # Express + HTTPS + news agent + DB init
 │   ├── api/
-│   │   ├── chat.ts                # SSE streaming chat + timing + response_id
+│   │   ├── chat.ts                # SSE streaming + reasoning steps + /names toggle
 │   │   ├── knowledge.ts           # KB CRUD + gaps + resolution check + reindex
 │   │   ├── agent.ts               # News agent status + manual trigger
 │   │   ├── feedback.ts            # User feedback + stats + weekly digest
-│   │   └── dashboard.ts           # Dashboard metrics + health check
+│   │   └── dashboard.ts           # Dashboard metrics + health check + KB QA
 │   └── services/
-│       ├── ollama.ts              # Ollama chat, streaming, embeddings
+│       ├── ollama.ts              # Ollama chat, streaming, token stats, embeddings
 │       ├── knowledge-store.ts     # In-memory vector store + hybrid search
 │       ├── chromadb-store.ts      # ChromaDB client + delete/recreate
 │       ├── gap-detector.ts        # Confidence check + resolution + N8N webhook
 │       ├── feedback-store.ts      # Feedback table + stats + weekly digest
 │       ├── response-cache.ts      # In-memory response metadata (1h TTL)
-│       ├── request-log.ts         # Request logging + dashboard metrics + cache
-│       ├── news-agent.ts          # 90-topic Google News scraper
+│       ├── request-log.ts         # Request logging + ChromaDB miss tracking + cache
+│       ├── news-agent.ts          # 194-topic Google News scraper
 │       ├── web-search.ts          # Real-time Google News RSS search
 │       └── file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
+├── certs/                         # SSL certificates (HTTPS support)
 ├── dashboard/
 │   └── index.html                 # Monitoring dashboard (Chart.js, dark theme)
 ├── public/
-│   ├── index.html                 # Chat UI
-│   ├── styles.css                 # Dark theme
-│   └── app.js                     # Frontend logic
+│   ├── index.html                 # Chat UI (voice input, reasoning panel)
+│   ├── styles.css                 # Dark theme + mobile/tablet optimizations
+│   └── app.js                     # Frontend logic + history navigation
 ├── knowledge/                     # 36+ curated pharma/cyber documents
 ├── n8n/
 │   ├── knowledge_gap_workflow.json      # N8N workflow v1
 │   ├── knowledge_gap_workflow_v2.json   # N8N workflow v2 (with resolution check)
+│   ├── knowledge_qa_workflow.json       # N8N KB health monitoring (every 6h)
 │   └── README.md                        # N8N setup guide
 ├── python/
 │   ├── utils/                     # Smart chunking, re-ranking, vector DB
@@ -497,8 +621,10 @@ PharmaCyberLLM/
 ### Chat
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/chat` | POST | SSE-streamed response with RAG context + `response_id` |
-| `/api/chat/models` | GET | List available Ollama models |
+| `/api/chat` | POST | SSE-streamed response with reasoning steps + token stats + `response_id` |
+| `/api/chat/models` | GET | List available Ollama models (sorted, Mistral first) |
+
+The `/names` command toggles whether responses name specific companies in cyber incident discussions.
 
 ### Knowledge
 | Endpoint | Method | Description |
@@ -526,6 +652,9 @@ PharmaCyberLLM/
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/dashboard/metrics` | GET | All dashboard metrics (30s cached) |
+| `/api/dashboard/chromadb-misses` | GET | Recent ChromaDB misses + top 20 missed queries |
+| `/api/dashboard/kb-health` | GET | KB health trends (24h average, history) |
+| `/api/dashboard/kb-health` | POST | Receive health report from N8N QA workflow |
 | `/api/health` | GET | Service health (Ollama, ChromaDB, SearXNG, SQLite) |
 | `/dashboard` | GET | Monitoring dashboard UI |
 
@@ -543,11 +672,22 @@ All optional — works out of the box with zero configuration.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3000` | Server port |
+| `PORT` | `3000` | HTTP server port |
+| `HTTPS_PORT` | `3443` | HTTPS server port (requires certs) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `CHROMADB_URL` | `http://localhost:8100` | ChromaDB server endpoint |
 | `N8N_WEBHOOK_URL` | *(none)* | N8N webhook for gap auto-fill |
+
+### HTTPS Setup (required for mobile voice input)
+
+Place SSL certificates in the `certs/` directory:
+```
+certs/key.pem    # Private key
+certs/cert.pem   # Certificate
+```
+The HTTPS server starts automatically when both files are present.
 
 ---
 
@@ -569,9 +709,9 @@ flowchart LR
 
 <div align="center">
 
-**100% local. Zero cloud. Self-healing. Observable. Always current.**
+**100% local. Zero cloud. Self-healing. Observable. Voice-enabled. Always current.**
 
-*Ollama LLM* · *Dual RAG + Re-ranking* · *ChromaDB* · *Monitoring Dashboard* · *User Feedback* · *N8N Orchestration* · *36+ Intel Documents*
+*Mistral 24B* · *Voice Input* · *Reasoning Transparency* · *Dual RAG + Re-ranking* · *ChromaDB* · *KB Health QA* · *194 News Topics* · *N8N Orchestration*
 
 <br/>
 
