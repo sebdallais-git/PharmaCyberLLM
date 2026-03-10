@@ -16,9 +16,30 @@
 
 ---
 
-*A fully offline, self-healing RAG chatbot with a real-time monitoring dashboard, user feedback loop, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
+*A fully offline, self-healing RAG chatbot with real-time monitoring, user feedback loop, and automated knowledge gap resolution — all orchestrated by N8N. Built for cybersecurity professionals who can't send sensitive queries to the cloud.*
 
 </div>
+
+---
+
+## Table of Contents
+
+- [Why This Exists](#why-this-exists)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Self-Healing Knowledge Loop](#self-healing-knowledge-loop)
+- [Monitoring Dashboard](#monitoring-dashboard)
+- [User Feedback System](#user-feedback-system)
+- [Architecture](#architecture)
+- [Knowledge Base](#knowledge-base)
+- [LLM Re-Ranking](#llm-re-ranking)
+- [Smart Chunking](#smart-chunking)
+- [N8N Workflow](#n8n-workflow-v2--closed-loop-gap-resolution)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+- [Environment Variables](#environment-variables)
+- [Integration with PharmaCyber](#integration-with-pharmacyber)
 
 ---
 
@@ -32,75 +53,87 @@ It combines:
 - A **local LLM** (via Ollama) for conversational intelligence
 - A **dual vector store** (embedded index + ChromaDB) with 36+ curated pharma/cyber documents
 - **LLM-powered re-ranking** for higher precision RAG retrieval
-- An **automated news agent** that scrubs 90+ topics from Google News every 24 hours
+- An **automated news agent** scraping 90+ topics from Google News every 24 hours
 - **Real-time web search** augmentation on every query
 - A **self-healing knowledge gap detector** with closed-loop resolution verification
 - A **real-time monitoring dashboard** with Chart.js visualizations
-- A **user feedback system** that tracks response quality and identifies weak areas
+- A **user feedback system** tracking response quality and identifying weak areas
 - Full **N8N workflow orchestration** for automated gap research and ingestion
 
-The result: an always-current, always-private, self-improving pharma cyber threat expert — with full observability.
+---
+
+## Quick Start
+
+```bash
+# 1. Install Ollama
+brew install ollama
+ollama pull gemma2:9b
+
+# 2. Clone and install
+git clone https://github.com/sebdallais-git/PharmaCyberLLM.git
+cd PharmaCyberLLM
+npm install
+
+# 3. Start Ollama
+ollama serve &
+
+# 4. Launch
+npm run dev
+
+# --> Chat:      http://localhost:3000
+# --> Dashboard: http://localhost:3000/dashboard
+# --> Health:    http://localhost:3000/api/health
+```
+
+No API keys. No `.env` file. No cloud accounts.
+
+### Optional: Enable Self-Healing + Full Stack
+
+```bash
+# 5. Set the N8N webhook URL
+export N8N_WEBHOOK_URL="http://localhost:5678/webhook/knowledge-gap"
+
+# 6. Import the v2 workflow into N8N
+#    N8N > Workflows > Import > n8n/knowledge_gap_workflow_v2.json
+
+# 7. Ensure SearXNG (port 8888) and ChromaDB (port 8100) are running
+
+# 8. Restart
+npm run dev
+```
 
 ---
 
 ## How It Works
 
+```mermaid
+flowchart TD
+    Q["User asks a question"] --> P["PharmaCyberLLM Pipeline"]
+
+    subgraph P["Pipeline"]
+        direction TB
+        KS["Knowledge Search\n(Hybrid dual-store)"] --> MC["Merged Context"]
+        WS["Web Search\n(Google News)"] --> MC
+        MC --> LLM["Ollama LLM\n(Local)"]
+        LLM --> RESP["Streamed response\nwith sources + response_id"]
+        LLM --> GD["Gap Detector"]
+    end
+
+    GD -->|Low confidence?| N8N["N8N Webhook"]
+
+    subgraph HEAL["Self-Healing Loop"]
+        N8N --> SEARX["SearXNG Search"]
+        SEARX --> EXTRACT["Ollama Extraction"]
+        EXTRACT --> INGEST["Auto-ingest to KB"]
+        INGEST --> VERIFY["Resolution Verification"]
+    end
+
+    RESP --> USER["User receives answer\n+ can rate 1-5"]
+    RESP --> DASH["Dashboard tracks:\nConfidence / Latency\nRatings / Gaps"]
+
+    style P fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
+    style HEAL fill:#4a1d6b,stroke:#d946ef,color:#e5e7eb
 ```
-User asks: "What ransomware attacks hit pharma in 2024?"
-                    |
-                    v
-+-------------------------------------------------------------+
-|                   PharmaCyberLLM Pipeline                    |
-|                                                             |
-|   +----------+   +----------+   +----------+               |
-|   | Knowledge |   |   Web    |   |  Ollama  |               |
-|   |  Search   |   |  Search  |   |   LLM    |               |
-|   | (Hybrid)  |   | (Google) |   | (Local)  |               |
-|   +-----+----+   +-----+----+   +-----+----+               |
-|         |              |              |                      |
-|         +------+-------+------+------+                      |
-|                |              |                              |
-|         Merged context   Gap Detector                       |
-|                |              |                              |
-|                v              v                              |
-|         Streamed         Low confidence?                     |
-|         response       +---> N8N Webhook                    |
-|      with sources      |     --> SearXNG search             |
-|      + response_id     |     --> Ollama extraction           |
-|                        +---> Auto-ingest to KB              |
-|                        +---> Resolution verification        |
-+-------------------------------------------------------------+
-                    |                           |
-                    v                           v
-"In 2024, Change Healthcare             Dashboard tracks:
- suffered a $2.87B breach..."          - Confidence rate
-(citing: cyber-pharma-attacks.md)      - Response latency
-                                       - User ratings
-User can rate response (1-5)           - Gap resolution
-```
-
----
-
-## Monitoring Dashboard
-
-A real-time dark-themed dashboard at `/dashboard` with auto-refresh every 60 seconds.
-
-**Top row** — 4 key metric cards with trend arrows:
-- Questions Today / Confidence Rate / Avg User Rating / Knowledge Base Size
-
-**Charts** — 30-day time series:
-- Questions & Confidence (dual-axis bar + line)
-- User Ratings (with 3.0 baseline reference)
-
-**Gap Intelligence**:
-- Recent knowledge gaps table with color-coded status badges
-- Top gap topics horizontal bar chart
-
-**System Health**:
-- Knowledge sources donut chart
-- Service health checks (Ollama, ChromaDB, SearXNG, SQLite) with latency
-
-All metrics are cached for 30 seconds and backed by indexed SQL queries.
 
 ---
 
@@ -108,52 +141,44 @@ All metrics are cached for 30 seconds and backed by indexed SQL queries.
 
 The killer feature. PharmaCyberLLM **knows when it doesn't know** — fixes itself — and **verifies the fix worked**.
 
-```
-+------------------+     +-------------------+     +------------------+
-|   User Question  | --> |  Ollama Response   | --> |  Gap Detector    |
-|                  |     |  + response_id     |     |  (Confidence?)   |
-+------------------+     +-------------------+     +--------+---------+
-                                                            |
-                                              Confident?    |    Not confident?
-                                              (done)        |    (trigger)
-                                                            v
-                                                   +--------+---------+
-                                                   |   N8N Webhook    |
-                                                   |   (with gap_id)  |
-                                                   +--------+---------+
-                                                            |
-                              +-----------------------------+----------------------------+
-                              |                             |                            |
-                              v                             v                            v
-                    +---------+--------+      +-------------+---------+    +-------------+---------+
-                    | Ollama: Generate |      | SearXNG: Search Web   |    | Ollama: Extract       |
-                    | 3 search queries |      | (3 queries x 3 results)|    | relevant knowledge    |
-                    +---------+--------+      +-------------+---------+    +-------------+---------+
-                              |                             |                            |
-                              +-----------------------------+----------------------------+
-                                                            |
-                                                            v
-                                                   +--------+---------+
-                                                   |  Store in KB     |
-                                                   |  (ingest-text)   |
-                                                   +--------+---------+
-                                                            |
-                                                            v
-                                                   +--------+---------+
-                                                   | Resolution Check |
-                                                   | Re-ask question  |
-                                                   | via full RAG     |
-                                                   +--------+---------+
-                                                            |
-                                              +-------------+-------------+
-                                              |                           |
-                                              v                           v
-                                        Confident now?              Still not?
-                                        status=resolved           status=unresolved
-                                        log new response          retry_count++
+```mermaid
+flowchart TD
+    A["User Question"] --> B["Ollama Response\n+ response_id"]
+    B --> C{"Gap Detector:\nConfident?"}
+    C -->|Yes| D["Done"]
+    C -->|No| E["N8N Webhook\n(with gap_id)"]
+
+    E --> F["Ollama: Generate\n3 search queries"]
+    E --> G["SearXNG: Search Web\n(3 queries x 3 results)"]
+    E --> H["Ollama: Extract\nrelevant knowledge"]
+
+    F & G & H --> I["Store in KB\n(ingest-text)"]
+    I --> J["Resolution Check:\nRe-ask via full RAG"]
+
+    J --> K{"Confident now?"}
+    K -->|Yes| L["status = resolved\nlog new response"]
+    K -->|No| M["status = unresolved\nretry_count++"]
+
+    style C fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+    style K fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
 ```
 
 The gap detector uses a 2-hour cooldown per topic, logs every detection in SQLite, and the v2 N8N workflow verifies resolution automatically.
+
+---
+
+## Monitoring Dashboard
+
+A real-time dark-themed dashboard at `/dashboard` with auto-refresh every 60 seconds.
+
+| Section | Details |
+|---------|---------|
+| **Metric Cards** | Questions Today, Confidence Rate, Avg User Rating, Knowledge Base Size — with trend arrows |
+| **Time Series** | 30-day Questions & Confidence (dual-axis bar + line), User Ratings (with 3.0 baseline) |
+| **Gap Intelligence** | Recent gaps table with color-coded status badges, top gap topics bar chart |
+| **System Health** | Knowledge sources donut chart, service health checks (Ollama, ChromaDB, SearXNG, SQLite) with latency |
+
+All metrics are cached for 30 seconds and backed by indexed SQL queries.
 
 ---
 
@@ -161,24 +186,17 @@ The gap detector uses a 2-hour cooldown per topic, logs every detection in SQLit
 
 Every chat response includes a `response_id`. Users can rate responses 1-5 with optional comments.
 
-The feedback system tracks:
-- Which RAG chunks were used for each response
-- Whether the response had RAG context or was pure LLM
-- Ratings breakdown by topic, time period, and RAG vs non-RAG
+- Tracks which RAG chunks were used for each response
+- Compares ratings for RAG-augmented vs pure LLM responses
 - Low-rated responses (<=2) flagged for knowledge base improvement
 
 ```
 POST /api/feedback
   { "response_id": "uuid", "rating": 4, "comment": "helpful" }
 
-GET /api/feedback/stats
-  -> avg ratings (7d, 30d, RAG vs non-RAG), best/worst topics
-
-GET /api/feedback/low-rated
-  -> all responses rated <=2 with chunk IDs used
-
-GET /api/feedback/weekly-digest
-  -> 7-day summary: questions, gaps, resolution rate, improvement priorities
+GET /api/feedback/stats         --> avg ratings (7d, 30d, RAG vs non-RAG)
+GET /api/feedback/low-rated     --> responses rated <=2 with chunk IDs
+GET /api/feedback/weekly-digest --> 7-day summary with improvement priorities
 ```
 
 ---
@@ -281,41 +299,9 @@ graph TB
 
 ---
 
-## LLM Re-Ranking
-
-The Python RAG pipeline uses **Ollama as a relevance judge** to re-rank retrieved chunks:
-
-```
-Query: "Dell cyber recovery ransomware"
-         |
-         v
-  Retrieve top 15 from ChromaDB
-         |
-         v
-  Send all 15 to Ollama (temp=0.1):
-  "Score each chunk 0-10 for relevance..."
-         |
-         v
-  Parse JSON scores, filter score >= 5
-         |
-         v
-  Take top 5 (or fallback top 3)
-         |
-         v
-  Prefix with section context:
-  "From section 'Ransomware Defense' of vendor-dell.md: ..."
-         |
-         v
-  Final RAG prompt to LLM
-```
-
-Re-ranking results are logged to `data/logs/reranking.log` for analysis.
-
----
-
 ## Knowledge Base
 
-PharmaCyberLLM ships with **36+ curated intelligence documents** and **1000+ embedded chunks**:
+PharmaCyberLLM ships with **36+ curated intelligence documents** and **1000+ embedded chunks**.
 
 ```mermaid
 mindmap
@@ -372,15 +358,46 @@ mindmap
 
 ---
 
+## LLM Re-Ranking
+
+The Python RAG pipeline uses **Ollama as a relevance judge** to re-rank retrieved chunks.
+
+```mermaid
+flowchart TD
+    A["Query: 'Dell cyber recovery ransomware'"] --> B["Retrieve top 15 from ChromaDB"]
+    B --> C["Send all 15 to Ollama (temp=0.1)\nScore each chunk 0-10 for relevance"]
+    C --> D["Parse JSON scores\nFilter score >= 5"]
+    D --> E["Take top 5 (or fallback top 3)"]
+    E --> F["Prefix with section context:\n'From section Ransomware Defense of vendor-dell.md: ...'"]
+    F --> G["Final RAG prompt to LLM"]
+
+    style A fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
+    style G fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+```
+
+Re-ranking results are logged to `data/logs/reranking.log` for analysis.
+
+---
+
+## Smart Chunking
+
+The Python vectordb uses intelligent document chunking:
+
+| Feature | Detail |
+|---------|--------|
+| Split strategy | Paragraph boundaries first, then sentences |
+| Split threshold | Paragraphs > 600 tokens get sentence-split |
+| Merge threshold | Paragraphs < 100 tokens merged with next |
+| Target size | 300-500 tokens per chunk |
+| Section detection | Markdown headings, ALL CAPS titles, numbered sections |
+| Metadata | `section_header`, `chunk_index`, `source_url`, `ingested_at`, `document_title` |
+| Re-indexing | `POST /api/knowledge/reindex` rebuilds from `data/raw_documents/` |
+
+---
+
 ## N8N Workflow v2 — Closed-Loop Gap Resolution
 
 An importable N8N workflow that fills knowledge gaps **and verifies the fix worked**.
-
-```
-Webhook POST --> Ollama (3 queries) --> SearXNG (web search)
-  --> Fetch pages --> Ollama (extraction) --> Filter relevance
-  --> Store in KB --> Summary --> Resolution Check --> Log result
-```
 
 ### Workflow Nodes (15 total)
 
@@ -406,64 +423,6 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_gap_workflow_v2.json`
 
 ---
 
-## Smart Chunking
-
-The Python vectordb uses intelligent document chunking:
-
-| Feature | Detail |
-|---------|--------|
-| Split strategy | Paragraph boundaries first, then sentences |
-| Split threshold | Paragraphs > 600 tokens get sentence-split |
-| Merge threshold | Paragraphs < 100 tokens merged with next |
-| Target size | 300-500 tokens per chunk |
-| Section detection | Markdown headings, ALL CAPS titles, numbered sections |
-| Metadata | `section_header`, `chunk_index`, `source_url`, `ingested_at`, `document_title` |
-| Re-indexing | `POST /api/knowledge/reindex` rebuilds from `data/raw_documents/` |
-
----
-
-## Quick Start
-
-```bash
-# 1. Install Ollama
-brew install ollama
-ollama pull gemma2:9b
-
-# 2. Clone and install
-git clone https://github.com/sebdallais-git/PharmaCyberLLM.git
-cd PharmaCyberLLM
-npm install
-
-# 3. Start Ollama
-ollama serve &
-
-# 4. Launch
-npm run dev
-
-# --> Chat:      http://localhost:3000
-# --> Dashboard: http://localhost:3000/dashboard
-# --> Health:    http://localhost:3000/api/health
-```
-
-No API keys. No `.env` file. No cloud accounts.
-
-### Optional: Enable Self-Healing + Full Stack
-
-```bash
-# 5. Set the N8N webhook URL
-export N8N_WEBHOOK_URL="http://localhost:5678/webhook/knowledge-gap"
-
-# 6. Import the v2 workflow into N8N
-#    N8N > Workflows > Import > n8n/knowledge_gap_workflow_v2.json
-
-# 7. Ensure SearXNG (port 8888) and ChromaDB (port 8100) are running
-
-# 8. Restart
-npm run dev
-```
-
----
-
 ## Tech Stack
 
 | Layer | Technology | Purpose |
@@ -481,7 +440,6 @@ npm run dev
 | **Search** | Hybrid vector + keyword | Dual-store RAG retrieval |
 | **Parsing** | pdf-parse, mammoth, JSZip | Multi-format document ingestion |
 | **Streaming** | Server-Sent Events | Token-by-token chat output |
-| **Python** | Utilities | Smart chunking, re-ranking, vector DB |
 
 ---
 
@@ -489,47 +447,47 @@ npm run dev
 
 ```
 PharmaCyberLLM/
-+-- src/
-|   +-- server.ts                  # Express entry + news agent + DB init
-|   +-- api/
-|   |   +-- chat.ts                # SSE streaming chat + timing + response_id
-|   |   +-- knowledge.ts           # KB CRUD + gaps + resolution check + reindex
-|   |   +-- agent.ts               # News agent status + manual trigger
-|   |   +-- feedback.ts            # User feedback + stats + weekly digest
-|   |   +-- dashboard.ts           # Dashboard metrics + health check
-|   +-- services/
-|       +-- ollama.ts              # Ollama chat, streaming, embeddings
-|       +-- knowledge-store.ts     # In-memory vector store + hybrid search
-|       +-- chromadb-store.ts      # ChromaDB client + delete/recreate
-|       +-- gap-detector.ts        # Confidence check + resolution + N8N webhook
-|       +-- feedback-store.ts      # Feedback table + stats + weekly digest
-|       +-- response-cache.ts      # In-memory response metadata (1h TTL)
-|       +-- request-log.ts         # Request logging + dashboard metrics + cache
-|       +-- news-agent.ts          # 90-topic Google News scraper
-|       +-- web-search.ts          # Real-time Google News RSS search
-|       +-- file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
-+-- dashboard/
-|   +-- index.html                 # Monitoring dashboard (Chart.js, dark theme)
-+-- public/
-|   +-- index.html                 # Chat UI
-|   +-- styles.css                 # Dark theme
-|   +-- app.js                     # Frontend logic
-+-- knowledge/                     # 36+ curated pharma/cyber documents
-+-- n8n/
-|   +-- knowledge_gap_workflow.json      # N8N workflow v1
-|   +-- knowledge_gap_workflow_v2.json   # N8N workflow v2 (with resolution check)
-|   +-- README.md                        # N8N setup guide
-+-- python/
-|   +-- utils/                     # Smart chunking, re-ranking, vector DB
-|   +-- tests/                     # Integration + vector DB tests
-+-- data/
-|   +-- chromadb/                  # ChromaDB persistent storage
-|   +-- raw_documents/             # Original content for re-indexing
-|   +-- logs/                      # Re-ranking logs
-|   +-- gap_log.db                 # SQLite (gaps + feedback + request log)
-+-- package.json
-+-- tsconfig.json
-+-- .gitignore
+├── src/
+│   ├── server.ts                  # Express entry + news agent + DB init
+│   ├── api/
+│   │   ├── chat.ts                # SSE streaming chat + timing + response_id
+│   │   ├── knowledge.ts           # KB CRUD + gaps + resolution check + reindex
+│   │   ├── agent.ts               # News agent status + manual trigger
+│   │   ├── feedback.ts            # User feedback + stats + weekly digest
+│   │   └── dashboard.ts           # Dashboard metrics + health check
+│   └── services/
+│       ├── ollama.ts              # Ollama chat, streaming, embeddings
+│       ├── knowledge-store.ts     # In-memory vector store + hybrid search
+│       ├── chromadb-store.ts      # ChromaDB client + delete/recreate
+│       ├── gap-detector.ts        # Confidence check + resolution + N8N webhook
+│       ├── feedback-store.ts      # Feedback table + stats + weekly digest
+│       ├── response-cache.ts      # In-memory response metadata (1h TTL)
+│       ├── request-log.ts         # Request logging + dashboard metrics + cache
+│       ├── news-agent.ts          # 90-topic Google News scraper
+│       ├── web-search.ts          # Real-time Google News RSS search
+│       └── file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
+├── dashboard/
+│   └── index.html                 # Monitoring dashboard (Chart.js, dark theme)
+├── public/
+│   ├── index.html                 # Chat UI
+│   ├── styles.css                 # Dark theme
+│   └── app.js                     # Frontend logic
+├── knowledge/                     # 36+ curated pharma/cyber documents
+├── n8n/
+│   ├── knowledge_gap_workflow.json      # N8N workflow v1
+│   ├── knowledge_gap_workflow_v2.json   # N8N workflow v2 (with resolution check)
+│   └── README.md                        # N8N setup guide
+├── python/
+│   ├── utils/                     # Smart chunking, re-ranking, vector DB
+│   └── tests/                     # Integration + vector DB tests
+├── data/
+│   ├── chromadb/                  # ChromaDB persistent storage
+│   ├── raw_documents/             # Original content for re-indexing
+│   ├── logs/                      # Re-ranking logs
+│   └── gap_log.db                 # SQLite (gaps + feedback + request log)
+├── package.json
+├── tsconfig.json
+└── .gitignore
 ```
 
 ---
@@ -597,20 +555,14 @@ All optional — works out of the box with zero configuration.
 
 PharmaCyberLLM is designed as a companion to the [PharmaCyber](https://github.com/sebdallais-git/CyberDemo) incident response dashboard.
 
-```
-+-------------------------------+     +--------------------------+
-|    PharmaCyber Dashboard      |     |    PharmaCyberLLM        |
-|    (Port 8888)                |---->|    (Port 3000)           |
-|                               |     |                          |
-| Snowflake - ServiceNow - Dell |     | Chat + Dashboard         |
-| Live incident response demo   |     | + Self-healing RAG       |
-+-------------------------------+     +----------+---------------+
-                                                  |
-                                      +-----------v-----------+
-                                      |   N8N (Port 5678)     |
-                                      |   Auto gap-fill       |
-                                      |   Resolution verify   |
-                                      +-----------------------+
+```mermaid
+flowchart LR
+    A["PharmaCyber Dashboard\n(Port 8888)\nSnowflake - ServiceNow - Dell\nLive incident response demo"] --> B["PharmaCyberLLM\n(Port 3000)\nChat + Dashboard\n+ Self-healing RAG"]
+    B --> C["N8N (Port 5678)\nAuto gap-fill\nResolution verify"]
+
+    style A fill:#111827,stroke:#38bdf8,color:#e5e7eb
+    style B fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
+    style C fill:#4a1d6b,stroke:#d946ef,color:#e5e7eb
 ```
 
 ---
