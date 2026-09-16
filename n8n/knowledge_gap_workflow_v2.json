@@ -19,7 +19,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:11434/api/generate",
+        "url": "http://localhost:3000/api/llm/complete",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'gemma2:9b', prompt: 'Generate 3 different web search queries to find information about: ' + $json.search_topic + '\\nOriginal question was: ' + $json.original_query + '\\nReturn ONLY a JSON array of 3 search query strings, nothing else. Example: [\"query 1\", \"query 2\", \"query 3\"]', stream: false }) }}",
@@ -125,7 +125,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:11434/api/generate",
+        "url": "http://localhost:3000/api/llm/complete",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'gemma2:9b', prompt: 'You are a knowledge extraction assistant. Given this web page content, extract the key facts and information relevant to this topic: ' + $json.search_topic + '\\n\\nWeb content:\\n' + $json.page_content.slice(0, 6000) + '\\n\\nReturn a clean, factual summary in 2-4 paragraphs. If the content is not relevant to the topic, respond with ONLY the word NOT_RELEVANT.', stream: false }) }}",

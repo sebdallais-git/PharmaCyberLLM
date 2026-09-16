@@ -68,7 +68,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:11434/api/generate",
+        "url": "http://localhost:3000/api/llm/complete",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'gemma2:9b', prompt: 'You are a quality evaluator. Rate the following Q&A pair on a scale of 1-10 for accuracy, relevance, and completeness.\\n\\nQuestion: ' + $json.query + '\\nAnswer: ' + ($json.response || $json.answer || 'NO_RESPONSE').substring(0, 3000) + '\\n\\nRespond with ONLY a JSON object: {\"score\": <1-10>, \"has_sources\": <true/false>, \"is_hallucination\": <true/false>, \"reason\": \"<brief reason>\"}', stream: false, options: { temperature: 0.1 } }) }}",

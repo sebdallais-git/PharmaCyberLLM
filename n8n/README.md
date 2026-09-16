@@ -101,10 +101,11 @@ Utiliser `webhook-test` (pas `webhook`) pour tester sans activer le workflow en 
 - Vérifier que SearXNG tourne : `curl http://localhost:8888/search?q=test&format=json`
 - Le noeud d'erreur loggera le problème dans l'exécution N8N
 
-**Ollama timeout :**
-- Vérifier que Ollama tourne : `curl http://localhost:11434/api/tags`
+**Timeout LLM :**
+- Les noeuds LLM appellent `http://localhost:3000/api/llm/complete`, qui répond avec le stack actif (Ollama ou MLX)
+- Vérifier le stack actif : `curl http://localhost:3000/api/health` (champ `stack`)
+- Une réponse 503 pendant un benchmark est normale ; relancer le workflow après le benchmark
 - Augmenter le timeout dans les noeuds HTTP Request si nécessaire
-- Le modèle `gemma2:9b` doit être pullé : `ollama pull gemma2:9b`
 
 **Rien n'est stocké :**
 - Vérifier que PharmaLLM tourne sur le port 3000
