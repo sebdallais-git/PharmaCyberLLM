@@ -49,31 +49,61 @@ port_listeners() {
 }
 
 # Send SIGNAL to the project's listeners on PORT. Returns 1, without signaling anything,
-# when a listener belongs to another program.
+# when a listener belongs to another program. With IGNORE_FOREIGN="ignore-foreign", a foreign
+# listener is logged and left alone instead of aborting the call.
 signal_port() {
-  local port="$1" signal="$2" pid pids foreign=0
+  local port="$1" signal="$2" ignore_foreign="${3:-}" pid pids foreign=0
   pids="$(port_listeners "$port")"
   for pid in $pids; do
-    if ! is_project_pid "$pid"; then
+    kill -0 "$pid" 2>/dev/null || continue  # already gone; not foreign
+    is_project_pid "$pid" && continue
+    if [ "$ignore_foreign" = "ignore-foreign" ]; then
+      log "Port $port is used by another program (pid $pid: $(ps -ww -p "$pid" -o command= 2>/dev/null || echo unknown)) — leaving it alone"
+    else
       log "Port $port is used by another program (pid $pid: $(ps -ww -p "$pid" -o command= 2>/dev/null || echo unknown)) — not stopping it"
       foreign=1
     fi
   done
   [ "$foreign" -eq 0 ] || return 1
   for pid in $pids; do
-    kill -"$signal" "$pid" 2>/dev/null || true
+    kill -0 "$pid" 2>/dev/null || continue
+    is_project_pid "$pid" && kill -"$signal" "$pid" 2>/dev/null || true
   done
 }
 
+# True when a project-owned process is still listening on PORT (a foreign listener doesn't count).
+project_listener_open() {
+  local port="$1" pid
+  for pid in $(port_listeners "$port"); do
+    kill -0 "$pid" 2>/dev/null || continue
+    is_project_pid "$pid" && return 0
+  done
+  return 1
+}
+
 # Free PORT: TERM the project's listeners, wait up to TIMEOUT seconds, then KILL them.
-# Fails when the port is held by another program or stays in use.
+# Fails when the port is held by another program or a project listener stays up.
+# With IGNORE_FOREIGN="ignore-foreign", a foreign listener is left alone (not counted as
+# failure) and only a surviving project listener fails the call.
 stop_port() {
-  local port="$1" timeout="$2"
+  local port="$1" timeout="$2" ignore_foreign="${3:-}" waited=0
   port_open "$port" || return 0
-  signal_port "$port" TERM || return 1
-  wait_port_closed "$port" "$timeout" && return 0
-  signal_port "$port" KILL || return 1
-  wait_port_closed "$port" 5
+  signal_port "$port" TERM "$ignore_foreign" || return 1
+  if [ "$ignore_foreign" = "ignore-foreign" ]; then
+    while project_listener_open "$port"; do
+      [ "$waited" -ge "$timeout" ] && break
+      sleep 1
+      waited=$((waited + 1))
+    done
+    project_listener_open "$port" || return 0
+    signal_port "$port" KILL "$ignore_foreign" || return 1
+    sleep 1
+    ! project_listener_open "$port"
+  else
+    wait_port_closed "$port" "$timeout" && return 0
+    signal_port "$port" KILL "$ignore_foreign" || return 1
+    wait_port_closed "$port" 5
+  fi
 }
 
 # TERM the process recorded in PIDFILE (and its direct children) if it belongs to the project,

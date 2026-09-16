@@ -88,23 +88,34 @@ start_ollama() {
 }
 
 stop_pidfile() {
-  local name="$1" port="$2"
+  local name="$1" port="$2" ignore_foreign="${3:-}"
   stop_pidfile_process "$RUN_DIR/$name.pid"
   # Also covers a project server started by hand; another program on the port makes this fail
-  stop_port "$port" 20 || { log "Port $port ($name) is still in use"; return 1; }
+  # unless ignore-foreign is set (MLX ports may be shared with an unrelated program).
+  stop_port "$port" 20 "$ignore_foreign" || { log "Port $port ($name) is still in use"; return 1; }
 }
 
 stop_mlx() {
-  stop_pidfile mlx-chat "$MLX_CHAT_PORT" && stop_pidfile mlx-embed "$MLX_EMBED_PORT"
+  local chat_rc=0 embed_rc=0
+  # Run both stops even if one fails, so a stuck chat port doesn't leave the embed server up.
+  stop_pidfile mlx-chat "$MLX_CHAT_PORT" ignore-foreign || chat_rc=$?
+  stop_pidfile mlx-embed "$MLX_EMBED_PORT" ignore-foreign || embed_rc=$?
+  [ "$chat_rc" -eq 0 ] && [ "$embed_rc" -eq 0 ]
 }
 
 start_mlx() {
-  if ! port_open "$MLX_CHAT_PORT"; then
+  if port_open "$MLX_CHAT_PORT"; then
+    project_listener_open "$MLX_CHAT_PORT" \
+      || { log "Port $MLX_CHAT_PORT is used by another program — cannot start MLX"; return 1; }
+  else
     nohup "$MLX_VENV/bin/mlx_lm.server" --model "$MLX_CHAT_MODEL" --host 127.0.0.1 --port "$MLX_CHAT_PORT" \
       >"$LOG_DIR/mlx-chat.log" 2>&1 &
     echo $! >"$RUN_DIR/mlx-chat.pid"
   fi
-  if ! port_open "$MLX_EMBED_PORT"; then
+  if port_open "$MLX_EMBED_PORT"; then
+    project_listener_open "$MLX_EMBED_PORT" \
+      || { log "Port $MLX_EMBED_PORT is used by another program — cannot start MLX"; return 1; }
+  else
     nohup "$MLX_VENV/bin/python" "$PROJECT_DIR/python/mlx-embed-server.py" \
       --model "$MLX_EMBED_MODEL" --host 127.0.0.1 --port "$MLX_EMBED_PORT" \
       >"$LOG_DIR/mlx-embed.log" 2>&1 &
