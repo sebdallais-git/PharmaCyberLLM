@@ -3,8 +3,9 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { chatWithOllama } from "./ollama.js";
-import type { OllamaMessage } from "./ollama.js";
+import { getLlmClient } from "./llm-client.js";
+import type { ChatMessage } from "./llm-client.js";
+import { isBenchmarkActive, trackJob } from "./bench-mode.js";
 
 const DB_PATH = join(process.cwd(), "data", "gap_log.db");
 
@@ -49,7 +50,7 @@ interface ConfidenceResult {
   search_topic: string;
 }
 
-// Secondary call to Ollama to evaluate response confidence
+// Secondary LLM call to evaluate response confidence
 export async function checkConfidence(
   originalQuestion: string,
   gemmaResponse: string,
@@ -64,10 +65,10 @@ Respond with ONLY a JSON object, no other text:
 {"confident": true/false, "reason": "brief explanation", "search_topic": "2-5 word search query if not confident"}`;
 
   try {
-    const messages: OllamaMessage[] = [
+    const messages: ChatMessage[] = [
       { role: "user", content: prompt },
     ];
-    const response = await chatWithOllama(messages, model, { temperature: 0.1 });
+    const response = await getLlmClient().chat(messages, { model, temperature: 0.1 });
 
     // Extract JSON from the response
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
@@ -154,7 +155,7 @@ export async function triggerWebhook(
   }
 }
 
-// Guard: only one gap detection at a time so we don't hog Ollama
+// Guard: only one gap detection at a time so we don't hog the LLM stack
 let gapDetectionRunning = false;
 
 // Orchestrate detection: confidence check → cooldown → log → webhook
@@ -163,6 +164,9 @@ export async function handleGapDetection(
   gemmaResponse: string,
   model?: string
 ): Promise<boolean> {
+  // Benchmarks need the GPU to themselves
+  if (isBenchmarkActive()) return false;
+
   // Skip if another gap detection is already running — don't queue behind it
   if (gapDetectionRunning) {
     console.log("[Gap Detector] Skipped — another detection already in progress");
@@ -171,7 +175,7 @@ export async function handleGapDetection(
 
   gapDetectionRunning = true;
   try {
-    const result = await checkConfidence(originalQuery, gemmaResponse, model);
+    const result = await trackJob("gap-detection", () => checkConfidence(originalQuery, gemmaResponse, model));
 
     if (result.confident) {
       return false;

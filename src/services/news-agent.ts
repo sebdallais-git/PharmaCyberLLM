@@ -7,7 +7,9 @@ import { addToChromaDB, isChromaDBAvailable } from "./chromadb-store.js";
 import { saveRawDocument } from "./raw-documents.js";
 import { isNeo4jAvailable, writeEntities } from "./graph-store.js";
 import type { GraphEntity, GraphRelationship } from "./graph-store.js";
-import { chatWithOllama } from "./ollama.js";
+import { getLlmClient } from "./llm-client.js";
+import { getIndexStatus } from "./index-guard.js";
+import { isBenchmarkActive, trackJob } from "./bench-mode.js";
 
 const KNOWLEDGE_DIR = join(process.cwd(), "knowledge");
 const AGENT_STATE_PATH = join(KNOWLEDGE_DIR, ".agent-state.json");
@@ -346,13 +348,14 @@ async function extractNewsEntities(texts: string[]): Promise<void> {
 Entity types: Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology
 Return ONLY valid JSON: {"entities": [{"type": "...", "name": "...", "properties": {...}}], "relationships": [{"from": "...", "fromType": "...", "to": "...", "toType": "...", "type": "...", "properties": {...}}]}`;
 
-    const response = await chatWithOllama(
-      [
-        { role: "system", content: extractionPrompt },
-        { role: "user", content: combined },
-      ],
-      undefined,
-      { temperature: 0.1 }
+    const response = await trackJob("graph-extraction", () =>
+      getLlmClient().chat(
+        [
+          { role: "system", content: extractionPrompt },
+          { role: "user", content: combined },
+        ],
+        { temperature: 0.1 }
+      )
     );
 
     const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -395,6 +398,27 @@ Return ONLY valid JSON: {"entities": [{"type": "...", "name": "...", "properties
 }
 
 export async function runNewsAgent(): Promise<{ newArticles: number; topics: number }> {
+  const skipped = { newArticles: 0, topics: 0 };
+
+  if (isBenchmarkActive()) {
+    console.log("[News Agent] Skipped — benchmark mode is active");
+    return skipped;
+  }
+  const indexStatus = getIndexStatus();
+  if (!indexStatus.ok) {
+    console.warn(`[News Agent] Skipped — ${indexStatus.reason}`);
+    return skipped;
+  }
+  const llm = getLlmClient();
+  if (!(await llm.isReachable())) {
+    console.warn(`[News Agent] Skipped — the ${llm.stack.name} stack is not reachable`);
+    return skipped;
+  }
+
+  return trackJob("news-agent", runNewsScrub);
+}
+
+async function runNewsScrub(): Promise<{ newArticles: number; topics: number }> {
   console.log("[News Agent] Starting daily news scrub...");
 
   const state = await loadAgentState();
@@ -419,15 +443,20 @@ export async function runNewsAgent(): Promise<{ newArticles: number; topics: num
       const sourceName = `news-${item.date}`;
 
       // 1. Raw document: lets every stack's index be rebuilt from disk
-      await saveRawDocument(
-        sourceName,
-        text,
-        { type: "news", link: item.link, title: item.title },
-        { key: item.link || text }
-      );
-
       // 2. In-memory store (awaited so saveIndex below includes the embedding)
-      await ingestText(text, sourceName);
+      // One failing article is skipped rather than aborting the whole run
+      try {
+        await saveRawDocument(
+          sourceName,
+          text,
+          { type: "news", link: item.link, title: item.title },
+          { key: item.link || text }
+        );
+        await ingestText(text, sourceName);
+      } catch (err) {
+        console.error(`[News Agent] Skipped article "${item.title}":`, err instanceof Error ? err.message : err);
+        continue;
+      }
 
       // 3. ChromaDB (persistent vector store)
       if (chromaOk) {

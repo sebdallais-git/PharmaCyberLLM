@@ -7,8 +7,10 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { streamChatWithOllama, listModels, getEmbedding } from "../services/ollama.js";
-import type { OllamaMessage, TokenStats } from "../services/ollama.js";
+import { getLlmClient } from "../services/llm-client.js";
+import type { ChatMessage, StatsCollector } from "../services/llm-client.js";
+import { getIndexStatus } from "../services/index-guard.js";
+import type { ChatTimings } from "../services/bench-mode.js";
 import { searchKnowledge } from "../services/knowledge-store.js";
 import { searchChromaDB } from "../services/chromadb-store.js";
 import type { ChromaQueryResult } from "../services/chromadb-store.js";
@@ -110,11 +112,12 @@ const GAP_DISCLAIMER = "\n\n---\n*I'm not fully confident in this answer. I'm re
 
 // POST /api/chat - Send a message and receive a streaming response
 router.post("/", async (req: Request, res: Response): Promise<void> => {
-  const { message, history, model, webSearch } = req.body as {
+  const { message, history, model, webSearch, benchmark } = req.body as {
     message: string;
-    history?: OllamaMessage[];
+    history?: ChatMessage[];
     model?: string;
     webSearch?: boolean;
+    benchmark?: boolean;
   };
 
   if (!message) {
@@ -134,6 +137,19 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     res.setHeader("Cache-Control", "no-cache");
     res.write(`data: ${JSON.stringify({ token: `Company names are now **${state}**. ${detail}` })}\n\n`);
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    res.end();
+    return;
+  }
+
+  const llm = getLlmClient();
+  const chatModel = model ?? llm.stack.chatModel;
+
+  // Refuse early when the index was built by another stack or embedding model
+  const indexStatus = getIndexStatus();
+  if (!indexStatus.ok) {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.write(`data: ${JSON.stringify({ error: `Search index unusable on the ${llm.stack.name} stack: ${indexStatus.reason}` })}\n\n`);
     res.end();
     return;
   }
@@ -165,12 +181,15 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
   // Step 1: Single embedding call (shared by ChromaDB + in-memory)
   let queryEmbedding: number[] | undefined;
+  const embedStart = Date.now();
   try {
-    queryEmbedding = await getEmbedding(message);
+    queryEmbedding = await llm.embed(message, "query");
   } catch (err) {
     console.error("[RAG] Embedding failed, falling back to keyword-only search:", err);
     sendReasoning("Embedding service unavailable, using keyword search...");
   }
+  const embedMs = Date.now() - embedStart;
+  const retrievalStart = Date.now();
 
   // Step 2: Fan out ALL searches in parallel
   const chromaPromise = (async () => {
@@ -200,7 +219,12 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
   const inmemoryPromise = (async () => {
     // Always compute in-memory results in parallel — use them only if ChromaDB misses
-    return searchKnowledge(message, 8, queryEmbedding);
+    try {
+      return await searchKnowledge(message, 8, queryEmbedding);
+    } catch (err) {
+      console.error("[RAG] In-memory search failed:", err instanceof Error ? err.message : err);
+      return [];
+    }
   })();
 
   const graphSearchPromise = (async () => {
@@ -234,7 +258,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   })();
 
   const webSearchPromise = (async () => {
-    if (webSearch === false) return "";
+    // Benchmarks skip web search: live results would differ between runs
+    if (webSearch === false || benchmark) return "";
     try {
       const searchQuery = extractSearchQuery(message);
       sendReasoning(`Searching the web for: "${searchQuery}"...`);
@@ -262,6 +287,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     graphSearchPromise,
     webSearchPromise,
   ]);
+  const retrievalMs = Date.now() - retrievalStart;
 
   // Use in-memory results as fallback only if ChromaDB missed
   if (!chromaHit && inmemoryResults.length > 0) {
@@ -296,9 +322,9 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     contextBlock += "\n\n" + graphContext;
   }
 
-  sendReasoning(`Generating response with ${model ?? "mistral-small:24b"}...`);
+  sendReasoning(`Generating response with ${chatModel} on ${llm.stack.name.toUpperCase()}...`);
 
-  const messages: OllamaMessage[] = [
+  const messages: ChatMessage[] = [
     { role: "system", content: getSystemPrompt() + contextBlock },
     ...(history ?? []),
     { role: "user", content: message },
@@ -307,9 +333,13 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   try {
     // Collect the full response during streaming
     let fullResponse = "";
-    const statsCollector: { result?: TokenStats } = {};
+    const statsCollector: StatsCollector = {};
 
-    for await (const token of streamChatWithOllama(messages, model, statsCollector)) {
+    for await (const token of llm.streamChat(
+      messages,
+      { model: chatModel, temperature: benchmark ? 0 : undefined },
+      statsCollector
+    )) {
       fullResponse += token;
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     }
@@ -320,14 +350,34 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       fullResponse,
       chunkIds,
       hadRagContext,
-      model ?? "mistral-small:24b"
+      chatModel
     );
 
     const responseTimeMs = Date.now() - requestStart;
+    const stats = statsCollector.result;
+    const timings: ChatTimings = {
+      embedMs,
+      retrievalMs,
+      ttftMs: stats?.ttftMs ?? 0,
+      decodeTokPerSec: stats?.tokensPerSecond ?? 0,
+      promptTokens: stats?.promptTokens ?? 0,
+      completionTokens: stats?.completionTokens ?? 0,
+      totalMs: responseTimeMs,
+    };
 
     // Send done IMMEDIATELY — don't wait for gap detection
-    res.write(`data: ${JSON.stringify({ done: true, response_id: responseId, tokenStats: statsCollector.result ?? null })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      done: true,
+      response_id: responseId,
+      stack: llm.stack.name,
+      tokenStats: stats ?? null,
+      timings,
+      ...(benchmark ? { chunkIds } : {}),
+    })}\n\n`);
     res.end();
+
+    // Benchmark runs skip gap detection and request logging: no background GPU work, no dashboard noise
+    if (benchmark) return;
 
     // Gap detection + logging run in background (no longer blocks the response)
     setImmediate(() => {
@@ -364,14 +414,21 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// GET /api/chat/models - List available Ollama models
+// GET /api/chat/models - List models on the active LLM stack
 router.get("/models", async (_req: Request, res: Response): Promise<void> => {
+  const llm = getLlmClient();
+  const stackInfo = {
+    stack: llm.stack.name,
+    chatModel: llm.stack.chatModel,
+    embeddingModel: llm.stack.embeddingModel,
+  };
   try {
-    const models = await listModels();
-    res.json({ models });
-  } catch {
+    const models = await llm.listModels();
+    res.json({ ...stackInfo, models });
+  } catch (err) {
     res.status(503).json({
-      error: "Cannot reach Ollama. Make sure it is running.",
+      ...stackInfo,
+      error: err instanceof Error ? err.message : "LLM stack unavailable",
       models: [],
     });
   }

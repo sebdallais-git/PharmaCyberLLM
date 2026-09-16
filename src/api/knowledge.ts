@@ -29,8 +29,9 @@ import {
   markUnresolved,
   getGapById,
 } from "../services/gap-detector.js";
-import { chatWithOllama } from "../services/ollama.js";
-import type { OllamaMessage } from "../services/ollama.js";
+import { getLlmClient } from "../services/llm-client.js";
+import type { ChatMessage } from "../services/llm-client.js";
+import { trackJob } from "../services/bench-mode.js";
 import { isNeo4jAvailable, writeEntities } from "../services/graph-store.js";
 import type { GraphEntity, GraphRelationship } from "../services/graph-store.js";
 
@@ -47,13 +48,14 @@ async function extractAndWriteEntities(text: string, source: string): Promise<vo
 Entity types: Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology
 Return ONLY valid JSON: {"entities": [{"type": "...", "name": "...", "properties": {...}}], "relationships": [{"from": "...", "fromType": "...", "to": "...", "toType": "...", "type": "...", "properties": {...}}]}`;
 
-    const response = await chatWithOllama(
-      [
-        { role: "system", content: extractionPrompt },
-        { role: "user", content: text.slice(0, 12000) },
-      ],
-      undefined,
-      { temperature: 0.1 }
+    const response = await trackJob("graph-extraction", () =>
+      getLlmClient().chat(
+        [
+          { role: "system", content: extractionPrompt },
+          { role: "user", content: text.slice(0, 12000) },
+        ],
+        { temperature: 0.1 }
+      )
     );
 
     const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -112,8 +114,12 @@ router.post("/search", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const results = await searchKnowledge(query, topK ?? 5);
-  res.json({ results });
+  try {
+    const results = await searchKnowledge(query, topK ?? 5);
+    res.json({ results });
+  } catch (err) {
+    res.status(503).json({ error: err instanceof Error ? err.message : "Search failed" });
+  }
 });
 
 // POST /api/knowledge/ingest-text - Ingest raw text
@@ -369,15 +375,15 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
 
     const systemPrompt = `You are PharmaBot, an expert in pharmaceutical cybersecurity. Use the following context to answer the question accurately and specifically.${context}`;
 
-    const messages: OllamaMessage[] = [
+    const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: original_query },
     ];
 
-    const newResponse = await chatWithOllama(messages);
+    const newResponse = await trackJob("gap-resolution", () => getLlmClient().chat(messages));
 
     // Run confidence check on the new response
-    const confidence = await checkConfidence(original_query, newResponse);
+    const confidence = await trackJob("gap-resolution", () => checkConfidence(original_query, newResponse));
 
     if (confidence.confident) {
       resolveGap(gap_id, newResponse);

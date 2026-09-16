@@ -9,8 +9,12 @@ import knowledgeRouter from "./api/knowledge.js";
 import agentRouter from "./api/agent.js";
 import feedbackRouter from "./api/feedback.js";
 import dashboardRouter from "./api/dashboard.js";
-import { loadIndex, ingestKnowledgeDir, saveIndex } from "./services/knowledge-store.js";
-import { isChromaDBAvailable, getChromaStatus } from "./services/chromadb-store.js";
+import { loadIndex, ingestKnowledgeDir, saveIndex, getIndexMeta } from "./services/knowledge-store.js";
+import { isChromaDBAvailable, getChromaStatus, getChromaCollectionInfo } from "./services/chromadb-store.js";
+import { getActiveStack } from "./config/llm-stacks.js";
+import { getLlmClient } from "./services/llm-client.js";
+import { checkIndexMeta, expectedIndexMeta, setIndexStatus } from "./services/index-guard.js";
+import type { IndexCheck } from "./services/index-guard.js";
 import { runNewsAgent } from "./services/news-agent.js";
 import { initGapDB } from "./services/gap-detector.js";
 import { initFeedbackDB } from "./services/feedback-store.js";
@@ -59,20 +63,56 @@ function scheduleNewsAgent(): void {
   }, AGENT_INTERVAL_MS);
 }
 
+// Check that both search indexes were built by the active stack's embedding model
+async function verifyIndexes(chromaOk: boolean): Promise<IndexCheck> {
+  const expected = expectedIndexMeta(getActiveStack());
+  const probe = await getLlmClient()
+    .embed("index compatibility probe", "document")
+    .catch((err: unknown) => {
+      console.warn(`Embedding probe failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+  const probeDim = probe?.length ?? null;
+
+  const memoryCheck = checkIndexMeta(expected, getIndexMeta(), probeDim, "in-memory index");
+  if (!memoryCheck.ok || !chromaOk) return memoryCheck;
+
+  const info = await getChromaCollectionInfo();
+  // A missing collection is created with the right metadata on first write
+  if (!info) return { ok: true, reason: "" };
+  return checkIndexMeta(expected, info.meta, probeDim, "ChromaDB collection");
+}
+
 async function start(): Promise<void> {
+  const stack = getActiveStack();
+  console.log(
+    `LLM stack: ${stack.name} (chat ${stack.chatModel} @ ${stack.chatBaseUrl}, embeddings ${stack.embeddingModel} @ ${stack.embedBaseUrl})`
+  );
+
   initGapDB();
   initFeedbackDB();
   initRequestLog();
   await loadIndex();
 
-  const added = await ingestKnowledgeDir();
-  if (added > 0) {
-    await saveIndex();
-    console.log(`${added} new chunks ingested from files`);
-  }
-
   // Check ChromaDB availability
   const chromaOk = await isChromaDBAvailable();
+
+  const indexCheck = await verifyIndexes(chromaOk);
+  setIndexStatus(indexCheck);
+  if (indexCheck.ok) {
+    try {
+      const added = await ingestKnowledgeDir();
+      if (added > 0) {
+        await saveIndex();
+        console.log(`${added} new chunks ingested from files`);
+      }
+    } catch (err) {
+      console.error("Knowledge file ingestion failed:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.error(`Search index check failed: ${indexCheck.reason}`);
+  }
+
   if (chromaOk) {
     const status = await getChromaStatus();
     console.log(`ChromaDB: connected (${status.totalChunks} chunks, ${status.sources.length} sources)`);
@@ -111,7 +151,6 @@ async function start(): Promise<void> {
     });
   }
 
-  console.log(`Make sure Ollama is running (ollama serve)`);
   console.log(`News agent will run every 24 hours\n`);
 
   scheduleNewsAgent();
