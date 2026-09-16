@@ -1,0 +1,3 @@
+# Qwen3.8 27B (Q4_K_M) with the 16k context PharmaLLM uses; Ollama's OpenAI API can't set num_ctx per request
+FROM qwen3.8:27b-q4_K_M
+PARAMETER num_ctx 16384
