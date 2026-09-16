@@ -8,6 +8,7 @@ import { isNeo4jAvailable } from "../services/graph-store.js";
 import { getStats } from "../services/knowledge-store.js";
 import { getActiveStack } from "../config/llm-stacks.js";
 import { getIndexStatus } from "../services/index-guard.js";
+import { isBenchmarkActive } from "../services/bench-mode.js";
 import { aggregateHealth, probeUrl, stackProbeUrls } from "../services/health.js";
 import type { HealthCheck } from "../services/health.js";
 
@@ -100,7 +101,8 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   // SQLite
   checks.sqlite = { status: "ok" };
 
-  res.json({ status: aggregateHealth(checks), stack: stack.name, checks });
+  // Informational, not a check: a benchmark doesn't make the app unhealthy
+  res.json({ status: aggregateHealth(checks), stack: stack.name, benchmark_active: isBenchmarkActive(), checks });
 });
 
 // GET /api/dashboard/chromadb-misses — queries that ChromaDB couldn't answer

@@ -2,15 +2,16 @@
 
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getRunningJobs, isBenchmarkActive, setBenchmarkActive } from "../services/bench-mode.js";
+import { getBenchmarkStatus, getRunningJobs, setBenchmarkActive } from "../services/bench-mode.js";
+import type { BenchmarkStatus } from "../services/bench-mode.js";
 
 const router = Router();
 
-function benchStatus(): { active: boolean; runningJobs: string[] } {
-  return { active: isBenchmarkActive(), runningJobs: getRunningJobs() };
+function benchStatus(): BenchmarkStatus & { runningJobs: string[] } {
+  return { ...getBenchmarkStatus(), runningJobs: getRunningJobs() };
 }
 
-// POST /api/bench/start - Pause background LLM jobs
+// POST /api/bench/start - Pause background LLM jobs for a 15-minute lease; call again to refresh it
 router.post("/start", (_req: Request, res: Response): void => {
   setBenchmarkActive(true);
   res.json(benchStatus());

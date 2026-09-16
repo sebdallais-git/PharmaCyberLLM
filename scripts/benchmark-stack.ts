@@ -48,9 +48,12 @@ function run(command: string, args: string[]): string {
   }
 }
 
-// Stack processes: Ollama loads models in "ollama runner" children; MLX runs two Python servers
+// Stack processes: Ollama 0.34 runs models in lib/ollama/llama-server children (older versions: "ollama runner");
+// MLX runs two Python servers
 function stackPatterns(stack: string): string[] {
-  return stack === "mlx" ? ["mlx_lm.server", "mlx-embed-server.py"] : ["ollama serve", "ollama runner"];
+  return stack === "mlx"
+    ? ["mlx_lm.server", "mlx-embed-server.py"]
+    : ["ollama serve", "lib/ollama/llama-server", "ollama runner"];
 }
 
 function sampleMemory(stack: string): MemoryPeak {
@@ -73,10 +76,29 @@ function sampleMemory(stack: string): MemoryPeak {
   };
 }
 
-async function getJson<T>(url: string, method: "GET" | "POST" = "GET"): Promise<T> {
-  const resp = await fetch(url, { method });
+async function getJson<T>(url: string, method: "GET" | "POST" = "GET", signal?: AbortSignal): Promise<T> {
+  const resp = await fetch(url, { method, signal });
   if (!resp.ok) throw new Error(`${method} ${url} failed (${resp.status})`);
   return (await resp.json()) as T;
+}
+
+// Benchmark mode is a 15-minute lease in the app, so it is refreshed before each question
+async function refreshBenchmarkLease(appUrl: string): Promise<void> {
+  await getJson(`${appUrl}/api/bench/start`, "POST");
+}
+
+async function stopBenchmark(appUrl: string): Promise<void> {
+  await getJson(`${appUrl}/api/bench/stop`, "POST", AbortSignal.timeout(5000)).catch(() => undefined);
+}
+
+// Ctrl-C or a kill must not leave background jobs paused until the lease expires
+function stopOnSignals(appUrl: string): void {
+  const handler = (code: number) => (): void => {
+    console.error("Interrupted — stopping benchmark mode");
+    void stopBenchmark(appUrl).finally(() => process.exit(code));
+  };
+  process.once("SIGINT", handler(130));
+  process.once("SIGTERM", handler(143));
 }
 
 async function ask(appUrl: string, question: string, runNumber: number): Promise<RunResult> {
@@ -128,6 +150,7 @@ async function waitForIdle(appUrl: string): Promise<void> {
   while (true) {
     const status = await getJson<{ runningJobs: string[] }>(`${appUrl}/api/bench/status`);
     if (status.runningJobs.length === 0) return;
+    await refreshBenchmarkLease(appUrl);
     if (Date.now() > deadline) throw new Error(`Background jobs still running: ${status.runningJobs.join(", ")}`);
     console.log(`Waiting for background jobs to finish: ${status.runningJobs.join(", ")}`);
     await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -157,7 +180,8 @@ async function main(): Promise<void> {
     embeddingModel: models.embeddingModel,
   };
 
-  await getJson(`${options.appUrl}/api/bench/start`, "POST");
+  await refreshBenchmarkLease(options.appUrl);
+  stopOnSignals(options.appUrl);
   const memoryPeak: MemoryPeak = { processMb: 0, systemUsedMb: 0 };
   const sampler = setInterval(() => {
     const sample = sampleMemory(stack);
@@ -172,11 +196,13 @@ async function main(): Promise<void> {
     await waitForIdle(options.appUrl);
 
     console.log(`Benchmarking ${stack}: ${questions.length} questions × ${options.runs} runs (plus one warm-up)`);
+    await refreshBenchmarkLease(options.appUrl);
     await ask(options.appUrl, WARM_UP_QUESTION, 0); // warm-up, discarded
 
     for (const question of questions) {
       const runs: RunResult[] = [];
       for (let n = 1; n <= options.runs; n++) {
+        await refreshBenchmarkLease(options.appUrl);
         const result = await ask(options.appUrl, question.question, n);
         runs.push(result);
         const summary = result.error
@@ -188,7 +214,7 @@ async function main(): Promise<void> {
     }
   } finally {
     clearInterval(sampler);
-    await getJson(`${options.appUrl}/api/bench/stop`, "POST").catch(() => undefined);
+    await stopBenchmark(options.appUrl);
   }
 
   const output: BenchmarkFile = {

@@ -10,17 +10,36 @@ export interface ChatTimings {
   totalMs: number;
 }
 
-let benchmarkActive = false;
+// Benchmark mode is a lease: a benchmark that crashes without calling stop can't pause background jobs forever
+export const BENCHMARK_LEASE_MS = 15 * 60 * 1000;
+
+export interface BenchmarkStatus {
+  active: boolean;
+  expiresAt: string | null;
+}
+
+let benchmarkExpiresAt: number | null = null;
 
 // Count per job name so overlapping runs of the same job are tracked correctly
 const runningJobs = new Map<string, number>();
 
-export function setBenchmarkActive(active: boolean): void {
-  benchmarkActive = active;
+// Starting again refreshes the lease
+export function setBenchmarkActive(active: boolean, now: number = Date.now()): void {
+  benchmarkExpiresAt = active ? now + BENCHMARK_LEASE_MS : null;
 }
 
-export function isBenchmarkActive(): boolean {
-  return benchmarkActive;
+export function isBenchmarkActive(now: number = Date.now()): boolean {
+  if (benchmarkExpiresAt === null) return false;
+  if (now >= benchmarkExpiresAt) {
+    benchmarkExpiresAt = null;
+    return false;
+  }
+  return true;
+}
+
+export function getBenchmarkStatus(now: number = Date.now()): BenchmarkStatus {
+  const active = isBenchmarkActive(now);
+  return { active, expiresAt: active && benchmarkExpiresAt !== null ? new Date(benchmarkExpiresAt).toISOString() : null };
 }
 
 export function markJobStarted(name: string): void {
