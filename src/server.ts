@@ -16,6 +16,7 @@ import { initGapDB } from "./services/gap-detector.js";
 import { initFeedbackDB } from "./services/feedback-store.js";
 import { initRequestLog } from "./services/request-log.js";
 import graphRouter from "./api/graph.js";
+import benchRouter from "./api/bench.js";
 import { isNeo4jAvailable, getNeo4jStats } from "./services/graph-store.js";
 
 // Prevent the process from crashing on unhandled errors
@@ -41,6 +42,7 @@ app.use("/api/agent", agentRouter);
 app.use("/api/feedback", feedbackRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/graph", graphRouter);
+app.use("/api/bench", benchRouter);
 app.use("/api", dashboardRouter); // /api/health
 app.use("/dashboard", express.static(join(process.cwd(), "dashboard")));
 
