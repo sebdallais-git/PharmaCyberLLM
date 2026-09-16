@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PharmaLLM - Pharma Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>CyberPharmaCHAT - Pharma Assistant</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="app">
     <header class="header">
-      <h1>Pharma</h1>
+      <h1>CyberPharma</h1>
       <p class="subtitle">Cyber Threat Expert Assistant</p>
       <div class="header-controls">
         <select id="model-select" title="LLM Model">
-          <option value="llama3.2">llama3.2</option>
+          <option value="mistral-small:24b">mistral-small:24b</option>
         </select>
         <button id="knowledge-btn" class="btn-secondary" title="Knowledge Base">
           Knowledge Base
@@ -28,15 +28,16 @@
       <div class="message assistant">
         <div class="message-wrapper">
           <div class="message-content">
-            Hello! I'm <strong>PharmaBot</strong>, your pharmaceutical industry cyber threat expert assistant.
-            I can help you with:
+            Hello! I'm <strong>CyberPharmaCHAT</strong> — I help pharma leaders understand cyber threats and their business impact, and take action to minimize risk.
             <ul>
-              <li><strong>Cyber</strong>: pharma cyber attacks, costs, systems compromised</li>
-              <li><strong>Business</strong>: mergers, acquisitions, pipelines, strategies</li>
-              <li><strong>Science</strong>: mechanisms of action, clinical trials, pharmacology</li>
-              <li><strong>News</strong>: FDA/EMA approvals, regulation (auto-updated daily)</li>
+              <li><strong>Pharma business</strong>: M&amp;A, drug pipelines, manufacturing plants, market forecasts, FDA/EMA news</li>
+              <li><strong>Cyber threats in pharma</strong>: ransomware, data breaches, IP theft, manufacturing shutdowns, supply chain attacks</li>
+              <li><strong>Cybersecurity concepts &amp; actors</strong>: threat actors, attack vectors, defense frameworks, IT/OT security</li>
+              <li><strong>Business impact</strong>: downtime costs, batch losses, stock impact, regulatory consequences, remediation strategies</li>
+              <li><strong>Applications &amp; Infrastructure</strong>: SAP, ServiceNow, Snowflake, CrowdStrike, Splunk, Amazon, Google, NVIDIA</li>
+              <li><strong>What to do about it</strong>: vendor solutions, incident response, recovery architectures, risk mitigation</li>
             </ul>
-            Ask me a question!
+            Ask me anything!
           </div>
         </div>
       </div>
@@ -49,9 +50,20 @@
           placeholder="Ask your pharma question..."
           rows="1"
         ></textarea>
-        <button id="send-btn" class="btn-primary" title="Send">
+        <button id="mic-btn" class="btn-mic" title="Voice input" hidden>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+        <button id="send-btn" class="btn-primary" title="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 3h6v3H9z"/>
+            <path d="M10 6v4l-4 8h12l-4-8V6"/>
+            <circle cx="11" cy="14" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="14" cy="16" r="1" fill="currentColor" stroke="none"/>
           </svg>
         </button>
       </div>
@@ -100,7 +112,7 @@
           <button id="close-agent-modal" class="btn-close">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="agent-description">The news agent automatically scrubs Google News every 24 hours for pharma business, science, and cyber threat news.</p>
+          <p class="agent-description">The news agent automatically scrubs Google News every 24 hours across 194 topics: pharma business, science, cybersecurity, threat actors, manufacturing, cloud, compliance, AI infrastructure, and more.</p>
           <div id="agent-status"></div>
           <button id="run-agent-btn" class="btn-primary">Run Now</button>
           <h3>Monitored Topics</h3>

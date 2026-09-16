@@ -96,7 +96,7 @@ Attackers are specifically coming for drug formulas and patient data. The pharma
 
 ## Vendor Solutions Mapping to Pharma Threats
 
-| Threat | Dell | Pure Storage | NVIDIA | NetApp | HPE | VAST | WEKA |
+| Threat | Dell | Everpure (formerly Pure Storage) | NVIDIA | NetApp | HPE | VAST | WEKA |
 |--------|------|-------------|--------|--------|-----|------|------|
 | Ransomware | Cyber Recovery Vault | SafeMode Snapshots | Morpheus Detection | ARP + SnapLock | Zerto + SRoT | Indestructible Snapshots | Snap-to-Object |
 | Data Exfiltration | Air-gapped isolation | Encryption | BlueField DPU | FPolicy | Zero Trust | Encryption | Encrypted mounts |

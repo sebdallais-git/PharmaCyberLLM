@@ -1,4 +1,4 @@
-// Service de détection des lacunes de connaissances et déclenchement N8N
+// Knowledge gap detection service and N8N webhook triggering
 
 import Database from "better-sqlite3";
 import { join } from "node:path";
@@ -49,7 +49,7 @@ interface ConfidenceResult {
   search_topic: string;
 }
 
-// Appel secondaire à Ollama pour évaluer la confiance de la réponse
+// Secondary call to Ollama to evaluate response confidence
 export async function checkConfidence(
   originalQuestion: string,
   gemmaResponse: string,
@@ -69,7 +69,7 @@ Respond with ONLY a JSON object, no other text:
     ];
     const response = await chatWithOllama(messages, model, { temperature: 0.1 });
 
-    // Extraire le JSON de la réponse
+    // Extract JSON from the response
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) {
       return { confident: true, reason: "Could not parse confidence check", search_topic: "" };
@@ -82,12 +82,12 @@ Respond with ONLY a JSON object, no other text:
       search_topic: String(parsed.search_topic ?? ""),
     };
   } catch {
-    // Par défaut confident=true pour éviter les faux déclenchements
+    // Default to confident=true to avoid false triggers
     return { confident: true, reason: "Confidence check failed", search_topic: "" };
   }
 }
 
-// Vérifie si un sujet similaire a été déclenché dans les 2 dernières heures
+// Check if a similar topic was triggered in the last 2 hours
 function isOnCooldown(searchTopic: string): boolean {
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const row = db.prepare(
@@ -97,7 +97,7 @@ function isOnCooldown(searchTopic: string): boolean {
   return row.count > 0;
 }
 
-// Enregistre une détection de lacune dans la base — returns the gap ID
+// Log a gap detection in the database — returns the gap ID
 export function logGap(
   originalQuery: string,
   searchTopic: string,
@@ -120,7 +120,7 @@ export function logGap(
   return result.lastInsertRowid as number;
 }
 
-// Envoie le webhook N8N de manière asynchrone
+// Send the N8N webhook asynchronously
 export async function triggerWebhook(
   originalQuery: string,
   searchTopic: string,
@@ -154,23 +154,34 @@ export async function triggerWebhook(
   }
 }
 
-// Orchestre la détection : confidence check → cooldown → log → webhook
+// Guard: only one gap detection at a time so we don't hog Ollama
+let gapDetectionRunning = false;
+
+// Orchestrate detection: confidence check → cooldown → log → webhook
 export async function handleGapDetection(
   originalQuery: string,
   gemmaResponse: string,
   model?: string
 ): Promise<boolean> {
-  const result = await checkConfidence(originalQuery, gemmaResponse, model);
-
-  if (result.confident) {
+  // Skip if another gap detection is already running — don't queue behind it
+  if (gapDetectionRunning) {
+    console.log("[Gap Detector] Skipped — another detection already in progress");
     return false;
   }
+
+  gapDetectionRunning = true;
+  try {
+    const result = await checkConfidence(originalQuery, gemmaResponse, model);
+
+    if (result.confident) {
+      return false;
+    }
 
   const onCooldown = isOnCooldown(result.search_topic);
   const gapId = logGap(originalQuery, result.search_topic, result.reason, gemmaResponse, !onCooldown);
 
   if (!onCooldown) {
-    // Webhook asynchrone — ne bloque pas la réponse
+    // Async webhook — don't block the response
     triggerWebhook(originalQuery, result.search_topic, gemmaResponse, result.reason, gapId)
       .catch((err: unknown) => console.error("[Gap Detector] Async webhook error:", err));
   } else {
@@ -178,9 +189,12 @@ export async function handleGapDetection(
   }
 
   return true;
+  } finally {
+    gapDetectionRunning = false;
+  }
 }
 
-// --- Fonctions de requête pour l'API ---
+// --- Query functions for the API ---
 
 export interface GapLogEntry {
   id: number;

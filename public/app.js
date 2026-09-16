@@ -18,17 +18,55 @@ const webSearchToggle = document.getElementById("web-search-toggle");
 // Historique de conversation
 let conversationHistory = [];
 
+// Prompt history (arrow up/down to recall past inputs)
+const promptHistory = [];
+let promptHistoryIndex = -1;
+let promptDraft = "";
+
 // Auto-resize du textarea
 userInput.addEventListener("input", () => {
   userInput.style.height = "auto";
   userInput.style.height = Math.min(userInput.scrollHeight, 120) + "px";
 });
 
-// Envoi avec Enter (Shift+Enter pour nouvelle ligne)
+// Keyboard handler: Enter to send, Arrow Up/Down for prompt history
 userInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
+    return;
+  }
+
+  if (e.key === "ArrowUp" && promptHistory.length > 0) {
+    // Only activate on first line (cursor at start or single-line input)
+    const cursorAtTop = userInput.selectionStart === 0 || !userInput.value.includes("\n");
+    if (!cursorAtTop) return;
+
+    e.preventDefault();
+    if (promptHistoryIndex === -1) {
+      promptDraft = userInput.value;
+      promptHistoryIndex = promptHistory.length - 1;
+    } else if (promptHistoryIndex > 0) {
+      promptHistoryIndex--;
+    }
+    userInput.value = promptHistory[promptHistoryIndex];
+    userInput.style.height = "auto";
+    userInput.style.height = Math.min(userInput.scrollHeight, 120) + "px";
+    return;
+  }
+
+  if (e.key === "ArrowDown" && promptHistoryIndex !== -1) {
+    e.preventDefault();
+    if (promptHistoryIndex < promptHistory.length - 1) {
+      promptHistoryIndex++;
+      userInput.value = promptHistory[promptHistoryIndex];
+    } else {
+      promptHistoryIndex = -1;
+      userInput.value = promptDraft;
+    }
+    userInput.style.height = "auto";
+    userInput.style.height = Math.min(userInput.scrollHeight, 120) + "px";
+    return;
   }
 });
 
@@ -39,9 +77,14 @@ async function loadModels() {
   try {
     const res = await fetch("/api/chat/models");
     const data = await res.json();
+    const PREFERRED_MODEL = "mistral-small:24b";
     if (data.models && data.models.length > 0) {
-      modelSelect.innerHTML = data.models
-        .map((m) => `<option value="${m}">${m}</option>`)
+      // Sort so preferred model appears first
+      const sorted = [...data.models].sort((a, b) =>
+        a === PREFERRED_MODEL ? -1 : b === PREFERRED_MODEL ? 1 : 0
+      );
+      modelSelect.innerHTML = sorted
+        .map((m) => `<option value="${m}"${m === PREFERRED_MODEL ? " selected" : ""}>${m}</option>`)
         .join("");
       setStatus("Ollama connected", "success");
     } else {
@@ -102,6 +145,80 @@ function formatMessage(text) {
     .replace(/\n/g, "<br>");
 }
 
+// Build a reasoning panel that shows thought-process steps (safe DOM methods)
+function buildReasoningPanel() {
+  const el = document.createElement("div");
+  el.className = "reasoning-panel";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "reasoning-header";
+
+  const icon = document.createElement("span");
+  icon.className = "reasoning-icon";
+  icon.textContent = "\u25CB"; // circle icon
+
+  const title = document.createElement("span");
+  title.className = "reasoning-title";
+  title.textContent = "Thinking\u2026";
+
+  const toggle = document.createElement("span");
+  toggle.className = "reasoning-toggle";
+
+  header.appendChild(icon);
+  header.appendChild(title);
+  header.appendChild(toggle);
+
+  // Steps container
+  const steps = document.createElement("div");
+  steps.className = "reasoning-steps";
+
+  el.appendChild(header);
+  el.appendChild(steps);
+
+  // Toggle collapse on click
+  header.addEventListener("click", () => {
+    el.classList.toggle("collapsed");
+  });
+
+  return {
+    el,
+    addStep(text, sources) {
+      const step = document.createElement("div");
+      step.className = "reasoning-step";
+
+      const dot = document.createElement("span");
+      dot.className = "reasoning-step-dot";
+
+      const label = document.createElement("span");
+      label.className = "reasoning-step-text";
+      label.textContent = text;
+
+      step.appendChild(dot);
+      step.appendChild(label);
+
+      if (sources && sources.length > 0) {
+        const sourcesDiv = document.createElement("div");
+        sourcesDiv.className = "reasoning-sources";
+        sources.forEach((s) => {
+          const tag = document.createElement("span");
+          tag.className = "reasoning-source-tag";
+          tag.textContent = s;
+          sourcesDiv.appendChild(tag);
+        });
+        step.appendChild(sourcesDiv);
+      }
+
+      steps.appendChild(step);
+    },
+    finish(count) {
+      title.textContent = "Reasoned over " + count + " steps";
+      el.classList.add("done");
+      el.classList.add("collapsed");
+    },
+  };
+}
+
 // Afficher l'indicateur de frappe
 function showTyping() {
   const div = document.createElement("div");
@@ -128,14 +245,20 @@ async function sendMessage() {
   const message = userInput.value.trim();
   if (!message) return;
 
+  // Save to prompt history
+  if (promptHistory[promptHistory.length - 1] !== message) {
+    promptHistory.push(message);
+  }
+  promptHistoryIndex = -1;
+  promptDraft = "";
+
   // Afficher le message utilisateur
   addMessage("user", message);
   userInput.value = "";
   userInput.style.height = "auto";
 
-  // Desactiver l'input
+  // Disable send button during processing (textarea stays editable)
   sendBtn.disabled = true;
-  userInput.disabled = true;
   showTyping();
 
   try {
@@ -157,10 +280,18 @@ async function sendMessage() {
     const decoder = new TextDecoder();
     let assistantContent = "";
     const messageDiv = addMessage("assistant", "");
-    const contentDiv = messageDiv.querySelector(".message-wrapper .message-content");
+    const wrapperDiv = messageDiv.querySelector(".message-wrapper");
+    const contentDiv = wrapperDiv.querySelector(".message-content");
+
+    // Build reasoning panel (shown during processing, collapses when answer starts)
+    const reasoningPanel = buildReasoningPanel();
+    wrapperDiv.insertBefore(reasoningPanel.el, contentDiv);
+    let reasoningCount = 0;
+    let firstTokenReceived = false;
 
     let buffer = "";
-    while (true) {
+    let streamDone = false;
+    while (!streamDone) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -169,20 +300,54 @@ async function sendMessage() {
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = JSON.parse(line.slice(6));
-          if (data.error) {
-            contentDiv.innerHTML = `<span style="color: var(--error)">${data.error}</span>`;
-            break;
+        if (!line.startsWith("data: ")) continue;
+        let data;
+        try {
+          data = JSON.parse(line.slice(6));
+        } catch {
+          continue; // skip malformed chunk, wait for next line
+        }
+        if (data.error) {
+          contentDiv.textContent = data.error;
+          contentDiv.style.color = "var(--error)";
+          streamDone = true;
+          break;
+        }
+        if (data.reasoning) {
+          reasoningCount++;
+          reasoningPanel.addStep(data.reasoning, data.sources || []);
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        if (data.done) {
+          if (data.tokenStats && typeof data.tokenStats.tokensPerSecond === "number") {
+            const s = data.tokenStats;
+            const statsDiv = document.createElement("div");
+            statsDiv.className = "token-stats";
+            statsDiv.textContent = `${(s.promptTokens || 0) + (s.completionTokens || 0)} tokens (${s.promptTokens || 0} in \u00b7 ${s.completionTokens || 0} out) \u00b7 ${s.tokensPerSecond.toFixed(1)} tok/s`;
+            wrapperDiv.appendChild(statsDiv);
           }
-          if (data.done) break;
-          if (data.token) {
-            assistantContent += data.token;
-            contentDiv.innerHTML = formatMessage(assistantContent);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+          if (!firstTokenReceived) {
+            reasoningPanel.finish(reasoningCount);
           }
+          streamDone = true;
+          break;
+        }
+        if (data.token) {
+          // Auto-collapse reasoning on first token
+          if (!firstTokenReceived) {
+            firstTokenReceived = true;
+            reasoningPanel.finish(reasoningCount);
+          }
+          assistantContent += data.token;
+          contentDiv.innerHTML = formatMessage(assistantContent);
+          chatContainer.scrollTop = chatContainer.scrollHeight;
         }
       }
+    }
+
+    // If no reasoning steps were emitted, remove the panel
+    if (reasoningCount === 0) {
+      reasoningPanel.el.remove();
     }
 
     // Ajouter a l'historique
@@ -192,17 +357,15 @@ async function sendMessage() {
     );
 
     // Garder seulement les 20 derniers messages
-    if (conversationHistory.length > 20) {
-      conversationHistory = conversationHistory.slice(-20);
+    if (conversationHistory.length > 15) {
+      conversationHistory = conversationHistory.slice(-15);
     }
   } catch (error) {
     removeTyping();
     addMessage("assistant", "Connection error. Make sure Ollama is running.");
+  } finally {
+    sendBtn.disabled = false;
   }
-
-  sendBtn.disabled = false;
-  userInput.disabled = false;
-  userInput.focus();
 }
 
 // Upload de fichier
@@ -405,6 +568,131 @@ function setStatus(text, type = "") {
       statusEl.className = "status";
     }, 5000);
   }
+}
+
+// Voice input via MediaRecorder + whisper.cpp backend
+const micBtn = document.getElementById("mic-btn");
+
+// Detect supported audio MIME type (Safari = mp4, Chrome/Firefox = webm)
+function getAudioMimeType() {
+  if (typeof MediaRecorder === "undefined") return null;
+  const types = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+    "",  // empty string = browser default
+  ];
+  for (const t of types) {
+    try {
+      if (t === "" || MediaRecorder.isTypeSupported(t)) return t;
+    } catch { /* skip */ }
+  }
+  return "";
+}
+
+const audioMimeType = getAudioMimeType();
+const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && audioMimeType !== null);
+
+if (canRecord) {
+  micBtn.hidden = false;
+  let mediaRecorder = null;
+  let audioChunks = [];
+
+  micBtn.addEventListener("click", async () => {
+    // Stop recording
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+      return;
+    }
+
+    // Start recording
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const msg = err.name === "NotAllowedError"
+        ? "Mic blocked — allow microphone in Safari settings"
+        : err.name === "NotFoundError"
+          ? "No microphone found"
+          : "Mic error: " + (err.message || err.name);
+      setStatus(msg, "error");
+      return;
+    }
+
+    try {
+      audioChunks = [];
+      const options = audioMimeType ? { mimeType: audioMimeType } : {};
+      mediaRecorder = new MediaRecorder(stream, options);
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstart = () => {
+        micBtn.classList.add("listening");
+        userInput.placeholder = "Listening... tap mic to stop";
+      };
+
+      mediaRecorder.onstop = async () => {
+        micBtn.classList.remove("listening");
+        userInput.placeholder = "Transcribing...";
+
+        // Stop all mic tracks
+        stream.getTracks().forEach((t) => t.stop());
+
+        if (audioChunks.length === 0) {
+          userInput.placeholder = "Ask your pharma question...";
+          return;
+        }
+
+        // Determine file extension from MIME type
+        const ext = (mediaRecorder.mimeType || "").includes("mp4") ? "mp4"
+          : (mediaRecorder.mimeType || "").includes("ogg") ? "ogg"
+          : "webm";
+        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        const formData = new FormData();
+        formData.append("audio", blob, "recording." + ext);
+
+        try {
+          const res = await fetch("/api/chat/transcribe", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json();
+
+          if (data.text) {
+            const before = userInput.value.replace(/\s*$/, "");
+            userInput.value = before ? before + " " + data.text : data.text;
+            userInput.style.height = "auto";
+            userInput.style.height = Math.min(userInput.scrollHeight, 120) + "px";
+          } else if (data.error) {
+            setStatus("Transcription failed: " + data.error, "error");
+          }
+        } catch {
+          setStatus("Transcription request failed", "error");
+        }
+
+        userInput.placeholder = "Ask your pharma question...";
+        userInput.focus();
+      };
+
+      mediaRecorder.onerror = (e) => {
+        micBtn.classList.remove("listening");
+        stream.getTracks().forEach((t) => t.stop());
+        setStatus("Recording error: " + (e.error?.message || "unknown"), "error");
+        userInput.placeholder = "Ask your pharma question...";
+      };
+
+      mediaRecorder.start();
+    } catch (err) {
+      stream.getTracks().forEach((t) => t.stop());
+      setStatus("Recording failed: " + (err.message || err.name), "error");
+    }
+  });
+} else {
+  // No MediaRecorder support — keep button hidden
+  console.log("[Voice] MediaRecorder not available");
 }
 
 // Init

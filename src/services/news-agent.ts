@@ -54,7 +54,7 @@ const SEARCH_TOPICS = [
   "FDA cybersecurity pharmaceutical",
   // Storage and cyber recovery vendors
   "Dell PowerProtect cyber recovery ransomware",
-  "Pure Storage SafeMode ransomware healthcare",
+  "Everpure SafeMode ransomware healthcare",
   "NetApp ONTAP ransomware protection",
   "HPE Zerto cyber recovery",
   "VAST Data cybersecurity data protection",

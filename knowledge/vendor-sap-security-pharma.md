@@ -94,7 +94,7 @@ Traditional patching windows are no longer sufficient. Pharmaceutical companies 
 ### Integration with Other Vendors
 - **Dell Cyber Recovery**: Air-gapped backup of SAP HANA databases
 - **NetApp SnapLock**: WORM storage for SAP archive data
-- **Pure Storage SafeMode**: Immutable snapshots of SAP volumes
+- **Everpure (formerly Pure Storage) SafeMode**: Immutable snapshots of SAP volumes
 - **ServiceNow**: Vulnerability management for SAP systems
 - **Snowflake/Databricks**: SAP security log analytics at scale
 - **CrowdStrike**: Endpoint protection for SAP application servers

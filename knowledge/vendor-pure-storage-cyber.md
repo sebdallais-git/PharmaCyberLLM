@@ -1,17 +1,17 @@
-# Pure Storage (Everpure) Cyber Resilience for Pharmaceutical Industry
+# Everpure (formerly Pure Storage) Cyber Resilience for Pharmaceutical Industry
 
 ## Overview
 
-Pure Storage (rebranded as Everpure) provides all-flash storage platforms with built-in cyber resilience features. Their SafeMode snapshots technology is a cornerstone of ransomware protection, offering immutable, undeletable data copies that cannot be compromised even with administrative credentials.
+Everpure (formerly Pure Storage) provides all-flash storage platforms with built-in cyber resilience features. Their SafeMode snapshots technology is a cornerstone of ransomware protection, offering immutable, undeletable data copies that cannot be compromised even with administrative credentials.
 
 ## SafeMode Snapshots
 
 ### How SafeMode Works
-SafeMode creates immutable snapshots that ransomware cannot delete, modify, or encrypt. Once created, these snapshots cannot be removed without a stringent, multi-step verification process that includes interaction with Pure Storage's dedicated support team.
+SafeMode creates immutable snapshots that ransomware cannot delete, modify, or encrypt. Once created, these snapshots cannot be removed without a stringent, multi-step verification process that includes interaction with Everpure's dedicated support team.
 
 ### Key Security Features
 - Snapshots are always immutable and read-only
-- Changes to SafeMode require at least two authorized contacts from the organization to conference with Pure Support team
+- Changes to SafeMode require at least two authorized contacts from the organization to conference with Everpure Support team
 - No single administrator can disable or modify SafeMode protection
 - Even compromised admin credentials cannot destroy SafeMode snapshots
 
@@ -34,7 +34,7 @@ The multi-party authorization requirement prevents a rogue insider or compromise
 
 ## Evergreen//One Cyber Recovery SLA
 
-Pure Storage offers a Cyber Recovery and Resilience SLA for Evergreen//One (Storage-as-a-Service), guaranteeing:
+Everpure (formerly Pure Storage) offers a Cyber Recovery and Resilience SLA for Evergreen//One (Storage-as-a-Service), guaranteeing:
 - A clean storage environment following an attack
 - Full recovery plan with defined data transfer rates
 - Bundled professional services for recovery assistance

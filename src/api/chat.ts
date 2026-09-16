@@ -7,10 +7,10 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { streamChatWithOllama, listModels } from "../services/ollama.js";
+import { streamChatWithOllama, listModels, getEmbedding } from "../services/ollama.js";
 import type { OllamaMessage, TokenStats } from "../services/ollama.js";
 import { searchKnowledge } from "../services/knowledge-store.js";
-import { searchChromaDB, isChromaDBAvailable } from "../services/chromadb-store.js";
+import { searchChromaDB } from "../services/chromadb-store.js";
 import type { ChromaQueryResult } from "../services/chromadb-store.js";
 import { searchWeb } from "../services/web-search.js";
 import { handleGapDetection } from "../services/gap-detector.js";
@@ -82,12 +82,17 @@ You answer questions on the following topics:
 - Drug pipeline: Phase 3 candidates, peak sales estimates, market value forecasts, revenue projections
 - Cyber threats: ransomware, data breaches, IP theft, manufacturing shutdowns, market impact
 - Manufacturing: top pharma plants worldwide, facility investment value, production capacity, downtime costs per hour/day, batch loss values, geographic concentration risk (Basel, Ireland, RTP, Singapore)
-- IT vendors: Dell, Pure Storage, NetApp, HPE, NVIDIA, VAST, WEKA, CrowdStrike, Splunk, SAP, ServiceNow, Snowflake, Databricks
+- IT vendors: Dell, Everpure (formerly Pure Storage), NetApp, HPE, NVIDIA, VAST, WEKA, CrowdStrike, Splunk, SAP, ServiceNow, Snowflake, Databricks
+- Cybersecurity partners: BBS (Bug Bounty Switzerland) — the leading Swiss platform for AI-driven security testing and ethical hacking, founded 2020, headquartered in Zurich
+
+Abbreviations:
+- BBS = Bug Bounty Switzerland (NOT "Business Breakthrough Solution"). Always interpret BBS as Bug Bounty Switzerland AG.
 
 Rules:
-- Use the following context to answer the user's question.
-- If the context doesn't contain relevant information, say so honestly and answer based on your general knowledge. Do NOT add disclaimers about confidence — the system handles that automatically.
-- When the context contains relevant data (tables, lists, numbers, costs, facility names), use it directly and specifically in your answer.
+- Use the following context as your PRIMARY source, then ENRICH with your general knowledge of the vendor's specific products, capabilities, and deployment models. The context anchors your answer but should never limit it — always add relevant product details, real-world capabilities, and pharma-specific use cases from your own knowledge.
+- When discussing IT vendors and their cybersecurity solutions, ALWAYS cite specific product names (e.g., "Dell PowerProtect Cyber Recovery with CyberSense", not "data protection solutions"). Describe what each product specifically does, how it deploys, and map it to concrete pharmaceutical use cases (clinical trials, MES, LIMS, regulatory compliance). Never give generic vendor advice — ground every recommendation in a named product with its actual capabilities.
+- When the context contains relevant data (tables, lists, numbers, costs, facility names, incident details, company names, dates), use it directly and specifically. Include concrete numbers, dollar amounts, company names, and dates. Never say "the context does not contain" when specific data points are available — aggregate them into a clear answer instead.
+- If the context has no relevant information, answer based on your general knowledge. Whether or not context is provided, always aim for the same level of product-specific detail. Do NOT add disclaimers about confidence — the system handles that automatically.
 - Cite sources when using the provided context.
 - Respond in the same language as the question.`;
 
@@ -146,71 +151,57 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     }
   };
 
-  // Search knowledge base — ChromaDB (primary) + in-memory (fallback)
+  // ── Parallel RAG pipeline ──────────────────────────────────────────
+  // Compute the query embedding ONCE, then fan out all searches in parallel.
+  // This eliminates the sequential waterfall that was killing TTFT.
   let contextBlock = "";
   let chunkIds: string[] = [];
   let hadRagContext = false;
   let chromaMissReason = "";
+  let hadInmemoryFallback = false;
+  let graphContext = "";
 
   sendReasoning("Searching knowledge base...");
 
+  // Step 1: Single embedding call (shared by ChromaDB + in-memory)
+  let queryEmbedding: number[] | undefined;
   try {
-    const chromaAvailable = await isChromaDBAvailable();
-    if (chromaAvailable) {
-      const chromaResults = await searchChromaDB(message, 5);
+    queryEmbedding = await getEmbedding(message);
+  } catch (err) {
+    console.error("[RAG] Embedding failed, falling back to keyword-only search:", err);
+    sendReasoning("Embedding service unavailable, using keyword search...");
+  }
+
+  // Step 2: Fan out ALL searches in parallel
+  const chromaPromise = (async () => {
+    if (!queryEmbedding) return false; // ChromaDB requires an embedding vector
+    try {
+      const chromaResults = await searchChromaDB(message, 5, queryEmbedding);
       if (chromaResults.length > 0) {
         contextBlock = "\n\nRelevant context from the knowledge base:\n" +
           chromaResults
-            .map((r: ChromaQueryResult) => `[Source: ${String(r.metadata.source ?? "unknown")}]\n${r.document}`)
+            .map((r: ChromaQueryResult) => `[Source: ${String(r.metadata.source ?? "unknown")}]\n${r.document.slice(0, 1500)}`)
             .join("\n\n---\n\n");
         chunkIds = chromaResults.map((r: ChromaQueryResult) => r.id);
         hadRagContext = true;
         const sourceNames = chromaResults.map((r: ChromaQueryResult) => String(r.metadata.source ?? "unknown"));
         sendReasoning(`Found ${chromaResults.length} relevant chunks from ChromaDB`, sourceNames);
         console.log(`[RAG] ChromaDB returned ${chromaResults.length} chunks`);
-      } else {
-        chromaMissReason = "no_results";
-        sendReasoning("No matches in ChromaDB, trying in-memory store...");
+        return true;
       }
-    } else {
-      chromaMissReason = "unavailable";
-      sendReasoning("ChromaDB unavailable, using in-memory store...");
+      chromaMissReason = "no_results";
+      return false;
+    } catch (err) {
+      chromaMissReason = "error";
+      console.error("[RAG] ChromaDB search failed, falling back to in-memory:", err);
+      return false;
     }
-  } catch (err) {
-    chromaMissReason = "error";
-    sendReasoning("ChromaDB search failed, falling back to in-memory store...");
-    console.error("[RAG] ChromaDB search failed, falling back to in-memory:", err);
-  }
+  })();
 
-  // Fallback to in-memory knowledge store if ChromaDB returned nothing
-  let hadInmemoryFallback = false;
-  if (!contextBlock) {
-    const relevantChunks = await searchKnowledge(message, 8);
-    if (relevantChunks.length > 0) {
-      contextBlock = "\n\nRelevant context from the knowledge base:\n" +
-        relevantChunks
-          .map((c) => `[Source: ${c.source}]\n${c.content}`)
-          .join("\n\n---\n\n");
-      chunkIds = relevantChunks.map((c) => c.source);
-      hadRagContext = true;
-      hadInmemoryFallback = true;
-      const sourceNames = [...new Set(relevantChunks.map((c) => c.source))];
-      sendReasoning(`Found ${relevantChunks.length} chunks from knowledge base`, sourceNames);
-      console.log(`[RAG] In-memory store returned ${relevantChunks.length} chunks`);
-    } else {
-      sendReasoning("No relevant knowledge base context found");
-    }
-  }
-
-  // Log ChromaDB miss for future KB growth
-  if (chromaMissReason) {
-    setImmediate(() => {
-      logChromaDBMiss({ query: message, reason: chromaMissReason, hadInmemoryFallback });
-    });
-  }
-
-  // Graph search + web search in parallel
-  let graphContext = "";
+  const inmemoryPromise = (async () => {
+    // Always compute in-memory results in parallel — use them only if ChromaDB misses
+    return searchKnowledge(message, 8, queryEmbedding);
+  })();
 
   const graphSearchPromise = (async () => {
     try {
@@ -222,7 +213,6 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
       sendReasoning("Searching knowledge graph...");
 
-      // 3-second timeout — graph is a bonus, never block the response
       const graphResult = await Promise.race([
         queryGraphForChat(keywords),
         new Promise<string>((resolve) => setTimeout(() => resolve(""), 3000)),
@@ -244,27 +234,63 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   })();
 
   const webSearchPromise = (async () => {
-    if (webSearch === false) return;
+    if (webSearch === false) return "";
     try {
       const searchQuery = extractSearchQuery(message);
       sendReasoning(`Searching the web for: "${searchQuery}"...`);
-      const webResults = await searchWeb(searchQuery, 5);
+      const webResults = await searchWeb(searchQuery, 3);
       if (webResults.length > 0) {
-        contextBlock += "\n\nRecent news from web search:\n" +
+        const webSources = webResults.map((r) => r.title);
+        sendReasoning(`Found ${webResults.length} web results`, webSources);
+        return "\n\nRecent news from web search:\n" +
           webResults
             .map((r) => `[${r.title}] (${r.date})\n${r.snippet}`)
             .join("\n\n---\n\n");
-        const webSources = webResults.map((r) => r.title);
-        sendReasoning(`Found ${webResults.length} web results`, webSources);
-      } else {
-        sendReasoning("No relevant web results found");
       }
+      sendReasoning("No relevant web results found");
+      return "";
     } catch {
       sendReasoning("Web search unavailable, skipping...");
+      return "";
     }
   })();
 
-  await Promise.all([graphSearchPromise, webSearchPromise]);
+  // Wait for all searches to complete in parallel
+  const [chromaHit, inmemoryResults, , webContext] = await Promise.all([
+    chromaPromise,
+    inmemoryPromise,
+    graphSearchPromise,
+    webSearchPromise,
+  ]);
+
+  // Use in-memory results as fallback only if ChromaDB missed
+  if (!chromaHit && inmemoryResults.length > 0) {
+    contextBlock = "\n\nRelevant context from the knowledge base:\n" +
+      inmemoryResults
+        .map((c) => `[Source: ${c.source}]\n${c.content.slice(0, 1500)}`)
+        .join("\n\n---\n\n");
+    chunkIds = inmemoryResults.map((c) => c.source);
+    hadRagContext = true;
+    hadInmemoryFallback = true;
+    const sourceNames = [...new Set(inmemoryResults.map((c) => c.source))];
+    sendReasoning(`Found ${inmemoryResults.length} chunks from knowledge base`, sourceNames);
+    console.log(`[RAG] In-memory store returned ${inmemoryResults.length} chunks`);
+  } else if (!chromaHit) {
+    if (!chromaMissReason) chromaMissReason = "unavailable";
+    sendReasoning("No relevant knowledge base context found");
+  }
+
+  // Append web results
+  if (webContext) {
+    contextBlock += webContext;
+  }
+
+  // Log ChromaDB miss for future KB growth
+  if (chromaMissReason) {
+    setImmediate(() => {
+      logChromaDBMiss({ query: message, reason: chromaMissReason, hadInmemoryFallback });
+    });
+  }
 
   if (graphContext) {
     contextBlock += "\n\n" + graphContext;
@@ -288,15 +314,6 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     }
 
-    // Confidence check after the full response
-    const gapDetected = await handleGapDetection(message, fullResponse, model);
-
-    if (gapDetected) {
-      res.write(`data: ${JSON.stringify({ token: GAP_DISCLAIMER })}\n\n`);
-      res.write(`data: ${JSON.stringify({ gap_detected: true })}\n\n`);
-      console.log(`[Gap Detector] Knowledge gap detected for: "${message.slice(0, 80)}..."`);
-    }
-
     // Store response metadata and generate response_id for feedback
     const responseId = createResponseEntry(
       message,
@@ -306,21 +323,40 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       model ?? "mistral-small:24b"
     );
 
-    // Log request async (don't block response)
     const responseTimeMs = Date.now() - requestStart;
-    setImmediate(() => {
-      logRequest({
-        query: message,
-        responseTimeMs,
-        hadRagContext,
-        wasConfident: !gapDetected,
-        chunksUsedCount: chunkIds.length,
-        responseLength: fullResponse.length,
-      });
-    });
 
+    // Send done IMMEDIATELY — don't wait for gap detection
     res.write(`data: ${JSON.stringify({ done: true, response_id: responseId, tokenStats: statsCollector.result ?? null })}\n\n`);
     res.end();
+
+    // Gap detection + logging run in background (no longer blocks the response)
+    setImmediate(() => {
+      handleGapDetection(message, fullResponse, model)
+        .then((gapDetected) => {
+          if (gapDetected) {
+            console.log(`[Gap Detector] Knowledge gap detected for: "${message.slice(0, 80)}..."`);
+          }
+          logRequest({
+            query: message,
+            responseTimeMs,
+            hadRagContext,
+            wasConfident: !gapDetected,
+            chunksUsedCount: chunkIds.length,
+            responseLength: fullResponse.length,
+          });
+        })
+        .catch((err) => {
+          console.error("[Gap Detector] Background check failed:", err instanceof Error ? err.message : err);
+          logRequest({
+            query: message,
+            responseTimeMs,
+            hadRagContext,
+            wasConfident: true,
+            chunksUsedCount: chunkIds.length,
+            responseLength: fullResponse.length,
+          });
+        });
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);

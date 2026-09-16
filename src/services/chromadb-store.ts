@@ -106,13 +106,15 @@ function makeId(text: string): string {
 
 /**
  * Query ChromaDB for the most relevant chunks.
+ * Accepts an optional pre-computed embedding to avoid redundant Ollama calls.
  */
 export async function searchChromaDB(
   query: string,
-  topK: number = 5
+  topK: number = 5,
+  precomputedEmbedding?: number[]
 ): Promise<ChromaQueryResult[]> {
   const id = await getCollectionId();
-  const queryEmbedding = await getEmbedding(query);
+  const queryEmbedding = precomputedEmbedding ?? await getEmbedding(query);
 
   const resp = await fetch(`${BASE}/${id}/query`, {
     method: "POST",

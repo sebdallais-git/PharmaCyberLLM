@@ -62,6 +62,56 @@ tr:hover td{background:rgba(15,52,96,0.3)}
 .rss-list .rss-source{font-size:11px;color:#888}
 .rss-list .rss-date{font-size:11px;color:#666;float:right}
 
+/* Health cards grid */
+.health-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.health-card{background:#1a1a2e;border-radius:8px;padding:12px;border:1px solid #0f3460;text-align:center;transition:border-color 0.3s}
+.health-card.ok{border-left:3px solid #4caf50}
+.health-card.down{border-left:3px solid #f44336}
+.health-card-name{font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:6px}
+.health-card-status{font-size:18px;font-weight:700;margin-bottom:4px}
+.health-card-latency{font-size:11px;color:#666}
+.health-card .status-ok{color:#4caf50}
+.health-card .status-down{color:#f44336}
+
+/* Latency bar */
+.latency-bar{height:4px;border-radius:2px;background:#0f3460;margin-top:6px;overflow:hidden}
+.latency-bar-fill{height:100%;border-radius:2px;transition:width 0.5s}
+.latency-bar-fill.fast{background:#4caf50}
+.latency-bar-fill.medium{background:#ff9800}
+.latency-bar-fill.slow{background:#f44336}
+
+/* Gauge */
+.gauge-container{display:flex;align-items:center;gap:16px;margin-bottom:12px}
+.gauge-ring{width:90px;height:90px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.gauge-inner{width:66px;height:66px;border-radius:50%;background:#1a1a2e;display:flex;align-items:center;justify-content:center;flex-direction:column}
+.gauge-value{font-size:18px;font-weight:700;color:#fff}
+.gauge-label{font-size:10px;color:#888}
+.gauge-details{font-size:12px;color:#888;line-height:1.8}
+.gauge-details strong{color:#e0e0e0}
+
+/* Stat row */
+.stat-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(15,52,96,0.4);font-size:13px}
+.stat-row:last-child{border-bottom:none}
+.stat-label{color:#888}
+.stat-value{color:#e0e0e0;font-weight:600}
+
+/* Model card */
+.model-card{display:flex;align-items:center;gap:12px;padding:10px;background:#1a1a2e;border-radius:8px;border:1px solid #0f3460;margin-bottom:8px}
+.model-card.active{border-color:#e94560;background:rgba(233,69,96,0.06)}
+.model-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.model-icon.llm{background:rgba(233,69,96,0.15);color:#e94560}
+.model-icon.embed{background:rgba(0,188,212,0.15);color:#00bcd4}
+.model-info{flex:1;min-width:0}
+.model-name{font-size:13px;font-weight:600;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-meta{font-size:11px;color:#666}
+.model-size{font-size:12px;color:#888;font-weight:600;white-space:nowrap}
+
+/* Graph mini chart */
+.graph-stats-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.graph-stat{text-align:center;padding:12px;background:#1a1a2e;border-radius:8px;border:1px solid #0f3460}
+.graph-stat-value{font-size:28px;font-weight:700;color:#fff}
+.graph-stat-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px}
+
 @media(max-width:1024px){
   .row-4{grid-template-columns:repeat(2,1fr)}
   .row-2{grid-template-columns:1fr}
@@ -132,16 +182,48 @@ tr:hover td{background:rgba(15,52,96,0.3)}
     </div>
   </div>
 
-  <!-- Bottom row: donut + RSS list -->
+  <!-- Service Health Cards -->
+  <div class="row row-2" style="margin-bottom:0">
+    <div class="panel">
+      <h3>Service Health</h3>
+      <div id="health-cards" class="health-cards-grid">
+        <div class="skeleton skeleton-chart" style="height:120px"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Performance</h3>
+      <div id="perf-panel">
+        <div class="skeleton skeleton-chart" style="height:120px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge Graph + Sources -->
   <div class="row row-2">
+    <div class="panel">
+      <h3>Knowledge Graph (Neo4j)</h3>
+      <div id="graph-panel">
+        <div class="skeleton skeleton-chart"></div>
+      </div>
+    </div>
     <div class="panel">
       <h3>Knowledge Sources</h3>
       <div class="chart-container" style="max-width:320px;margin:0 auto"><canvas id="chart-sources"></canvas></div>
     </div>
+  </div>
+
+  <!-- LLM Models + News Agent -->
+  <div class="row row-2">
     <div class="panel">
-      <h3>System Info</h3>
-      <div id="system-info">
-        <div class="skeleton skeleton-chart"></div>
+      <h3>LLM Models (Ollama)</h3>
+      <div id="models-panel">
+        <div class="skeleton skeleton-chart" style="height:120px"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>News Agent &amp; ChromaDB</h3>
+      <div id="agent-panel">
+        <div class="skeleton skeleton-chart" style="height:120px"></div>
       </div>
     </div>
   </div>
@@ -395,21 +477,222 @@ function renderGapsTable(data) {
   document.getElementById('gaps-table-container').innerHTML = html;
 }
 
-function renderSystemInfo(data, health) {
+let graphChart;
+
+// Safe text helper — all user-facing strings go through this
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+
+function renderHealthCards(health) {
   const checks = health.checks || {};
-  let html = '<table><thead><tr><th>Component</th><th>Status</th><th>Latency</th></tr></thead><tbody>';
+  const icons = { ollama: '\u2699', chromadb: '\u26A1', searxng: '\u{1F50D}', neo4j: '\u{1F578}', sqlite: '\u{1F4BE}' };
+  const container = document.getElementById('health-cards');
+  container.innerHTML = '';
   for (const [name, info] of Object.entries(checks)) {
-    const st = info.status === 'ok' ? '<span style="color:#4caf50">OK</span>' : `<span style="color:#f44336">${info.status}</span>`;
-    const lat = info.latency_ms !== undefined ? info.latency_ms + 'ms' : '-';
-    html += `<tr><td style="text-transform:capitalize">${name}</td><td>${st}</td><td>${lat}</td></tr>`;
+    const ok = info.status === 'ok';
+    const lat = info.latency_ms !== undefined ? info.latency_ms : null;
+    const barPct = lat !== null ? Math.min(lat / 50 * 100, 100) : 0;
+    const barClass = lat !== null ? (lat < 10 ? 'fast' : lat < 30 ? 'medium' : 'slow') : 'fast';
+    const card = document.createElement('div');
+    card.className = 'health-card ' + (ok ? 'ok' : 'down');
+    const n = document.createElement('div'); n.className = 'health-card-name'; n.textContent = (icons[name] || '') + ' ' + name; card.appendChild(n);
+    const s = document.createElement('div'); s.className = 'health-card-status ' + (ok ? 'status-ok' : 'status-down'); s.textContent = ok ? 'Online' : info.status; card.appendChild(s);
+    if (lat !== null) {
+      const l = document.createElement('div'); l.className = 'health-card-latency'; l.textContent = lat + 'ms'; card.appendChild(l);
+      const bar = document.createElement('div'); bar.className = 'latency-bar';
+      const fill = document.createElement('div'); fill.className = 'latency-bar-fill ' + barClass; fill.style.width = barPct + '%';
+      bar.appendChild(fill); card.appendChild(bar);
+    }
+    container.appendChild(card);
   }
-  html += '</tbody></table>';
-  html += `<div style="margin-top:16px;font-size:12px;color:#666">`;
-  html += `<p>Avg response time: <strong style="color:#e0e0e0">${data.avg_response_time_ms !== null ? data.avg_response_time_ms + 'ms' : 'N/A'}</strong></p>`;
-  html += `<p>Questions (30d): <strong style="color:#e0e0e0">${data.questions_30d}</strong></p>`;
-  html += `<p>Gaps detected (7d): <strong style="color:#e0e0e0">${data.gaps_detected_7d}</strong> | Resolved: <strong style="color:#4caf50">${data.gaps_resolved_7d}</strong> | Open: <strong style="color:#f44336">${data.gaps_unresolved}</strong></p>`;
-  html += `</div>`;
-  document.getElementById('system-info').innerHTML = html;
+}
+
+function renderPerformance(data) {
+  const avgMs = data.avg_response_time_ms;
+  const avgSec = avgMs !== null ? (avgMs / 1000).toFixed(1) : null;
+  const gapRate = data.questions_7d > 0 ? Math.round((data.gaps_detected_7d / data.questions_7d) * 100) : 0;
+  const resolveRate = data.gaps_detected_7d > 0 ? Math.round((data.gaps_resolved_7d / data.gaps_detected_7d) * 100) : 0;
+  const gaugeColor = avgMs === null ? '#666' : avgMs < 15000 ? '#4caf50' : avgMs < 45000 ? '#ff9800' : '#f44336';
+  const gaugeDeg = Math.min((avgMs || 0) / 600 * 3.6, 360);
+
+  const panel = document.getElementById('perf-panel');
+  panel.innerHTML = '';
+
+  // Gauge row
+  const gc = document.createElement('div'); gc.className = 'gauge-container';
+  const ring = document.createElement('div'); ring.className = 'gauge-ring'; ring.style.background = 'conic-gradient(' + gaugeColor + ' ' + gaugeDeg + 'deg, #0f3460 0deg)';
+  const inner = document.createElement('div'); inner.className = 'gauge-inner';
+  const gv = document.createElement('div'); gv.className = 'gauge-value'; gv.textContent = avgSec !== null ? avgSec + 's' : 'N/A'; inner.appendChild(gv);
+  const gl = document.createElement('div'); gl.className = 'gauge-label'; gl.textContent = 'avg response'; inner.appendChild(gl);
+  ring.appendChild(inner); gc.appendChild(ring);
+  const details = document.createElement('div'); details.className = 'gauge-details';
+  details.innerHTML = '<div>Questions (30d): <strong>' + esc(data.questions_30d) + '</strong></div>'
+    + '<div>Questions (7d): <strong>' + esc(data.questions_7d) + '</strong></div>'
+    + '<div>Today: <strong>' + esc(data.questions_today) + '</strong></div>'
+    + '<div>Gap rate (7d): <strong style="color:' + (gapRate > 30 ? '#f44336' : '#ff9800') + '">' + gapRate + '%</strong></div>';
+  gc.appendChild(details); panel.appendChild(gc);
+
+  // Stat rows
+  const rows = [
+    ['Gaps detected (7d)', data.gaps_detected_7d, ''],
+    ['Gaps resolved', data.gaps_resolved_7d, 'color:#4caf50'],
+    ['Gaps open', data.gaps_unresolved, 'color:#f44336'],
+    ['Resolve rate', resolveRate + '%', ''],
+    ['RSS ingested (7d)', data.rss_items_ingested_7d ?? 0, ''],
+  ];
+  for (const [label, value, style] of rows) {
+    const row = document.createElement('div'); row.className = 'stat-row';
+    const sl = document.createElement('span'); sl.className = 'stat-label'; sl.textContent = label; row.appendChild(sl);
+    const sv = document.createElement('span'); sv.className = 'stat-value'; if (style) sv.style.cssText = style; sv.textContent = value; row.appendChild(sv);
+    panel.appendChild(row);
+  }
+}
+
+async function renderGraphPanel() {
+  try {
+    const res = await fetch(API_BASE + '/api/graph/stats');
+    if (!res.ok) throw new Error('unavailable');
+    const stats = await res.json();
+    const panel = document.getElementById('graph-panel');
+    panel.innerHTML = '';
+
+    // Summary cards
+    const sr = document.createElement('div'); sr.className = 'graph-stats-row';
+    for (const [val, lbl] of [[stats.nodeCount, 'Nodes'], [stats.relationshipCount, 'Relationships']]) {
+      const gs = document.createElement('div'); gs.className = 'graph-stat';
+      const gv = document.createElement('div'); gv.className = 'graph-stat-value'; gv.textContent = val; gs.appendChild(gv);
+      const gl = document.createElement('div'); gl.className = 'graph-stat-label'; gl.textContent = lbl; gs.appendChild(gl);
+      sr.appendChild(gs);
+    }
+    panel.appendChild(sr);
+
+    const cc = document.createElement('div'); cc.className = 'chart-container'; cc.style.height = '220px';
+    const canvas = document.createElement('canvas'); canvas.id = 'chart-graph'; cc.appendChild(canvas);
+    panel.appendChild(cc);
+
+    const labels = Object.keys(stats.nodesByLabel || {});
+    const values = Object.values(stats.nodesByLabel || {});
+    const palette = [CHART_COLORS.cyan, CHART_COLORS.pink, CHART_COLORS.green, CHART_COLORS.orange, CHART_COLORS.purple, CHART_COLORS.teal, CHART_COLORS.blue, CHART_COLORS.amber, '#e94560', '#00bcd4', '#9c27b0', '#4caf50', '#ff9800', '#2196f3'];
+    const colors = labels.map((_, i) => palette[i % palette.length]);
+
+    if (graphChart) graphChart.destroy();
+    graphChart = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Entities', data: values, backgroundColor: colors.map(c => c + '80'), borderColor: colors, borderWidth: 1, borderRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, grid: { color: GRID_COLOR } }, y: { grid: { display: false }, ticks: { font: { size: 11 } } } } },
+    });
+  } catch {
+    document.getElementById('graph-panel').innerHTML = '';
+    const p = document.createElement('p'); p.style.cssText = 'color:#666;text-align:center;padding:40px'; p.textContent = 'Neo4j not available';
+    document.getElementById('graph-panel').appendChild(p);
+  }
+}
+
+async function renderModelsPanel() {
+  try {
+    const res = await fetch(API_BASE + '/api/chat/models');
+    const data = await res.json();
+    const models = data.models || [];
+
+    let tagsData = null;
+    try {
+      const tagsRes = await fetch(location.origin.replace(/:\d+$/, ':11434') + '/api/tags');
+      tagsData = await tagsRes.json();
+    } catch { /* Ollama may not be same-origin accessible */ }
+
+    const modelDetails = {};
+    if (tagsData && tagsData.models) {
+      for (const m of tagsData.models) {
+        modelDetails[m.name] = {
+          size: m.size ? (m.size / 1024 / 1024 / 1024).toFixed(1) + ' GB' : '?',
+          params: (m.details && m.details.parameter_size) || '?',
+          quant: (m.details && m.details.quantization_level) || '',
+          family: (m.details && m.details.family) || '',
+        };
+      }
+    }
+
+    const panel = document.getElementById('models-panel');
+    panel.innerHTML = '';
+    for (const name of models) {
+      const d = modelDetails[name] || {};
+      const isEmbed = name.includes('embed') || name.includes('nomic');
+      const isActive = name.includes('mistral-small');
+      const card = document.createElement('div'); card.className = 'model-card' + (isActive ? ' active' : '');
+      const icon = document.createElement('div'); icon.className = 'model-icon ' + (isEmbed ? 'embed' : 'llm'); icon.textContent = isEmbed ? '\u{1F9E0}' : '\u{1F916}'; card.appendChild(icon);
+      const info = document.createElement('div'); info.className = 'model-info';
+      const mn = document.createElement('div'); mn.className = 'model-name'; mn.textContent = name; info.appendChild(mn);
+      const mm = document.createElement('div'); mm.className = 'model-meta'; mm.textContent = (d.params || '?') + ' params' + (d.quant ? ' \u00b7 ' + d.quant : '') + (d.family ? ' \u00b7 ' + d.family : ''); info.appendChild(mm);
+      card.appendChild(info);
+      const ms = document.createElement('div'); ms.className = 'model-size'; ms.textContent = d.size || '?'; card.appendChild(ms);
+      panel.appendChild(card);
+    }
+  } catch {
+    const panel = document.getElementById('models-panel');
+    panel.innerHTML = '';
+    const p = document.createElement('p'); p.style.cssText = 'color:#666;text-align:center;padding:40px'; p.textContent = 'Ollama not reachable';
+    panel.appendChild(p);
+  }
+}
+
+async function renderAgentPanel() {
+  const panel = document.getElementById('agent-panel');
+  panel.innerHTML = '';
+
+  // News agent
+  try {
+    const res = await fetch(API_BASE + '/api/agent/status');
+    const agent = await res.json();
+    const sec = document.createElement('div'); sec.style.marginBottom = '16px';
+    const title = document.createElement('div'); title.style.cssText = 'font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px'; title.textContent = '\u{1F4F0} News Agent'; sec.appendChild(title);
+    const agentRows = [
+      ['Status', agent.isRunning ? 'Running...' : 'Idle', agent.isRunning ? 'color:#ff9800' : 'color:#4caf50'],
+      ['Schedule', agent.schedule || 'Every 24h', ''],
+      ['Topics monitored', String((agent.topics || []).length), ''],
+    ];
+    if (agent.lastRun) {
+      agentRows.push(['Last run', formatTime(agent.lastRun.timestamp), '']);
+      agentRows.push(['Articles found', String(agent.lastRun.newArticles), '']);
+    } else {
+      agentRows.push(['Last run', 'Not yet', 'color:#666']);
+    }
+    for (const [label, value, style] of agentRows) {
+      const row = document.createElement('div'); row.className = 'stat-row';
+      const sl = document.createElement('span'); sl.className = 'stat-label'; sl.textContent = label; row.appendChild(sl);
+      const sv = document.createElement('span'); sv.className = 'stat-value'; if (style) sv.style.cssText = style; sv.textContent = value; row.appendChild(sv);
+      sec.appendChild(row);
+    }
+    panel.appendChild(sec);
+  } catch { /* skip */ }
+
+  // ChromaDB misses
+  try {
+    const res = await fetch(API_BASE + '/api/dashboard/chromadb-misses');
+    const misses = await res.json();
+    const stats = misses.stats || {};
+    const sec = document.createElement('div');
+    const title = document.createElement('div'); title.style.cssText = 'font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px'; title.textContent = '\u26A1 ChromaDB Misses'; sec.appendChild(title);
+    const missRows = [['Total misses', String(stats.total || 0), ''], ['Last 7 days', String(stats.last_7d || 0), '']];
+    for (const [label, value, style] of missRows) {
+      const row = document.createElement('div'); row.className = 'stat-row';
+      const sl = document.createElement('span'); sl.className = 'stat-label'; sl.textContent = label; row.appendChild(sl);
+      const sv = document.createElement('span'); sv.className = 'stat-value'; if (style) sv.style.cssText = style; sv.textContent = value; row.appendChild(sv);
+      sec.appendChild(row);
+    }
+    if (stats.top_queries && stats.top_queries.length > 0) {
+      const lbl = document.createElement('div'); lbl.style.cssText = 'margin-top:8px;font-size:11px;color:#666'; lbl.textContent = 'Top missed queries:'; sec.appendChild(lbl);
+      for (const q of stats.top_queries.slice(0, 3)) {
+        const line = document.createElement('div'); line.style.cssText = 'font-size:12px;color:#888;padding:3px 0;border-bottom:1px solid rgba(15,52,96,0.3)';
+        line.textContent = '\u2022 ' + (q.query.length > 40 ? q.query.slice(0, 40) + '...' : q.query);
+        line.title = q.query;
+        sec.appendChild(line);
+      }
+    }
+    panel.appendChild(sec);
+  } catch { /* skip */ }
 }
 
 function updateCards(data) {
@@ -455,9 +738,15 @@ async function fetchData() {
     createTopicsChart(metrics);
     createSourcesChart(metrics);
 
-    // Tables
+    // Tables & panels
     renderGapsTable(metrics);
-    renderSystemInfo(metrics, health);
+    renderHealthCards(health);
+    renderPerformance(metrics);
+
+    // Async panels (don't block main render)
+    renderGraphPanel();
+    renderModelsPanel();
+    renderAgentPanel();
 
     // Timestamp
     document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();

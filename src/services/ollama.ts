@@ -1,4 +1,4 @@
-// Service de communication avec l'API Ollama
+// Ollama API communication service
 
 interface OllamaMessage {
   role: "system" | "user" | "assistant";
@@ -15,6 +15,16 @@ interface OllamaStreamChunk {
   model: string;
   message: OllamaMessage;
   done: boolean;
+  prompt_eval_count?: number;
+  eval_count?: number;
+  total_duration?: number;
+  eval_duration?: number;
+}
+
+export interface TokenStats {
+  promptTokens: number;
+  completionTokens: number;
+  tokensPerSecond: number;
 }
 
 interface OllamaEmbeddingResponse {
@@ -22,9 +32,10 @@ interface OllamaEmbeddingResponse {
 }
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
-const DEFAULT_MODEL = "gemma2:9b";
+const DEFAULT_MODEL = "mistral-small:24b";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
 const DEFAULT_OPTIONS = {
-  num_ctx: 4096,
+  num_ctx: 16384,
   temperature: 0.3,
 };
 
@@ -55,7 +66,8 @@ export async function chatWithOllama(
 
 export async function* streamChatWithOllama(
   messages: OllamaMessage[],
-  model: string = DEFAULT_MODEL
+  model: string = DEFAULT_MODEL,
+  statsCollector?: { result?: TokenStats }
 ): AsyncGenerator<string> {
   const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: "POST",
@@ -74,7 +86,7 @@ export async function* streamChatWithOllama(
   }
 
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("Pas de body dans la réponse");
+  if (!reader) throw new Error("No body in the response");
 
   const decoder = new TextDecoder();
   let buffer = "";
@@ -90,6 +102,16 @@ export async function* streamChatWithOllama(
     for (const line of lines) {
       if (line.trim()) {
         const chunk = JSON.parse(line) as OllamaStreamChunk;
+        if (chunk.done && statsCollector && chunk.eval_count != null) {
+          const evalDurationSec = (chunk.eval_duration ?? 1) / 1e9;
+          statsCollector.result = {
+            promptTokens: chunk.prompt_eval_count ?? 0,
+            completionTokens: chunk.eval_count,
+            tokensPerSecond: evalDurationSec > 0
+              ? chunk.eval_count / evalDurationSec
+              : 0,
+          };
+        }
         yield chunk.message.content;
       }
     }
@@ -105,19 +127,19 @@ export async function listModels(): Promise<string[]> {
   return data.models.map((m) => m.name);
 }
 
-export async function getEmbedding(text: string, model: string = DEFAULT_MODEL): Promise<number[]> {
+export async function getEmbedding(text: string): Promise<number[]> {
   const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
+      model: EMBEDDING_MODEL,
       prompt: text,
       keep_alive: "30m",
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama embeddings error: ${response.status} ${response.statusText}`);
+    throw new Error(`Ollama embeddings error (${EMBEDDING_MODEL}): ${response.status} ${response.statusText}`);
   }
 
   const data = (await response.json()) as OllamaEmbeddingResponse;

@@ -71,10 +71,11 @@ function keywordScore(query: string, content: string): number {
 }
 
 // Hybrid search: vector similarity + keyword boost
-export async function searchKnowledge(query: string, topK: number = 5): Promise<KnowledgeChunk[]> {
+// Accepts an optional pre-computed embedding to avoid redundant Ollama calls.
+export async function searchKnowledge(query: string, topK: number = 5, precomputedEmbedding?: number[]): Promise<KnowledgeChunk[]> {
   if (chunks.length === 0) return [];
 
-  const queryEmbedding = await getEmbedding(query);
+  const queryEmbedding = precomputedEmbedding ?? await getEmbedding(query);
 
   const scored = chunks
     .map((chunk) => {

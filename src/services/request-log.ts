@@ -25,10 +25,22 @@ export function initRequestLog(): void {
     )
   `);
 
+  // ChromaDB miss log — tracks queries that got no ChromaDB results
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS chromadb_misses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      query TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      had_inmemory_fallback INTEGER NOT NULL DEFAULT 0
+    )
+  `).run();
+
   // Indexes for dashboard queries
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_gap_log_timestamp ON gap_log(timestamp)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_gap_log_status ON gap_log(status)`);
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp)").run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_gap_log_timestamp ON gap_log(timestamp)").run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_gap_log_status ON gap_log(status)").run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_chromadb_misses_timestamp ON chromadb_misses(timestamp)").run();
 }
 
 export function logRequest(entry: {
@@ -54,6 +66,85 @@ export function logRequest(entry: {
     );
   } catch (err) {
     console.error("[RequestLog] Failed to log:", err);
+  }
+}
+
+// Log a ChromaDB miss — query that ChromaDB couldn't answer
+export function logChromaDBMiss(entry: {
+  query: string;
+  reason: string;
+  hadInmemoryFallback: boolean;
+}): void {
+  try {
+    db.prepare(
+      `INSERT INTO chromadb_misses (timestamp, query, reason, had_inmemory_fallback)
+       VALUES (?, ?, ?, ?)`
+    ).run(
+      new Date().toISOString(),
+      entry.query,
+      entry.reason,
+      entry.hadInmemoryFallback ? 1 : 0
+    );
+  } catch (err) {
+    console.error("[RequestLog] Failed to log ChromaDB miss:", err);
+  }
+}
+
+export interface ChromaDBMiss {
+  id: number;
+  timestamp: string;
+  query: string;
+  reason: string;
+  had_inmemory_fallback: boolean;
+}
+
+// Get recent ChromaDB misses for review
+export function getChromaDBMisses(limit: number = 100): ChromaDBMiss[] {
+  try {
+    const rows = db.prepare(
+      "SELECT * FROM chromadb_misses ORDER BY id DESC LIMIT ?"
+    ).all(limit) as Array<{
+      id: number;
+      timestamp: string;
+      query: string;
+      reason: string;
+      had_inmemory_fallback: number;
+    }>;
+    return rows.map((r) => ({
+      ...r,
+      had_inmemory_fallback: r.had_inmemory_fallback === 1,
+    }));
+  } catch (err) {
+    console.error("[RequestLog] Failed to read ChromaDB misses:", err);
+    return [];
+  }
+}
+
+// Get ChromaDB miss stats — most frequent missed queries grouped by similarity
+export function getChromaDBMissStats(): {
+  total: number;
+  last_7d: number;
+  top_queries: Array<{ query: string; count: number; last_seen: string }>;
+} {
+  try {
+    const total = (db.prepare(
+      "SELECT COUNT(*) as c FROM chromadb_misses"
+    ).get() as { c: number }).c;
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const last7d = (db.prepare(
+      "SELECT COUNT(*) as c FROM chromadb_misses WHERE timestamp >= ?"
+    ).get(sevenDaysAgo) as { c: number }).c;
+
+    const topQueries = db.prepare(`
+      SELECT query, COUNT(*) as count, MAX(timestamp) as last_seen
+      FROM chromadb_misses
+      GROUP BY query ORDER BY count DESC LIMIT 20
+    `).all() as Array<{ query: string; count: number; last_seen: string }>;
+
+    return { total, last_7d: last7d, top_queries: topQueries };
+  } catch {
+    return { total: 0, last_7d: 0, top_queries: [] };
   }
 }
 

@@ -6,5 +6,7 @@ knowledge/.index.json
 knowledge/.agent-state.json
 data/
 python/.venv/
+python/venv/
 __pycache__/
 *.pyc
+.chromadb-data/
