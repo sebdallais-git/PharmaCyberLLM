@@ -115,10 +115,11 @@ const BENCHMARK_MAX_TOKENS = 1024;
 
 // POST /api/chat - Send a message and receive a streaming response
 router.post("/", async (req: Request, res: Response): Promise<void> => {
-  const { message, history, model, webSearch, benchmark } = req.body as {
+  // A "model" field in the body is ignored: the active stack's chat model is always used,
+  // because mlx_lm.server would otherwise download and load any requested repository
+  const { message, history, webSearch, benchmark } = req.body as {
     message: string;
     history?: ChatMessage[];
-    model?: string;
     webSearch?: boolean;
     benchmark?: boolean;
   };
@@ -145,7 +146,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   }
 
   const llm = getLlmClient();
-  const chatModel = model ?? llm.stack.chatModel;
+  const chatModel = llm.stack.chatModel;
 
   // Refuse early when the index was built by another stack or embedding model
   const indexStatus = getIndexStatus();
@@ -340,7 +341,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     for await (const token of llm.streamChat(
       messages,
-      { model: chatModel, temperature: benchmark ? 0 : undefined, maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined },
+      { temperature: benchmark ? 0 : undefined, maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined },
       statsCollector
     )) {
       fullResponse += token;
@@ -384,7 +385,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     // Gap detection + logging run in background (no longer blocks the response)
     setImmediate(() => {
-      handleGapDetection(message, fullResponse, model)
+      handleGapDetection(message, fullResponse)
         .then((gapDetected) => {
           if (gapDetected) {
             console.log(`[Gap Detector] Knowledge gap detected for: "${message.slice(0, 80)}..."`);
@@ -417,7 +418,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// GET /api/chat/models - List models on the active LLM stack
+// GET /api/chat/models - The active stack's chat model (the only model chat requests use)
 router.get("/models", async (_req: Request, res: Response): Promise<void> => {
   const llm = getLlmClient();
   const stackInfo = {
@@ -426,8 +427,9 @@ router.get("/models", async (_req: Request, res: Response): Promise<void> => {
     embeddingModel: llm.stack.embeddingModel,
   };
   try {
-    const models = await llm.listModels();
-    res.json({ ...stackInfo, models });
+    // Probe the stack so an unreachable stack still reports 503
+    await llm.listModels();
+    res.json({ ...stackInfo, models: [llm.stack.chatModel] });
   } catch (err) {
     res.status(503).json({
       ...stackInfo,

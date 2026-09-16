@@ -9,8 +9,8 @@ export interface ChatMessage {
   content: string;
 }
 
+// No model option: every call uses the stack's configured chat model
 export interface ChatOptions {
-  model?: string;
   temperature?: number;
   maxTokens?: number;
 }
@@ -141,7 +141,7 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
 
   function chatBody(messages: ChatMessage[], options: ChatOptions, stream: boolean): Record<string, unknown> {
     return {
-      model: options.model ?? stack.chatModel,
+      model: stack.chatModel,
       messages,
       temperature: options.temperature ?? DEFAULT_TEMPERATURE,
       stream,

@@ -53,8 +53,7 @@ interface ConfidenceResult {
 // Secondary LLM call to evaluate response confidence
 export async function checkConfidence(
   originalQuestion: string,
-  gemmaResponse: string,
-  model?: string
+  gemmaResponse: string
 ): Promise<ConfidenceResult> {
   const prompt = `Analyze this Q&A exchange. Did the assistant actually answer the question with specific, confident information? Or did it hedge, say it doesn't know, provide only vague/generic information, or fail to address the question?
 
@@ -68,7 +67,7 @@ Respond with ONLY a JSON object, no other text:
     const messages: ChatMessage[] = [
       { role: "user", content: prompt },
     ];
-    const response = await getLlmClient().chat(messages, { model, temperature: 0.1 });
+    const response = await getLlmClient().chat(messages, { temperature: 0.1 });
 
     // Extract JSON from the response
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
@@ -161,8 +160,7 @@ let gapDetectionRunning = false;
 // Orchestrate detection: confidence check → cooldown → log → webhook
 export async function handleGapDetection(
   originalQuery: string,
-  gemmaResponse: string,
-  model?: string
+  gemmaResponse: string
 ): Promise<boolean> {
   // Benchmarks need the GPU to themselves
   if (isBenchmarkActive()) return false;
@@ -175,7 +173,7 @@ export async function handleGapDetection(
 
   gapDetectionRunning = true;
   try {
-    const result = await trackJob("gap-detection", () => checkConfidence(originalQuery, gemmaResponse, model));
+    const result = await trackJob("gap-detection", () => checkConfidence(originalQuery, gemmaResponse));
 
     if (result.confident) {
       return false;
