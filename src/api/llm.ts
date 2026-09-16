@@ -17,8 +17,13 @@ export function parseCompletionRequest(body: unknown): CompletionRequest | { err
   if (typeof fields.prompt !== "string" || !fields.prompt.trim()) {
     return { error: "The 'prompt' field is required" };
   }
-  return typeof fields.temperature === "number"
-    ? { prompt: fields.prompt, temperature: fields.temperature }
+  // Ollama /api/generate bodies carry the temperature in "options"; a top-level value wins
+  const options = typeof fields.options === "object" && fields.options !== null
+    ? (fields.options as Record<string, unknown>)
+    : {};
+  const temperature = typeof fields.temperature === "number" ? fields.temperature : options.temperature;
+  return typeof temperature === "number"
+    ? { prompt: fields.prompt, temperature }
     : { prompt: fields.prompt };
 }
 

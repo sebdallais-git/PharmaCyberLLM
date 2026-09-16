@@ -8,6 +8,7 @@ import {
   searchGraph,
   clearGraph,
 } from "../services/graph-store.js";
+import { getActiveStack } from "../config/llm-stacks.js";
 
 const router = Router();
 
@@ -60,6 +61,14 @@ router.post("/search", async (req: Request, res: Response): Promise<void> => {
 
 // POST /api/graph/rebuild - Trigger full graph rebuild (calls Python script)
 router.post("/rebuild", async (_req: Request, res: Response): Promise<void> => {
+  // Checked before clearing anything: the builder would otherwise wipe the graph and then fail
+  if (getActiveStack().name !== "ollama") {
+    res.status(409).json({
+      error: "Graph rebuild uses python/graph_builder.py, which calls Ollama directly; switch to the Ollama stack first",
+    });
+    return;
+  }
+
   const { execFile } = await import("node:child_process");
 
   try {
