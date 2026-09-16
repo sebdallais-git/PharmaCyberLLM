@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/**/*",
+    "__tests__/**/*",
+    "scripts/lib/**/*",
+    "scripts/reindex-stack.ts",
+    "scripts/migrate-news-to-raw-documents.ts",
+    "scripts/embedding-parity.ts",
+    "scripts/benchmark-stack.ts",
+    "scripts/compare-benchmarks.ts"
+  ]
+}

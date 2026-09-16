@@ -10,3 +10,5 @@ python/venv/
 __pycache__/
 *.pyc
 .chromadb-data/
+knowledge/.index.*.json
+python/mlx-venv/
