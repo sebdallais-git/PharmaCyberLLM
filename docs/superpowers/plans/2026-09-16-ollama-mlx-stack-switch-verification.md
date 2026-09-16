@@ -282,3 +282,46 @@ Findings that affect the benchmark (to resolve before Task 18):
 - Rollback test: a foreign `python3 -m http.server 8081` blocked the MLX embedding port; `switch-stack.sh mlx` exited 1 after "MLX embedding server did not become ready", rolled back ("Port 8081 is used by another program … leaving it alone"), and ended with only Ollama running and the app healthy. The blocker was left untouched by the script and stopped manually afterwards. Note: the up-front "cannot start MLX" foreign-port check did not trigger; the switch waited for the readiness timeout instead.
 
 Final state: active stack `ollama`, app healthy.
+
+## First comparison (2026-09-16)
+
+Settings (user decisions during execution): 23 questions, one cold run each after a warm-up question outside the set, temperature 0, no web search, max_tokens 1024 on both stacks, background LLM jobs paused.
+
+### Benchmark: ollama vs mlx
+
+- ollama: qwen3.8-pharma + qwen3-embedding:0.6b-q8_0 (ollama version is 0.34.0), 2026-09-16T17:50:13.074Z
+- mlx: mlx-community/Qwen3.8-27B-4bit + mlx-community/Qwen3-Embedding-0.6B-8bit (mlx 0.32.2 mlx-lm 0.31.3), 2026-09-16T18:27:51.432Z
+- Machine: Apple M4 Pro, macOS 26.4; 1 runs per question
+
+| Metric | ollama median | ollama p90 | mlx median | mlx p90 | mlx vs ollama |
+|---|---|---|---|---|---|
+| TTFT (ms) | 19067.5 | 22555.7 | 18528.6 | 21231.7 | -2.8% |
+| Decode (tok/s) | 12.4 | 12.5 | 13.0 | 13.1 | +4.9% |
+| Query embedding (ms) | 30 | 33 | 18 | 20 | -40.0% |
+| Retrieval (ms) | 80 | 118 | 42 | 47 | -47.5% |
+| Total (ms) | 99612 | 104982 | 93838 | 97848 | -5.8% |
+| Prompt tokens | 2171 | 2539 | 2171 | 2539 | 0.0% |
+| Completion tokens | 1024 | 1024 | 1024 | 1024 | 0.0% |
+
+| Memory | ollama | mlx | mlx vs ollama |
+|---|---|---|---|
+| Peak stack process memory (MB) | 59 | 15979 | +26983.1% |
+| Peak system used memory (MB) | 39958 | 37338 | -6.6% |
+
+Failed runs: ollama 0, mlx 0
+
+Retrieval overlap (mean Jaccard of retrieved chunks, first run per question): 0.91
+
+Notes: TTFT is measured from the model request, after retrieval. Process memory may undercount GPU buffers on Apple Silicon; compare system used memory as well.
+
+### Corrections and observations
+
+- **Ollama peak process memory (59 MB) is invalid.** Ollama 0.34.0 runs models in `libexec/lib/ollama/llama-server` child processes, which the sampler's `ollama serve` / `ollama runner` patterns miss. Measured directly after the run (resident memory while loaded): chat model runner 17,576 MB + embedding runner 2,780 MB ≈ **20.4 GB** for Ollama, versus **16.0 GB** peak for MLX. The system-wide peak (independent of process names) is valid: MLX −6.6%.
+- **Answer length:** the 1024-token cap was reached by 15/23 Ollama answers and 13/23 MLX answers, so most benchmark answers are truncated on both stacks. The comparison is fair (same cap) but the blind review compares truncated answers.
+- **Prompt processing (derived):** median prompt tokens per second of TTFT ≈ 112 (Ollama) vs 119 (MLX). The slow MLX TTFT seen during bring-up (~55 s) did not reproduce; it was a first-use/warm-up artifact.
+- **Retrieval:** mean overlap of retrieved chunks 0.91 between stacks, so answers were built from nearly the same evidence; MLX query embedding and retrieval were faster (18 vs 30 ms, 42 vs 80 ms), negligible next to generation time.
+- Raw results: `data/benchmarks/ollama-2026-09-16T17-50-13-074Z.json`, `data/benchmarks/mlx-2026-09-16T18-27-51-432Z.json`. Blind review page: `data/benchmarks/review-2026-09-16T19-02-48-804Z.html`.
+
+### Final verification
+
+`npm run typecheck`, `npm run typecheck:tests`: clean. `npm run test`: 16 suites, 87 tests passed. `switch-stack.sh status`: active stack `ollama`, app up; both stacks' indexes ok (ollama 7,617 / 7,270 chunks, mlx 7,624 / 7,267).
