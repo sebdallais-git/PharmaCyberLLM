@@ -179,4 +179,44 @@ describe("createLlmClient", () => {
       "mlx /v1/chat/completions failed (500): model not loaded"
     );
   });
+
+  it("rejects on a malformed stream chunk", async () => {
+    server = await startFakeServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: {not json\n\n");
+      res.end();
+    });
+    const client = createLlmClient(stackFor(server.baseUrl));
+    const stats: StatsCollector = {};
+
+    async function consume(): Promise<void> {
+      for await (const _token of client.streamChat([{ role: "user", content: "hi" }], {}, stats)) {
+        // no-op
+      }
+    }
+
+    await expect(consume()).rejects.toThrow(SyntaxError);
+    expect(stats.result).toBeUndefined();
+  });
+
+  it(
+    "releases the stream when the consumer stops early",
+    async () => {
+      server = await startFakeServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify(delta("Hel"))}\n\n`);
+        // Deliberately never call res.end() — the client must cancel the reader itself.
+      });
+      const client = createLlmClient(stackFor(server.baseUrl));
+
+      for await (const token of client.streamChat([{ role: "user", content: "hi" }])) {
+        expect(token).toBe("Hel");
+        break;
+      }
+
+      await server.close();
+      server = null;
+    },
+    5000
+  );
 });

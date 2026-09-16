@@ -165,34 +165,39 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
     let usage: Usage | null = null;
     let finished = false;
 
-    while (!finished) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (!finished) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = parseSseLines(buffer);
-      buffer = parsed.rest;
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseSseLines(buffer);
+        buffer = parsed.rest;
 
-      for (const data of parsed.events) {
-        if (data === "[DONE]") {
-          finished = true;
-          break;
-        }
-        const chunk = JSON.parse(data) as ChatCompletionChunk;
-        if (chunk.usage) usage = chunk.usage;
-        const content = chunk.choices?.[0]?.delta?.content;
-        if (content) {
-          // Timestamp on arrival, before the consumer processes the token
-          const arrivedAt = now();
-          if (firstTokenAt === null) firstTokenAt = arrivedAt;
-          lastTokenAt = arrivedAt;
-          contentChunks++;
-          yield content;
+        for (const data of parsed.events) {
+          if (data === "[DONE]") {
+            finished = true;
+            break;
+          }
+          const chunk = JSON.parse(data) as ChatCompletionChunk;
+          if (chunk.usage) usage = chunk.usage;
+          const content = chunk.choices?.[0]?.delta?.content;
+          if (content) {
+            // Timestamp on arrival, before the consumer processes the token
+            const arrivedAt = now();
+            if (firstTokenAt === null) firstTokenAt = arrivedAt;
+            lastTokenAt = arrivedAt;
+            contentChunks++;
+            yield content;
+          }
         }
       }
+    } finally {
+      // Release the reader on normal completion, a parse/network error, or the
+      // consumer breaking out of the loop early — otherwise the HTTP stream leaks.
+      await reader.cancel().catch(() => {});
     }
 
-    if (finished) await reader.cancel().catch(() => {});
     if (stats) {
       stats.result = computeTokenStats({ start, firstTokenAt, lastTokenAt, contentChunks, usage });
     }
