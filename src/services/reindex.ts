@@ -22,7 +22,15 @@ export interface ReindexResult {
   rawDocuments: number;
   memoryChunks: number;
   chromaChunks: number;
+  skippedRawDocuments: number;
   seconds: number;
+}
+
+// 1-based inclusive range label for a raw-document batch, e.g. "65-128"
+export function batchRangeLabel(batchIndex: number, batchSize: number, total: number): string {
+  const start = batchIndex * batchSize + 1;
+  const end = Math.min((batchIndex + 1) * batchSize, total);
+  return `${start}-${end}`;
 }
 
 export interface IndexState {
@@ -61,42 +69,62 @@ export async function reindexActiveStack(log: (message: string) => void = consol
     throw new Error("ChromaDB is not reachable — start it before reindexing");
   }
 
-  log(`[Reindex] ${stack.name}: rebuilding ${stack.indexFile} and ${stack.chromaCollection}`);
-  resetIndex();
-  await recreateChromaCollection();
-
   let memoryChunks = 0;
   let chromaChunks = 0;
+  let skippedRawDocuments = 0;
+  let files: Awaited<ReturnType<typeof listKnowledgeFiles>> = [];
+  let docs: Awaited<ReturnType<typeof listRawDocuments>> = [];
 
-  const files = await listKnowledgeFiles();
-  for (const file of files) {
-    try {
-      const text = await parseFile(file.path);
-      memoryChunks += await ingestTexts([{ text, source: file.name }]);
-      chromaChunks += await addToChromaDB([text], [{ source: file.name }]);
-      log(`[Reindex] file ${file.name}`);
-    } catch (err) {
-      log(`[Reindex] skipped ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+  try {
+    log(`[Reindex] ${stack.name}: rebuilding ${stack.indexFile} and ${stack.chromaCollection}`);
+    resetIndex();
+    await recreateChromaCollection();
+
+    files = await listKnowledgeFiles();
+    for (const file of files) {
+      try {
+        const text = await parseFile(file.path);
+        memoryChunks += await ingestTexts([{ text, source: file.name }]);
+        chromaChunks += await addToChromaDB([text], [{ source: file.name }]);
+        log(`[Reindex] file ${file.name}`);
+      } catch (err) {
+        log(`[Reindex] skipped ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-  }
 
-  const docs = await listRawDocuments();
-  let processed = 0;
-  for (const batch of toBatches(docs, RAW_DOCUMENT_BATCH_SIZE)) {
-    memoryChunks += await ingestTexts(batch.map((doc) => ({ text: doc.content, source: doc.source })));
-    chromaChunks += await addToChromaDB(
-      batch.map((doc) => doc.content),
-      batch.map((doc) => ({ source: doc.source, ...doc.metadata }))
-    );
-    processed += batch.length;
-    log(`[Reindex] raw documents ${processed}/${docs.length}`);
-  }
+    docs = await listRawDocuments();
+    let processed = 0;
+    const batches = toBatches(docs, RAW_DOCUMENT_BATCH_SIZE);
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      try {
+        memoryChunks += await ingestTexts(batch.map((doc) => ({ text: doc.content, source: doc.source })));
+        chromaChunks += await addToChromaDB(
+          batch.map((doc) => doc.content),
+          batch.map((doc) => ({ source: doc.source, ...doc.metadata }))
+        );
+        processed += batch.length;
+        log(`[Reindex] raw documents ${processed}/${docs.length}`);
+      } catch (err) {
+        skippedRawDocuments += batch.length;
+        const range = batchRangeLabel(i, RAW_DOCUMENT_BATCH_SIZE, docs.length);
+        log(`[Reindex] skipped raw documents ${range}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
-  await saveIndex();
-  setIndexStatus({ ok: true, reason: "" });
+    await saveIndex();
+    setIndexStatus({ ok: true, reason: "" });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    setIndexStatus({ ok: false, reason: `reindex failed: ${message} — run scripts/reindex-stack.ts` });
+    throw err;
+  }
 
   const seconds = Math.round((Date.now() - startedAt) / 100) / 10;
-  log(`[Reindex] done: ${memoryChunks} in-memory chunks, ${chromaChunks} ChromaDB chunks in ${seconds}s`);
+  log(
+    `[Reindex] done: ${memoryChunks} in-memory chunks, ${chromaChunks} ChromaDB chunks in ${seconds}s, ` +
+    `${skippedRawDocuments} raw documents skipped`
+  );
 
   return {
     stack: stack.name,
@@ -104,6 +132,7 @@ export async function reindexActiveStack(log: (message: string) => void = consol
     rawDocuments: docs.length,
     memoryChunks,
     chromaChunks,
+    skippedRawDocuments,
     seconds,
   };
 }
