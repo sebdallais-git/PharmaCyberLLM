@@ -27,12 +27,21 @@ interface StoredChunk {
 interface IndexFile {
   version: 2;
   meta: IndexMeta | null;
+  // Set only by a rebuild that ran to the end; an interrupted rebuild leaves it out
+  complete?: boolean;
   chunks: StoredChunk[];
 }
 
 export interface ParsedIndex {
   meta: IndexMeta | null;
+  complete: boolean;
   chunks: KnowledgeChunk[];
+}
+
+export interface IndexSummary {
+  meta: IndexMeta | null;
+  complete: boolean;
+  chunkCount: number;
 }
 
 export interface TextItem {
@@ -50,6 +59,7 @@ const EMBED_BATCH_SIZE = 32;
 
 let chunks: KnowledgeChunk[] = [];
 let indexMeta: IndexMeta | null = null;
+let indexComplete = false;
 
 function indexPath(): string {
   return join(KNOWLEDGE_DIR, getActiveStack().indexFile);
@@ -124,13 +134,14 @@ export function decodeEmbedding(encoded: string): Float32Array {
 
 export function parseIndexFile(raw: unknown): ParsedIndex {
   // Legacy indexes (plain arrays) predate the stack switch and can't be trusted
-  if (Array.isArray(raw)) return { meta: null, chunks: [] };
+  if (Array.isArray(raw)) return { meta: null, complete: false, chunks: [] };
 
   const file = raw as Partial<IndexFile>;
-  if (file.version !== 2 || !Array.isArray(file.chunks)) return { meta: null, chunks: [] };
+  if (file.version !== 2 || !Array.isArray(file.chunks)) return { meta: null, complete: false, chunks: [] };
 
   return {
     meta: file.meta ?? null,
+    complete: file.complete === true,
     chunks: file.chunks.map((c) => ({
       id: c.id,
       source: c.source,
@@ -140,10 +151,11 @@ export function parseIndexFile(raw: unknown): ParsedIndex {
   };
 }
 
-export function serializeIndex(meta: IndexMeta, items: KnowledgeChunk[]): string {
+export function serializeIndex(meta: IndexMeta, items: KnowledgeChunk[], complete: boolean = false): string {
   const file: IndexFile = {
     version: 2,
     meta,
+    ...(complete ? { complete: true } : {}),
     chunks: items.map((c) => ({
       id: c.id,
       source: c.source,
@@ -220,10 +232,16 @@ export async function ingestText(text: string, sourceName: string): Promise<numb
   return ingestTexts([{ text, source: sourceName }]);
 }
 
-// Start an empty index for the active stack
+// Start an empty index for the active stack. Only a reindex calls this: it is the one place metadata is stamped.
 export function resetIndex(): void {
   chunks = [];
   indexMeta = expectedIndexMeta(getActiveStack());
+  indexComplete = false;
+}
+
+// Called by a reindex that ran to the end, before its final save
+export function markIndexComplete(): void {
+  indexComplete = true;
 }
 
 export function getIndexMeta(): IndexMeta | null {
@@ -236,35 +254,40 @@ export async function saveIndex(): Promise<void> {
     throw new Error("Refusing to save an index without stack metadata — run scripts/reindex-stack.ts");
   }
   await mkdir(KNOWLEDGE_DIR, { recursive: true });
-  await writeFile(indexPath(), serializeIndex(indexMeta, chunks), "utf-8");
+  await writeFile(indexPath(), serializeIndex(indexMeta, chunks, indexComplete), "utf-8");
 }
 
 // Load the active stack's index from disk
-export async function loadIndex(): Promise<void> {
-  const path = indexPath();
+export async function loadIndex(path: string = indexPath()): Promise<void> {
   let data: string;
   try {
     data = await readFile(path, "utf-8");
   } catch {
-    resetIndex();
-    console.log(`No index at ${path}, starting empty`);
+    // No metadata: the startup guard refuses search until a reindex builds this stack's index
+    chunks = [];
+    indexMeta = null;
+    indexComplete = false;
+    console.log(`No index at ${path} — run scripts/reindex-stack.ts`);
     return;
   }
 
   const parsed = parseIndexFile(JSON.parse(data) as unknown);
   chunks = parsed.chunks;
   indexMeta = parsed.meta;
+  indexComplete = parsed.complete;
   console.log(`Index loaded: ${chunks.length} chunks (${path})`);
 }
 
 // Read the index file's metadata and size without decoding embeddings
-export async function readIndexSummary(): Promise<{ meta: IndexMeta | null; chunkCount: number } | null> {
+export async function readIndexSummary(): Promise<IndexSummary | null> {
   try {
     const raw = JSON.parse(await readFile(indexPath(), "utf-8")) as unknown;
-    if (Array.isArray(raw)) return { meta: null, chunkCount: raw.length };
+    if (Array.isArray(raw)) return { meta: null, complete: false, chunkCount: raw.length };
     const file = raw as Partial<IndexFile>;
+    const isV2 = file.version === 2;
     return {
-      meta: file.version === 2 ? file.meta ?? null : null,
+      meta: isV2 ? file.meta ?? null : null,
+      complete: isV2 && file.complete === true,
       chunkCount: Array.isArray(file.chunks) ? file.chunks.length : 0,
     };
   } catch {

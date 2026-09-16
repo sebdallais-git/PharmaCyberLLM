@@ -32,10 +32,11 @@ async function main(): Promise<void> {
   if (mode === "--check" || mode === "--status") {
     const state = await inspectIndexes();
     if (mode === "--status") {
-      const describe = (ok: boolean, reason: string): string => (ok ? "ok" : reason);
+      const describe = (check: { ok: boolean; reason: string }, complete: boolean): string =>
+        !check.ok ? check.reason : complete ? "ok" : "incomplete rebuild";
       console.log(
-        `${stack.name}: in-memory ${state.memory.chunkCount} chunks (${describe(state.memory.check.ok, state.memory.check.reason)}), ` +
-        `ChromaDB ${state.chroma.count} chunks (${describe(state.chroma.check.ok, state.chroma.check.reason)})`
+        `${stack.name}: in-memory ${state.memory.chunkCount} chunks (${describe(state.memory.check, state.memory.complete)}), ` +
+        `ChromaDB ${state.chroma.count} chunks (${describe(state.chroma.check, state.chroma.complete)})`
       );
       return;
     }
@@ -52,7 +53,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  await reindexActiveStack();
+  const result = await reindexActiveStack();
+  if (result.skippedRawDocuments > 0) {
+    console.error(
+      `Reindex finished but skipped ${result.skippedRawDocuments} raw documents (see the log above). ` +
+      "The indexes are usable without them; fix the cause and rebuild to include them."
+    );
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

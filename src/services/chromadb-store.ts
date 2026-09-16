@@ -36,8 +36,12 @@ export interface ChromaEntry {
 
 export interface ChromaCollectionInfo {
   meta: IndexMeta | null;
+  complete: boolean;
   count: number;
 }
+
+// Collection metadata key set once a reindex has run to the end
+const INDEX_COMPLETE_KEY = "index_complete";
 
 // Cached collection ID, keyed by name so a different stack never reuses it
 let cachedCollection: { name: string; id: string } | null = null;
@@ -276,7 +280,43 @@ export async function getChromaCollectionInfo(): Promise<ChromaCollectionInfo | 
 
   const countResp = await fetch(`${BASE}/${collection.id}/count`);
   const count = countResp.ok ? ((await countResp.json()) as number) : 0;
-  return { meta: indexMetaFromChroma(collection.metadata), count };
+  return {
+    meta: indexMetaFromChroma(collection.metadata),
+    complete: collection.metadata?.[INDEX_COMPLETE_KEY] === true,
+    count,
+  };
+}
+
+/**
+ * Metadata for marking a collection complete. ChromaDB replaces the whole metadata map on update,
+ * so existing keys are carried over; "hnsw:*" keys are left out because the distance function
+ * can't be changed after creation (it stays in the collection's configuration).
+ */
+export function completeCollectionMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const kept = Object.entries(metadata ?? {}).filter(([key]) => !key.startsWith("hnsw:"));
+  return { ...Object.fromEntries(kept), [INDEX_COMPLETE_KEY]: true };
+}
+
+/**
+ * Mark the active stack's collection as fully rebuilt (PUT .../collections/{id} with new_metadata).
+ */
+export async function markChromaCollectionComplete(): Promise<void> {
+  const collection = await findCollection();
+  if (!collection) {
+    throw new Error("ChromaDB: collection missing, cannot mark the rebuild complete");
+  }
+
+  const resp = await fetch(`${BASE}/${collection.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ new_metadata: completeCollectionMetadata(collection.metadata) }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`ChromaDB: failed to mark collection complete (${resp.status}): ${body.slice(0, 300)}`);
+  }
 }
 
 /**

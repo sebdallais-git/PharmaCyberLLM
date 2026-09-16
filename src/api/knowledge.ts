@@ -31,7 +31,7 @@ import {
 } from "../services/gap-detector.js";
 import { getLlmClient } from "../services/llm-client.js";
 import type { ChatMessage } from "../services/llm-client.js";
-import { trackJob } from "../services/bench-mode.js";
+import { getRunningJobs, isBenchmarkActive, trackJob } from "../services/bench-mode.js";
 import { isNeo4jAvailable, writeEntities } from "../services/graph-store.js";
 import type { GraphEntity, GraphRelationship } from "../services/graph-store.js";
 
@@ -411,6 +411,15 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
 
 // POST /api/knowledge/reindex - Rebuild the active stack's indexes from knowledge/ and raw documents
 router.post("/reindex", async (_req: Request, res: Response): Promise<void> => {
+  if (getRunningJobs().includes("reindex")) {
+    res.status(409).json({ error: "A reindex is already running" });
+    return;
+  }
+  if (isBenchmarkActive()) {
+    res.status(409).json({ error: "Benchmark in progress — reindex after it finishes" });
+    return;
+  }
+
   try {
     const result = await trackJob("reindex", () => reindexActiveStack());
     res.json({
