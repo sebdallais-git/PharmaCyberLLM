@@ -196,7 +196,7 @@ flowchart TD
 
     subgraph HEAL["Self-Healing Loop"]
         N8N --> SEARX["SearXNG Search"]
-        SEARX --> EXTRACT["Ollama Extraction"]
+        SEARX --> EXTRACT["LLM Extraction\n(active stack)"]
         EXTRACT --> INGEST["Auto-ingest to KB"]
         INGEST --> VERIFY["Resolution Verification"]
     end
@@ -269,9 +269,9 @@ flowchart TD
     C -->|Yes| D["Done"]
     C -->|No| E["N8N Webhook\n(with gap_id)"]
 
-    E --> F["Ollama: Generate\n3 search queries"]
+    E --> F["Active stack: Generate\n3 search queries"]
     E --> G["SearXNG: Search Web\n(3 queries x 3 results)"]
-    E --> H["Ollama: Extract\nrelevant knowledge"]
+    E --> H["Active stack: Extract\nrelevant knowledge"]
 
     F & G & H --> I["Store in KB\n(ingest-text)"]
     I --> J["Resolution Check:\nRe-ask via full RAG"]
@@ -297,7 +297,7 @@ flowchart TD
     A["N8N Cron (every 6h)"] --> B["Get KB Stats"]
     B --> C["Generate 5 random\ntest queries"]
     C --> D["Send through\nfull RAG pipeline"]
-    D --> E["Ollama scores\neach response (1-10)"]
+    D --> E["Active stack scores\neach response (1-10)"]
     E --> F{"Hallucination\ndetected?"}
     F -->|Yes| G["Flag in report"]
     F -->|No| H["Pass"]
@@ -310,7 +310,7 @@ flowchart TD
 
 | Metric | Description |
 |--------|-------------|
-| **Quality Score** | Average Ollama score (1-10) across test queries |
+| **Quality Score** | Average LLM score (1-10) across test queries |
 | **Hallucination Rate** | % of responses flagged as containing fabricated facts |
 | **Gap Rate** | % of test queries with low-confidence answers |
 | **24h Average** | Rolling quality trend via `/api/dashboard/kb-health` |
@@ -388,7 +388,7 @@ graph TB
     subgraph ORCHESTRATION["N8N Workflow v2"]
         N8N_WH["Webhook Trigger"]
         N8N_SEARCH["SearXNG Search"]
-        N8N_EXTRACT["Ollama Extraction"]
+        N8N_EXTRACT["LLM Extraction"]
         N8N_STORE["Auto-Ingest to KB"]
         N8N_RESOLVE["Resolution Check"]
     end
@@ -609,7 +609,7 @@ The Python vectordb uses intelligent document chunking:
 
 ## N8N Workflows
 
-Two importable N8N workflows automate knowledge management and quality assurance.
+Two importable N8N workflows automate knowledge management and quality assurance. Their LLM steps call PharmaLLM's `POST /api/llm/complete`, which runs on the active stack (Ollama or MLX); the `model` field in their request bodies is ignored.
 
 ### Workflow 1: Closed-Loop Gap Resolution (15 nodes)
 
@@ -618,20 +618,20 @@ Fills knowledge gaps **and verifies the fix worked**.
 | # | Node | Description |
 |---|------|-------------|
 | 1 | Knowledge Gap Webhook | Receives POST with `gap_id` from gap-detector |
-| 2 | Generate Search Queries | Ollama generates 3 search queries |
+| 2 | Generate Search Queries | Active stack generates 3 search queries (`/api/llm/complete`) |
 | 3 | Parse Search Queries | Extracts queries into separate items |
 | 4 | Search SearXNG | Web search per query |
 | 5 | Deduplicate Results | Deduplicates by URL, max 9 results |
 | 6 | Fetch Page Content | Fetches pages (skip on error) |
 | 7 | Truncate & Clean | Strips HTML, limits to 8000 chars |
-| 8 | Extract Knowledge | Ollama extracts relevant facts |
+| 8 | Extract Knowledge | Active stack extracts relevant facts (`/api/llm/complete`) |
 | 9 | Filter Relevant Only | Removes NOT_RELEVANT responses |
 | 10 | Store in Knowledge Base | POSTs to `/api/knowledge/ingest-text` |
 | 11 | Summary & Log | Aggregates stats |
 | 12 | **Check Gap Resolution** | Calls `/api/knowledge/gaps/check-resolution` |
 | 13 | **Resolution Result Log** | Logs resolved/unresolved status |
 | 14 | SearXNG Error Handler | Graceful error handling |
-| 15 | Ollama Query Error Handler | Fallback to search_topic |
+| 15 | Ollama Query Error Handler | Fallback to search_topic if query generation fails |
 
 Import: **N8N > Workflows > Import** > `n8n/knowledge_gap_workflow_v2.json`
 
@@ -644,7 +644,7 @@ Monitors KB quality and detects degradation proactively.
 | Get KB stats | Fetches current knowledge base size and sources |
 | Generate test queries | 5 random queries from 10 baseline pharma/cyber topics |
 | RAG pipeline test | Sends queries through the full chat pipeline |
-| Quality scoring | Ollama scores each response 1-10 |
+| Quality scoring | Active stack scores each response 1-10 (`/api/llm/complete`) |
 | Hallucination check | Detects fabricated facts in responses |
 | Health report | Aggregates scores and POSTs to `/api/dashboard/kb-health` |
 
@@ -681,26 +681,53 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_qa_workflow.json`
 ```
 PharmaCyberLLM/
 ├── src/
-│   ├── server.ts                  # Express + HTTPS + news agent + DB init
+│   ├── server.ts                  # Express + HTTPS + index checks + news agent + DB init
+│   ├── config/
+│   │   └── llm-stacks.ts          # Ollama and MLX stack definitions (models, URLs, indexes)
 │   ├── api/
-│   │   ├── chat.ts                # SSE streaming + reasoning steps + /names toggle
+│   │   ├── chat.ts                # SSE streaming + reasoning steps + /names toggle + models
 │   │   ├── knowledge.ts           # KB CRUD + gaps + resolution check + reindex
 │   │   ├── agent.ts               # News agent status + manual trigger
 │   │   ├── feedback.ts            # User feedback + stats + weekly digest
 │   │   ├── dashboard.ts           # Dashboard metrics + health check + KB QA
-│   │   └── graph.ts               # Graph health, stats, search, rebuild endpoints
-│   └── services/
-│       ├── ollama.ts              # Ollama chat, streaming, token stats, embeddings
-│       ├── knowledge-store.ts     # In-memory vector store + hybrid search
-│       ├── chromadb-store.ts      # ChromaDB client + delete/recreate
-│       ├── gap-detector.ts        # Confidence check + resolution + N8N webhook
-│       ├── feedback-store.ts      # Feedback table + stats + weekly digest
-│       ├── response-cache.ts      # In-memory response metadata (1h TTL)
-│       ├── request-log.ts         # Request logging + ChromaDB miss tracking + cache
-│       ├── graph-store.ts         # Neo4j driver + queryGraphForChat() + writeEntities()
-│       ├── news-agent.ts          # 194-topic Google News scraper (writes to 3 stores)
-│       ├── web-search.ts          # Real-time Google News RSS search
-│       └── file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
+│   │   ├── graph.ts               # Graph health, stats, search, rebuild endpoints
+│   │   ├── bench.ts               # Benchmark mode start/stop/status
+│   │   └── llm.ts                 # /api/llm/complete for N8N on the active stack
+│   ├── services/
+│   │   ├── llm-client.ts          # OpenAI-compatible client for both stacks (chat, streaming, token stats, embeddings)
+│   │   ├── index-guard.ts         # Per-stack index metadata checks, refuses mismatched search
+│   │   ├── reindex.ts             # Rebuilds the active stack's in-memory index and ChromaDB collection
+│   │   ├── raw-documents.ts       # On-disk raw documents that indexes are rebuilt from
+│   │   ├── bench-mode.ts          # Benchmark lease + background job tracking
+│   │   ├── health.ts              # Health probes and status aggregation
+│   │   ├── knowledge-store.ts     # In-memory vector store + hybrid search
+│   │   ├── chromadb-store.ts      # ChromaDB client + delete/recreate
+│   │   ├── gap-detector.ts        # Confidence check + resolution + N8N webhook
+│   │   ├── feedback-store.ts      # Feedback table + stats + weekly digest
+│   │   ├── response-cache.ts      # In-memory response metadata (1h TTL)
+│   │   ├── request-log.ts         # Request logging + ChromaDB miss tracking + cache
+│   │   ├── graph-store.ts         # Neo4j driver + queryGraphForChat() + writeEntities()
+│   │   ├── news-agent.ts          # 194-topic Google News scraper (writes to 3 stores)
+│   │   ├── web-search.ts          # Real-time Google News RSS search
+│   │   └── file-parser.ts         # PDF, DOCX, PPTX, CSV, JSON, MD parser
+│   └── utils/
+│       └── batches.ts             # Fixed-size batching helper
+├── scripts/
+│   ├── switch-stack.sh            # Stop one stack, start the other, restart PharmaLLM (with rollback)
+│   ├── start-services.sh          # Start ChromaDB, the active stack and the dev server (npm run dev)
+│   ├── reindex-stack.ts           # Rebuild or check the active stack's indexes
+│   ├── benchmark-stack.ts         # Benchmark the active stack through the running app
+│   ├── compare-benchmarks.ts      # Compare two benchmark runs (report + blind A/B page)
+│   ├── embedding-parity.ts        # Cross-stack embedding parity check
+│   ├── migrate-news-to-raw-documents.ts  # One-off migration of news into raw documents
+│   ├── ingest-to-chromadb.ts      # One-time ingest of knowledge/*.md into ChromaDB
+│   ├── seed-neo4j-attacks.ts      # Seed the graph with attack data
+│   └── lib/                       # Shared helpers (services.sh, benchmark report/types, stats, legacy news)
+├── __tests__/                     # Jest tests (+ helpers/fake-openai-server.ts)
+├── bench/
+│   └── questions.json             # Benchmark question set
+├── ollama/
+│   └── qwen3.8-pharma.Modelfile   # Ollama chat model (Qwen3.8 27B, 16k context)
 ├── certs/                         # SSL certificates (HTTPS support)
 ├── dashboard/
 │   └── index.html                 # Monitoring dashboard (Chart.js, dark theme)
@@ -708,20 +735,23 @@ PharmaCyberLLM/
 │   ├── index.html                 # Chat UI (voice input, reasoning panel)
 │   ├── styles.css                 # Dark theme + mobile/tablet optimizations
 │   └── app.js                     # Frontend logic + history navigation
-├── knowledge/                     # 36+ curated pharma/cyber documents
+├── knowledge/                     # 36+ curated pharma/cyber documents + per-stack index files
 ├── n8n/
 │   ├── knowledge_gap_workflow.json      # N8N workflow v1
 │   ├── knowledge_gap_workflow_v2.json   # N8N workflow v2 (with resolution check)
 │   ├── knowledge_qa_workflow.json       # N8N KB health monitoring (every 6h)
 │   └── README.md                        # N8N setup guide
 ├── python/
-│   ├── graph_builder.py           # Bulk entity extraction from knowledge/*.md into Neo4j
+│   ├── graph_builder.py           # Bulk entity extraction from knowledge/*.md into Neo4j (calls Ollama)
+│   ├── mlx-embed-server.py        # OpenAI-compatible embedding server for the MLX stack
 │   ├── requirements.txt           # neo4j>=5.0.0, requests
+│   ├── mlx-requirements.txt       # MLX stack dependencies (python/mlx-venv)
 │   ├── utils/                     # Smart chunking, re-ranking, vector DB
 │   └── tests/                     # Integration + vector DB tests
 ├── data/
 │   ├── chromadb/                  # ChromaDB persistent storage
 │   ├── raw_documents/             # Original content for re-indexing
+│   ├── benchmarks/                # Benchmark results
 │   ├── logs/                      # Re-ranking logs
 │   └── gap_log.db                 # SQLite (gaps + feedback + request log)
 ├── package.json
@@ -749,7 +779,7 @@ The `/names` command toggles whether responses name specific companies in cyber 
 | `/api/knowledge/upload` | POST | Upload and ingest a file |
 | `/api/knowledge/add` | POST | Add to ChromaDB (URL or text) |
 | `/api/knowledge/status` | GET | ChromaDB status |
-| `/api/knowledge/reindex` | POST | Re-chunk and re-embed all raw documents |
+| `/api/knowledge/reindex` | POST | Rebuild the active stack's indexes from `knowledge/` and raw documents (409 while a reindex or benchmark runs) |
 | `/api/knowledge/gaps` | GET | Recent gap detections |
 | `/api/knowledge/gaps/stats` | GET | Gap analytics |
 | `/api/knowledge/gaps/check-resolution` | POST | Re-check if a gap is resolved |
@@ -778,14 +808,14 @@ The `/names` command toggles whether responses name specific companies in cyber 
 | `/api/graph/health` | GET | Neo4j connection check with latency |
 | `/api/graph/stats` | GET | Node and relationship counts by type |
 | `/api/graph/search` | POST | Search by entity name, returns neighbors |
-| `/api/graph/rebuild` | POST | Clear graph and run full Python extraction |
+| `/api/graph/rebuild` | POST | Clear graph and run full Python extraction (Ollama stack only: `graph_builder.py` calls Ollama directly; 409 on MLX) |
 
 ### Stack & Benchmark
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/chat/models` | GET | Active stack, its chat and embedding models, available models |
+| `/api/chat/models` | GET | Active stack and its chat and embedding models (chat always uses the stack's chat model) |
 | `/api/llm/complete` | POST | `{ prompt }` → `{ response }` on the active stack (used by N8N) |
-| `/api/bench/start` | POST | Pause background LLM jobs for a benchmark |
+| `/api/bench/start` | POST | Pause background LLM jobs for a benchmark (15-minute lease, refreshed by calling again) |
 | `/api/bench/stop` | POST | Resume background LLM jobs |
 | `/api/bench/status` | GET | Benchmark flag and running background jobs |
 
