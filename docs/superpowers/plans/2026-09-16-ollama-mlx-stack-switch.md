@@ -15,7 +15,7 @@
 1. **No answer cache exists.** `src/services/response-cache.ts` only stores response metadata for feedback, so it never answers a repeated question. Benchmark mode therefore needs no cache bypass. It does need to skip the background gap-detection LLM call that `chat.ts` fires after every answer, which would otherwise compete for the GPU during the next question.
 2. **The legacy index is large and inconsistent.** `knowledge/.index.json` is 361 MB (pretty-printed JSON). It holds 11,680 chunks (10,768 of them news) with mixed vector sizes: 10,271 × 768, 1,328 × 3,584, 81 × 8,192. Mismatched vectors score 0 in `cosineSimilarity`, so about 1,400 chunks are silently unsearchable today. New index files store embeddings as base64 Float32 in compact JSON.
 3. **News was never persisted as raw text.** The legacy ChromaDB `knowledge_base` collection holds 7,043 chunks (6,869 news). All articles from one day share a source name (`news-YYYY-MM-DD`), so raw documents for news are keyed by article URL, not source.
-4. **n8n workflows call Ollama directly.** `n8n/knowledge_gap_workflow.json`, `n8n/knowledge_gap_workflow_v2.json` and `n8n/knowledge_qa_workflow.json` POST to `http://localhost:11434/api/generate` with `gemma2:9b`. With MLX active, Ollama is stopped and these break. **Assumption (confirm with the user):** add `POST /api/llm/complete` to PharmaLLM, which answers on the active stack with an Ollama-shaped `{ response }` body, and point the n8n nodes at it (Task 12).
+4. **n8n workflows call Ollama directly.** `n8n/knowledge_gap_workflow.json`, `n8n/knowledge_gap_workflow_v2.json` and `n8n/knowledge_qa_workflow.json` POST to `http://localhost:11434/api/generate` with `gemma2:9b`. With MLX active, Ollama is stopped and these break. **Decision (confirmed by the user):** the workflows must work with either stack. Add `POST /api/llm/complete` to PharmaLLM, which answers on the active stack (Ollama or MLX) with an Ollama-shaped `{ response }` body, and point the n8n nodes at it (Task 12).
 5. **Verification items resolved from official sources:**
    - Ollama tag: `qwen3.8:27b-q4_K_M` (Ollama 0.17.6 support still to be confirmed in Task 0).
    - Ollama's OpenAI API ignores per-request context size; a Modelfile with `PARAMETER num_ctx` is the documented fix.
@@ -3827,7 +3827,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ### Task 12: n8n completions through the active stack
 
-The three n8n workflows POST `{ model: 'gemma2:9b', prompt, stream: false }` to Ollama's `/api/generate` and only read `$json.response` downstream. A PharmaLLM endpoint that accepts the same body and returns `{ response }` lets them follow the active stack with a URL change only. **Confirm this approach with the user before starting the task** (Planning Note 4).
+The three n8n workflows POST `{ model: 'gemma2:9b', prompt, stream: false }` to Ollama's `/api/generate` and only read `$json.response` downstream. A PharmaLLM endpoint that accepts the same body and returns `{ response }` lets them follow the active stack, Ollama or MLX, with a URL change only (Planning Note 4, confirmed by the user).
 
 **Files:**
 - Create: `src/api/llm.ts`
