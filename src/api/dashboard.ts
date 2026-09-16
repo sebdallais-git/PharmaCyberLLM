@@ -6,10 +6,13 @@ import { getDashboardMetrics, getChromaDBMisses, getChromaDBMissStats } from "..
 import { isChromaDBAvailable, getChromaStatus } from "../services/chromadb-store.js";
 import { isNeo4jAvailable } from "../services/graph-store.js";
 import { getStats } from "../services/knowledge-store.js";
+import { getActiveStack } from "../config/llm-stacks.js";
+import { getIndexStatus } from "../services/index-guard.js";
+import { aggregateHealth, probeUrl, stackProbeUrls } from "../services/health.js";
+import type { HealthCheck } from "../services/health.js";
 
 const router = Router();
 
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const SEARXNG_URL = "http://localhost:8888";
 
 // GET /api/dashboard/metrics
@@ -55,21 +58,17 @@ router.get("/metrics", async (_req: Request, res: Response): Promise<void> => {
 
 // GET /api/health
 router.get("/health", async (_req: Request, res: Response): Promise<void> => {
-  const checks: Record<string, { status: string; latency_ms?: number }> = {};
+  const stack = getActiveStack();
+  const urls = stackProbeUrls(stack);
+  const checks: Record<string, HealthCheck> = {};
 
-  // Ollama
-  try {
-    const start = Date.now();
-    const resp = await fetch(`${OLLAMA_URL}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    checks.ollama = {
-      status: resp.ok ? "ok" : "error",
-      latency_ms: Date.now() - start,
-    };
-  } catch {
-    checks.ollama = { status: "unreachable" };
-  }
+  // Active LLM stack only; the inactive stack is expected to be stopped
+  const [chat, embed] = await Promise.all([probeUrl(urls.llm_chat), probeUrl(urls.llm_embed)]);
+  checks.llm_chat = chat;
+  checks.llm_embed = embed;
+
+  const indexStatus = getIndexStatus();
+  checks.search_index = indexStatus.ok ? { status: "ok" } : { status: "error", detail: indexStatus.reason };
 
   // ChromaDB
   try {
@@ -84,18 +83,7 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   }
 
   // SearXNG
-  try {
-    const start = Date.now();
-    const resp = await fetch(`${SEARXNG_URL}/`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    checks.searxng = {
-      status: resp.ok ? "ok" : "error",
-      latency_ms: Date.now() - start,
-    };
-  } catch {
-    checks.searxng = { status: "unreachable" };
-  }
+  checks.searxng = await probeUrl(`${SEARXNG_URL}/`);
 
   // Neo4j
   try {
@@ -110,24 +98,9 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   }
 
   // SQLite
-  try {
-    checks.sqlite = { status: "ok" };
-  } catch {
-    checks.sqlite = { status: "error" };
-  }
+  checks.sqlite = { status: "ok" };
 
-  const statuses = Object.values(checks).map((c) => c.status);
-  let overall: string;
-  if (statuses.every((s) => s === "ok")) {
-    overall = "healthy";
-  } else if (statuses.includes("unreachable") || statuses.includes("error")) {
-    const criticalDown = checks.ollama.status !== "ok";
-    overall = criticalDown ? "unhealthy" : "degraded";
-  } else {
-    overall = "healthy";
-  }
-
-  res.json({ status: overall, checks });
+  res.json({ status: aggregateHealth(checks), stack: stack.name, checks });
 });
 
 // GET /api/dashboard/chromadb-misses — queries that ChromaDB couldn't answer

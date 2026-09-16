@@ -72,26 +72,39 @@ userInput.addEventListener("keydown", (e) => {
 
 sendBtn.addEventListener("click", sendMessage);
 
-// Charger les modeles disponibles
+// Load models from the active LLM stack
 async function loadModels() {
   try {
     const res = await fetch("/api/chat/models");
     const data = await res.json();
-    const PREFERRED_MODEL = "mistral-small:24b";
-    if (data.models && data.models.length > 0) {
-      // Sort so preferred model appears first
-      const sorted = [...data.models].sort((a, b) =>
-        a === PREFERRED_MODEL ? -1 : b === PREFERRED_MODEL ? 1 : 0
+    const stackLabel = (data.stack || "LLM").toUpperCase();
+
+    if (!res.ok) {
+      setStatus(`${stackLabel} stack unavailable - run scripts/switch-stack.sh ${data.stack || ""}`.trim(), "error");
+      return;
+    }
+
+    // Embedding models can't chat; Ollama also lists the chat model as "<name>:latest"
+    const chatModels = (data.models || []).filter(
+      (m) => m !== data.embeddingModel && !/embed/i.test(m) && m !== `${data.chatModel}:latest`
+    );
+    if (data.chatModel && !chatModels.includes(data.chatModel)) {
+      chatModels.unshift(data.chatModel);
+    }
+
+    if (chatModels.length > 0) {
+      const sorted = [...chatModels].sort((a, b) =>
+        a === data.chatModel ? -1 : b === data.chatModel ? 1 : 0
       );
       modelSelect.innerHTML = sorted
-        .map((m) => `<option value="${m}"${m === PREFERRED_MODEL ? " selected" : ""}>${m}</option>`)
+        .map((m) => `<option value="${m}"${m === data.chatModel ? " selected" : ""}>${m}</option>`)
         .join("");
-      setStatus("Ollama connected", "success");
+      setStatus(`${stackLabel} stack connected`, "success");
     } else {
-      setStatus("No models found", "error");
+      setStatus(`No chat models found on ${stackLabel}`, "error");
     }
   } catch {
-    setStatus("Ollama unavailable - run 'ollama serve'", "error");
+    setStatus("LLM stack unavailable - run scripts/switch-stack.sh", "error");
   }
 }
 
@@ -321,9 +334,10 @@ async function sendMessage() {
         if (data.done) {
           if (data.tokenStats && typeof data.tokenStats.tokensPerSecond === "number") {
             const s = data.tokenStats;
+            const stackLabel = data.stack ? `${data.stack.toUpperCase()} \u00b7 ` : "";
             const statsDiv = document.createElement("div");
             statsDiv.className = "token-stats";
-            statsDiv.textContent = `${(s.promptTokens || 0) + (s.completionTokens || 0)} tokens (${s.promptTokens || 0} in \u00b7 ${s.completionTokens || 0} out) \u00b7 ${s.tokensPerSecond.toFixed(1)} tok/s`;
+            statsDiv.textContent = `${stackLabel}TTFT ${((s.ttftMs || 0) / 1000).toFixed(1)}s \u00b7 ${s.tokensPerSecond.toFixed(1)} tok/s \u00b7 ${s.promptTokens || 0} in / ${s.completionTokens || 0} out`;
             wrapperDiv.appendChild(statsDiv);
           }
           if (!firstTokenReceived) {
@@ -362,7 +376,7 @@ async function sendMessage() {
     }
   } catch (error) {
     removeTyping();
-    addMessage("assistant", "Connection error. Make sure Ollama is running.");
+    addMessage("assistant", "Connection error. Make sure PharmaLLM and its LLM stack are running.");
   } finally {
     sendBtn.disabled = false;
   }

@@ -215,7 +215,7 @@ tr:hover td{background:rgba(15,52,96,0.3)}
   <!-- LLM Models + News Agent -->
   <div class="row row-2">
     <div class="panel">
-      <h3>LLM Models (Ollama)</h3>
+      <h3>LLM Models (<span id="models-stack">…</span>)</h3>
       <div id="models-panel">
         <div class="skeleton skeleton-chart" style="height:120px"></div>
       </div>
@@ -488,9 +488,15 @@ function esc(str) {
 
 function renderHealthCards(health) {
   const checks = health.checks || {};
-  const icons = { ollama: '\u2699', chromadb: '\u26A1', searxng: '\u{1F50D}', neo4j: '\u{1F578}', sqlite: '\u{1F4BE}' };
+  const icons = { llm_chat: '\u2699', llm_embed: '\u{1F9E0}', search_index: '\u{1F4DA}', chromadb: '\u26A1', searxng: '\u{1F50D}', neo4j: '\u{1F578}', sqlite: '\u{1F4BE}' };
   const container = document.getElementById('health-cards');
   container.innerHTML = '';
+  if (health.stack) {
+    const stackCard = document.createElement('div'); stackCard.className = 'health-card ok';
+    const sn = document.createElement('div'); sn.className = 'health-card-name'; sn.textContent = 'stack'; stackCard.appendChild(sn);
+    const ss = document.createElement('div'); ss.className = 'health-card-status status-ok'; ss.textContent = String(health.stack).toUpperCase(); stackCard.appendChild(ss);
+    container.appendChild(stackCard);
+  }
   for (const [name, info] of Object.entries(checks)) {
     const ok = info.status === 'ok';
     const lat = info.latency_ms !== undefined ? info.latency_ms : null;
@@ -498,6 +504,7 @@ function renderHealthCards(health) {
     const barClass = lat !== null ? (lat < 10 ? 'fast' : lat < 30 ? 'medium' : 'slow') : 'fast';
     const card = document.createElement('div');
     card.className = 'health-card ' + (ok ? 'ok' : 'down');
+    if (info.detail) card.title = info.detail;
     const n = document.createElement('div'); n.className = 'health-card-name'; n.textContent = (icons[name] || '') + ' ' + name; card.appendChild(n);
     const s = document.createElement('div'); s.className = 'health-card-status ' + (ok ? 'status-ok' : 'status-down'); s.textContent = ok ? 'Online' : info.status; card.appendChild(s);
     if (lat !== null) {
@@ -592,48 +599,31 @@ async function renderGraphPanel() {
 }
 
 async function renderModelsPanel() {
+  const panel = document.getElementById('models-panel');
   try {
     const res = await fetch(API_BASE + '/api/chat/models');
     const data = await res.json();
-    const models = data.models || [];
+    document.getElementById('models-stack').textContent = (data.stack || '?').toUpperCase();
+    if (!res.ok) throw new Error(data.error || 'LLM stack not reachable');
 
-    let tagsData = null;
-    try {
-      const tagsRes = await fetch(location.origin.replace(/:\d+$/, ':11434') + '/api/tags');
-      tagsData = await tagsRes.json();
-    } catch { /* Ollama may not be same-origin accessible */ }
-
-    const modelDetails = {};
-    if (tagsData && tagsData.models) {
-      for (const m of tagsData.models) {
-        modelDetails[m.name] = {
-          size: m.size ? (m.size / 1024 / 1024 / 1024).toFixed(1) + ' GB' : '?',
-          params: (m.details && m.details.parameter_size) || '?',
-          quant: (m.details && m.details.quantization_level) || '',
-          family: (m.details && m.details.family) || '',
-        };
-      }
-    }
-
-    const panel = document.getElementById('models-panel');
     panel.innerHTML = '';
-    for (const name of models) {
-      const d = modelDetails[name] || {};
-      const isEmbed = name.includes('embed') || name.includes('nomic');
-      const isActive = name.includes('mistral-small');
-      const card = document.createElement('div'); card.className = 'model-card' + (isActive ? ' active' : '');
+    for (const name of data.models || []) {
+      const isChat = name === data.chatModel || name === data.chatModel + ':latest';
+      const isEmbed = name === data.embeddingModel || /embed/i.test(name);
+      const card = document.createElement('div'); card.className = 'model-card' + (isChat || name === data.embeddingModel ? ' active' : '');
       const icon = document.createElement('div'); icon.className = 'model-icon ' + (isEmbed ? 'embed' : 'llm'); icon.textContent = isEmbed ? '\u{1F9E0}' : '\u{1F916}'; card.appendChild(icon);
       const info = document.createElement('div'); info.className = 'model-info';
       const mn = document.createElement('div'); mn.className = 'model-name'; mn.textContent = name; info.appendChild(mn);
-      const mm = document.createElement('div'); mm.className = 'model-meta'; mm.textContent = (d.params || '?') + ' params' + (d.quant ? ' \u00b7 ' + d.quant : '') + (d.family ? ' \u00b7 ' + d.family : ''); info.appendChild(mm);
+      const mm = document.createElement('div'); mm.className = 'model-meta';
+      mm.textContent = isChat ? 'chat model' : name === data.embeddingModel ? 'embedding model' : 'available';
+      info.appendChild(mm);
       card.appendChild(info);
-      const ms = document.createElement('div'); ms.className = 'model-size'; ms.textContent = d.size || '?'; card.appendChild(ms);
       panel.appendChild(card);
     }
-  } catch {
-    const panel = document.getElementById('models-panel');
+  } catch (err) {
     panel.innerHTML = '';
-    const p = document.createElement('p'); p.style.cssText = 'color:#666;text-align:center;padding:40px'; p.textContent = 'Ollama not reachable';
+    const p = document.createElement('p'); p.style.cssText = 'color:#666;text-align:center;padding:40px';
+    p.textContent = err instanceof Error ? err.message : 'LLM stack not reachable';
     panel.appendChild(p);
   }
 }
