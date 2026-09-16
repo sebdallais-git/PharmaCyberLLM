@@ -7,7 +7,7 @@
 **Local LLM** | **Voice Input** | **Self-Healing RAG** | **Knowledge Graph** | **Reasoning Transparency** | **KB Health Monitoring** | **Zero Cloud**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-3178C6?logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Ollama](https://img.shields.io/badge/Ollama-Mistral%2024B-000000?logo=ollama&logoColor=white)](https://ollama.com)
+[![Ollama](https://img.shields.io/badge/Ollama%20%2F%20MLX-Qwen3.8%2027B-000000?logo=ollama&logoColor=white)](https://ollama.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-FF6F61?logo=data:image/svg+xml;base64,&logoColor=white)](https://www.trychroma.com)
 [![Neo4j](https://img.shields.io/badge/Neo4j-Graph%20RAG-008CC1?logo=neo4j&logoColor=white)](https://neo4j.com)
 [![N8N](https://img.shields.io/badge/N8N-Workflow-EA4B71?logo=n8n&logoColor=white)](https://n8n.io)
@@ -28,6 +28,7 @@
 
 - [Why This Exists](#why-this-exists)
 - [Quick Start](#quick-start)
+- [LLM Stacks (Ollama / MLX)](#llm-stacks-ollama--mlx)
 - [How It Works](#how-it-works)
 - [Voice Input](#voice-input)
 - [Real-Time Reasoning](#real-time-reasoning)
@@ -56,7 +57,7 @@
 PharmaCyberLLM runs **entirely on your machine**. No API keys. No cloud. No data leaves your laptop.
 
 It combines:
-- A **local LLM** (Mistral 24B via Ollama, 8K context) for conversational intelligence
+- A **local LLM** (Qwen3.8 27B, 16k context) on your choice of Ollama or MLX stacks for conversational intelligence
 - **Voice input** via Whisper for hands-free querying
 - **Real-time reasoning transparency** showing each RAG pipeline step as it happens
 - A **triple hybrid store** (embedded index + ChromaDB + Neo4j graph) with 36+ curated pharma/cyber documents
@@ -79,20 +80,16 @@ It combines:
 ## Quick Start
 
 ```bash
-# 1. Install Ollama
-brew install ollama
-ollama pull mistral-small:24b
-ollama pull nomic-embed-text   # embedding model
-
-# 2. Clone and install
+# 1. Install Ollama and Node dependencies
+brew install ollama && brew services start ollama
 git clone https://github.com/sebdallais-git/PharmaCyberLLM.git
 cd PharmaCyberLLM
 npm install
 
-# 3. Start Ollama
-ollama serve &
+# 2. Download both LLM stacks (Ollama + MLX, about 33 GB) and build the Ollama indexes
+scripts/switch-stack.sh prepare
 
-# 4. Launch
+# 3. Launch on the active stack (Ollama by default)
 npm run dev
 
 # --> Chat:      http://localhost:3000
@@ -143,6 +140,39 @@ Graph data is also populated automatically as the news agent ingests new content
 
 ---
 
+## LLM Stacks (Ollama / MLX)
+
+PharmaLLM runs every local model call (chat and embeddings) on exactly one of two stacks. Both use the same models, so the stacks can be compared fairly.
+
+| | Ollama stack | MLX stack |
+|---|---|---|
+| Chat | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 16k context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` (:8080) |
+| Embeddings | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` (:8081) |
+| Search indexes | `knowledge_base_ollama`, `knowledge/.index.ollama.json` | `knowledge_base_mlx`, `knowledge/.index.mlx.json` |
+| Index build (7k raw docs) | 15.6 min | 11.6 min |
+
+Only one stack runs at a time, and the app never falls back to the other one.
+
+```bash
+scripts/switch-stack.sh mlx      # stop Ollama, start MLX, restart PharmaLLM (rolls back on failure)
+scripts/switch-stack.sh ollama   # and back
+scripts/switch-stack.sh status   # ports and index counts for both stacks
+```
+
+The first switch to a stack builds its indexes from `knowledge/` and `data/raw_documents/`, which takes a while. Rebuild them later with `LLM_PROVIDER=<stack> npx tsx scripts/reindex-stack.ts` (app stopped) or `POST /api/knowledge/reindex` (app running).
+
+### Benchmarking the stacks
+
+```bash
+scripts/switch-stack.sh ollama && npx tsx scripts/benchmark-stack.ts
+scripts/switch-stack.sh mlx    && npx tsx scripts/benchmark-stack.ts
+npx tsx scripts/compare-benchmarks.ts data/benchmarks/ollama-<time>.json data/benchmarks/mlx-<time>.json
+```
+
+The benchmark sends the questions from `bench/questions.json` through `/api/chat` in benchmark mode (temperature 0, no web search, answers capped at 1024 tokens on both stacks, background LLM jobs paused), one cold run per question after a warm-up question outside the set, so prompt caching doesn't flatter repeated runs. The comparison reports TTFT, decode speed, embedding and retrieval time, peak memory with change %, retrieval overlap, and a blind A/B review page.
+
+---
+
 ## How It Works
 
 ```mermaid
@@ -157,7 +187,7 @@ flowchart TD
         KS -.->|Steps streamed| REASON["Reasoning Panel\n(live pipeline steps)"]
         GS -.->|Steps streamed| REASON
         WS -.->|Steps streamed| REASON
-        MC --> LLM["Ollama Mistral 24B\n(8K context)"]
+        MC --> LLM["Active LLM Stack\n(Qwen3.8 27B, 16k context)"]
         LLM --> RESP["Streamed response\nwith sources + token stats"]
         LLM --> GD["Gap Detector"]
     end
@@ -234,7 +264,7 @@ The killer feature. PharmaCyberLLM **knows when it doesn't know** — fixes itse
 
 ```mermaid
 flowchart TD
-    A["User Question"] --> B["Ollama Response\n+ response_id"]
+    A["User Question"] --> B["Active Stack Response\n+ response_id"]
     B --> C{"Gap Detector:\nConfident?"}
     C -->|Yes| D["Done"]
     C -->|No| E["N8N Webhook\n(with gap_id)"]
@@ -300,7 +330,7 @@ A real-time dark-themed dashboard at `/dashboard` with auto-refresh every 60 sec
 | **Metric Cards** | Questions Today, Confidence Rate, Avg User Rating, Knowledge Base Size — with trend arrows |
 | **Time Series** | 30-day Questions & Confidence (dual-axis bar + line), User Ratings (with 3.0 baseline) |
 | **Gap Intelligence** | Recent gaps table with color-coded status badges, top gap topics bar chart |
-| **System Health** | Knowledge sources donut chart, service health checks (Ollama, ChromaDB, SearXNG, SQLite) with latency |
+| **System Health** | Knowledge sources donut chart, service health checks (active LLM stack, ChromaDB, SearXNG, SQLite) with latency |
 
 All metrics are cached for 30 seconds and backed by indexed SQL queries.
 
@@ -363,8 +393,8 @@ graph TB
         N8N_RESOLVE["Resolution Check"]
     end
 
-    subgraph LLM["Local LLM -- Ollama"]
-        MODEL["mistral-small:24b<br/><i>Chat + re-ranking (8K ctx)</i><br/><i>nomic-embed-text embeddings</i>"]
+    subgraph LLM["Local LLM -- Ollama or MLX"]
+        MODEL["Qwen3.8 27B<br/><i>Chat + re-ranking (16k ctx)</i><br/><i>Qwen3-Embedding-0.6B embeddings</i>"]
     end
 
     subgraph STORE["Data Layer"]
@@ -430,7 +460,7 @@ graph TB
 
 ## Knowledge Graph (Neo4j)
 
-The chat pipeline runs ChromaDB vector search and Neo4j graph traversal **in parallel** via `Promise.all`, merging results before passing context to Mistral. Graph queries have a 3-second timeout so they never block a response.
+The chat pipeline runs ChromaDB vector search and Neo4j graph traversal **in parallel** via `Promise.all`, merging results before passing context to the active stack's chat model. Graph queries have a 3-second timeout so they never block a response.
 
 ```mermaid
 flowchart LR
@@ -444,7 +474,7 @@ flowchart LR
     end
 
     PARALLEL --> MERGE["Merged context"]
-    MERGE --> LLM["Mistral 24B"]
+    MERGE --> LLM["Active LLM Stack"]
 
     style PARALLEL fill:#1e1b4b,stroke:#a78bfa,color:#e5e7eb
     style LLM fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
@@ -628,8 +658,8 @@ Import: **N8N > Workflows > Import** > `n8n/knowledge_qa_workflow.json`
 |-------|-----------|---------|
 | **Runtime** | Node.js 22 + TypeScript 5.6 | Type-safe server |
 | **Server** | Express 4.21 | REST API + static file serving |
-| **LLM** | Ollama (mistral-small:24b, 8K ctx) | Inference + re-ranking |
-| **Embeddings** | nomic-embed-text (via Ollama) | Vector embeddings (configurable) |
+| **LLM** | Ollama or MLX (Qwen3.8 27B, 16k ctx) — see [LLM Stacks](#llm-stacks-ollama--mlx) | Inference + re-ranking |
+| **Embeddings** | Qwen3-Embedding-0.6B (Ollama or MLX) | Vector embeddings |
 | **Voice** | Whisper (whisper-node) | Local speech-to-text transcription |
 | **Vector DB** | ChromaDB | Persistent vector store |
 | **Graph DB** | Neo4j Community (Docker) | Knowledge graph — 14 entity types, 21 relationship types |
@@ -707,7 +737,6 @@ PharmaCyberLLM/
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/chat` | POST | SSE-streamed response with reasoning steps + token stats + `response_id` |
-| `/api/chat/models` | GET | List available Ollama models (sorted, Mistral first) |
 
 The `/names` command toggles whether responses name specific companies in cyber incident discussions.
 
@@ -740,7 +769,7 @@ The `/names` command toggles whether responses name specific companies in cyber 
 | `/api/dashboard/chromadb-misses` | GET | Recent ChromaDB misses + top 20 missed queries |
 | `/api/dashboard/kb-health` | GET | KB health trends (24h average, history) |
 | `/api/dashboard/kb-health` | POST | Receive health report from N8N QA workflow |
-| `/api/health` | GET | Service health (Ollama, ChromaDB, SearXNG, SQLite, Neo4j) |
+| `/api/health` | GET | Health of the active stack (`llm_chat`, `llm_embed`, `search_index`) plus ChromaDB, SearXNG, Neo4j, SQLite |
 | `/dashboard` | GET | Monitoring dashboard UI |
 
 ### Graph
@@ -750,6 +779,15 @@ The `/names` command toggles whether responses name specific companies in cyber 
 | `/api/graph/stats` | GET | Node and relationship counts by type |
 | `/api/graph/search` | POST | Search by entity name, returns neighbors |
 | `/api/graph/rebuild` | POST | Clear graph and run full Python extraction |
+
+### Stack & Benchmark
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat/models` | GET | Active stack, its chat and embedding models, available models |
+| `/api/llm/complete` | POST | `{ prompt }` → `{ response }` on the active stack (used by N8N) |
+| `/api/bench/start` | POST | Pause background LLM jobs for a benchmark |
+| `/api/bench/stop` | POST | Resume background LLM jobs |
+| `/api/bench/status` | GET | Benchmark flag and running background jobs |
 
 ### Agent
 | Endpoint | Method | Description |
@@ -768,8 +806,11 @@ All optional — works out of the box with zero configuration.
 | `PORT` | `3000` | HTTP server port |
 | `HTTPS_PORT` | `3443` | HTTPS server port (requires certs) |
 | `HOST` | `0.0.0.0` | Bind address |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `LLM_PROVIDER` | `ollama` | Active stack (`ollama` or `mlx`); set by `scripts/switch-stack.sh` |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama stack endpoint |
+| `MLX_CHAT_URL` | `http://localhost:8080` | MLX chat server endpoint |
+| `MLX_EMBED_URL` | `http://localhost:8081` | MLX embedding server endpoint |
+| `MLX_PYTHON` | `python3` | Python used to create `python/mlx-venv` |
 | `CHROMADB_URL` | `http://localhost:8100` | ChromaDB server endpoint |
 | `N8N_WEBHOOK_URL` | *(none)* | N8N webhook for gap auto-fill |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt connection URI |
@@ -807,7 +848,7 @@ flowchart LR
 
 **100% local. Zero cloud. Self-healing. Observable. Voice-enabled. Graph-powered. Always current.**
 
-*Mistral 24B* · *Voice Input* · *Reasoning Transparency* · *Triple-Store RAG + Re-ranking* · *ChromaDB* · *Neo4j Graph* · *KB Health QA* · *194 News Topics* · *N8N Orchestration*
+*Qwen3.8 27B* · *Voice Input* · *Reasoning Transparency* · *Triple-Store RAG + Re-ranking* · *ChromaDB* · *Neo4j Graph* · *KB Health QA* · *194 News Topics* · *N8N Orchestration*
 
 <br/>
 
