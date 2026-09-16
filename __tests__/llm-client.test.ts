@@ -1,0 +1,182 @@
+import { afterEach, describe, expect, it } from "@jest/globals";
+import { buildStacks } from "../src/config/llm-stacks.js";
+import type { StackConfig } from "../src/config/llm-stacks.js";
+import {
+  QUERY_INSTRUCTION,
+  StackUnavailableError,
+  computeTokenStats,
+  createLlmClient,
+  formatEmbeddingInput,
+  parseSseLines,
+} from "../src/services/llm-client.js";
+import type { StatsCollector } from "../src/services/llm-client.js";
+import { sendJson, sendSse, startFakeServer } from "./helpers/fake-openai-server.js";
+import type { FakeServer } from "./helpers/fake-openai-server.js";
+
+const CLOSED_URL = "http://127.0.0.1:9";
+
+function stackFor(baseUrl: string): StackConfig {
+  return { ...buildStacks({}).mlx, chatBaseUrl: baseUrl, embedBaseUrl: baseUrl };
+}
+
+function delta(content: string): unknown {
+  return { choices: [{ delta: { content } }] };
+}
+
+let server: FakeServer | null = null;
+
+afterEach(async () => {
+  await server?.close();
+  server = null;
+});
+
+describe("parseSseLines", () => {
+  it("keeps an incomplete trailing line for the next read", () => {
+    const first = parseSseLines('data: {"a":1}\n\ndata: {"b"');
+    expect(first.events).toEqual(['{"a":1}']);
+    const second = parseSseLines(first.rest + ":2}\n\n");
+    expect(second.events).toEqual(['{"b":2}']);
+    expect(second.rest).toBe("");
+  });
+
+  it("ignores comments and blank lines", () => {
+    expect(parseSseLines(": keep-alive\n\ndata: [DONE]\n").events).toEqual(["[DONE]"]);
+  });
+});
+
+describe("computeTokenStats", () => {
+  it("measures TTFT and decode speed excluding the first token", () => {
+    const stats = computeTokenStats({
+      start: 1000,
+      firstTokenAt: 1400,
+      lastTokenAt: 1900,
+      contentChunks: 6,
+      usage: { prompt_tokens: 120, completion_tokens: 11 },
+    });
+    expect(stats.ttftMs).toBe(400);
+    expect(stats.tokensPerSecond).toBeCloseTo(20); // 10 tokens after the first, in 500 ms
+    expect(stats.promptTokens).toBe(120);
+    expect(stats.completionTokens).toBe(11);
+    expect(stats.tokenCountSource).toBe("usage");
+  });
+
+  it("counts content chunks when the server sends no usage", () => {
+    const stats = computeTokenStats({ start: 0, firstTokenAt: 100, lastTokenAt: 300, contentChunks: 5, usage: null });
+    expect(stats.completionTokens).toBe(5);
+    expect(stats.tokensPerSecond).toBeCloseTo(20); // 4 tokens in 200 ms
+    expect(stats.tokenCountSource).toBe("chunks");
+  });
+
+  it("reports zero when nothing was generated", () => {
+    const stats = computeTokenStats({ start: 0, firstTokenAt: null, lastTokenAt: 0, contentChunks: 0, usage: null });
+    expect(stats.ttftMs).toBe(0);
+    expect(stats.tokensPerSecond).toBe(0);
+  });
+});
+
+describe("formatEmbeddingInput", () => {
+  it("adds the retrieval instruction to queries only", () => {
+    expect(formatEmbeddingInput("What is SafeMode?", "query")).toBe(
+      `Instruct: ${QUERY_INSTRUCTION}\nQuery:What is SafeMode?`
+    );
+    expect(formatEmbeddingInput("SafeMode snapshots are immutable.", "document")).toBe(
+      "SafeMode snapshots are immutable."
+    );
+  });
+});
+
+describe("createLlmClient", () => {
+  it("streams tokens, sends the stack's request fields, and collects stats", async () => {
+    server = await startFakeServer((_req, res) =>
+      sendSse(res, [
+        delta("Hel"),
+        delta("lo"),
+        { choices: [], usage: { prompt_tokens: 42, completion_tokens: 2 } },
+      ])
+    );
+    const ticks = [0, 250, 350];
+    const client = createLlmClient(stackFor(server.baseUrl), () => ticks.shift() ?? 350);
+    const stats: StatsCollector = {};
+    const tokens: string[] = [];
+
+    for await (const token of client.streamChat([{ role: "user", content: "hi" }], { temperature: 0 }, stats)) {
+      tokens.push(token);
+    }
+
+    expect(tokens).toEqual(["Hel", "lo"]);
+    expect(server.requests[0].url).toBe("/v1/chat/completions");
+    const body = server.requests[0].body as Record<string, unknown>;
+    expect(body.model).toBe("mlx-community/Qwen3.8-27B-4bit");
+    expect(body.temperature).toBe(0);
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(stats.result).toEqual({
+      promptTokens: 42,
+      completionTokens: 2,
+      tokensPerSecond: 10,
+      ttftMs: 250,
+      tokenCountSource: "usage",
+    });
+  });
+
+  it("returns non-streaming content with the default temperature", async () => {
+    server = await startFakeServer((_req, res) => sendJson(res, 200, { choices: [{ message: { content: "pong" } }] }));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.chat([{ role: "user", content: "ping" }])).resolves.toBe("pong");
+    const body = server.requests[0].body as Record<string, unknown>;
+    expect(body.stream).toBe(false);
+    expect(body.temperature).toBe(0.3);
+  });
+
+  it("returns embeddings in input order", async () => {
+    server = await startFakeServer((_req, res) =>
+      sendJson(res, 200, { data: [{ index: 1, embedding: [0, 1] }, { index: 0, embedding: [1, 0] }] })
+    );
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.embedMany(["a", "b"], "document")).resolves.toEqual([[1, 0], [0, 1]]);
+    expect(server.requests[0].url).toBe("/v1/embeddings");
+    const body = server.requests[0].body as { model: string; input: string[] };
+    expect(body.model).toBe("mlx-community/Qwen3-Embedding-0.6B-8bit");
+    expect(body.input).toEqual(["a", "b"]);
+  });
+
+  it("rejects a response with the wrong number of embeddings", async () => {
+    server = await startFakeServer((_req, res) => sendJson(res, 200, { data: [{ index: 0, embedding: [1] }] }));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.embedMany(["a", "b"], "document")).rejects.toThrow("expected 2 embeddings, got 1");
+  });
+
+  it("lists models and reports reachability", async () => {
+    server = await startFakeServer((_req, res) => sendJson(res, 200, { data: [{ id: "x" }, { id: "y" }] }));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.listModels()).resolves.toEqual(["x", "y"]);
+    await expect(client.isReachable()).resolves.toBe(true);
+    await expect(createLlmClient(stackFor(CLOSED_URL)).isReachable()).resolves.toBe(false);
+  });
+
+  it("fails with a clear error and no fallback when the stack is down", async () => {
+    const client = createLlmClient(stackFor(CLOSED_URL));
+
+    await expect(client.chat([{ role: "user", content: "hi" }])).rejects.toBeInstanceOf(StackUnavailableError);
+    await expect(client.embed("hi", "query")).rejects.toThrow(
+      `MLX stack not reachable at ${CLOSED_URL}/v1/embeddings — run scripts/switch-stack.sh mlx`
+    );
+  });
+
+  it("surfaces HTTP errors with status and body", async () => {
+    server = await startFakeServer((_req, res) => {
+      res.writeHead(500);
+      res.end("model not loaded");
+    });
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.chat([{ role: "user", content: "hi" }])).rejects.toThrow(
+      "mlx /v1/chat/completions failed (500): model not loaded"
+    );
+  });
+});
