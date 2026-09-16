@@ -110,6 +110,9 @@ function getSystemPrompt(): string {
 
 const GAP_DISCLAIMER = "\n\n---\n*I'm not fully confident in this answer. I'm researching this topic now and should know more soon.*";
 
+// Same cap on both stacks so benchmark answers are comparable
+const BENCHMARK_MAX_TOKENS = 1024;
+
 // POST /api/chat - Send a message and receive a streaming response
 router.post("/", async (req: Request, res: Response): Promise<void> => {
   const { message, history, model, webSearch, benchmark } = req.body as {
@@ -337,7 +340,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     for await (const token of llm.streamChat(
       messages,
-      { model: chatModel, temperature: benchmark ? 0 : undefined },
+      { model: chatModel, temperature: benchmark ? 0 : undefined, maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined },
       statsCollector
     )) {
       fullResponse += token;

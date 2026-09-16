@@ -1,5 +1,5 @@
 // Benchmark the active stack end to end through the running PharmaLLM app
-// Usage: npx tsx scripts/benchmark-stack.ts [--runs 3] [--app http://localhost:3000] [--questions bench/questions.json]
+// Usage: npx tsx scripts/benchmark-stack.ts [--runs 1] [--app http://localhost:3000] [--questions bench/questions.json]
 
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -25,6 +25,8 @@ interface ChatEvent {
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+// Not in the question set, so no benchmark question hits a warm prompt cache
+const WARM_UP_QUESTION = "What is a batch record in pharmaceutical manufacturing?";
 
 function parseOptions(argv: string[]): Options {
   const value = (flag: string): string | undefined => {
@@ -32,7 +34,7 @@ function parseOptions(argv: string[]): Options {
     return index >= 0 ? argv[index + 1] : undefined;
   };
   return {
-    runs: Number(value("--runs") ?? 3),
+    runs: Number(value("--runs") ?? 1),
     appUrl: value("--app") ?? "http://localhost:3000",
     questionsPath: value("--questions") ?? join(process.cwd(), "bench", "questions.json"),
   };
@@ -170,7 +172,7 @@ async function main(): Promise<void> {
     await waitForIdle(options.appUrl);
 
     console.log(`Benchmarking ${stack}: ${questions.length} questions × ${options.runs} runs (plus one warm-up)`);
-    await ask(options.appUrl, questions[0].question, 0); // warm-up, discarded
+    await ask(options.appUrl, WARM_UP_QUESTION, 0); // warm-up, discarded
 
     for (const question of questions) {
       const runs: RunResult[] = [];

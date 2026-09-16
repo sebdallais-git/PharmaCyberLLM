@@ -12,6 +12,7 @@ export interface ChatMessage {
 export interface ChatOptions {
   model?: string;
   temperature?: number;
+  maxTokens?: number;
 }
 
 export interface TokenStats {
@@ -70,6 +71,8 @@ export interface TimingInput {
 
 const DEFAULT_TEMPERATURE = 0.3;
 const PROBE_TIMEOUT_MS = 3000;
+// Stacks have different server defaults (mlx_lm.server stops at 512), so the client always sends an explicit limit.
+const DEFAULT_MAX_TOKENS = 4096;
 
 // Qwen3-Embedding expects an instruction on queries only; documents are embedded as-is
 export const QUERY_INSTRUCTION =
@@ -143,6 +146,7 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
       temperature: options.temperature ?? DEFAULT_TEMPERATURE,
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
+      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
       ...stack.chatExtraBody,
     };
   }

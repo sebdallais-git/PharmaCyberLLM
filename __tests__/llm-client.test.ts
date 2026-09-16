@@ -111,6 +111,7 @@ describe("createLlmClient", () => {
     expect(body.stream).toBe(true);
     expect(body.stream_options).toEqual({ include_usage: true });
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(body.max_tokens).toBe(4096);
     expect(stats.result).toEqual({
       promptTokens: 42,
       completionTokens: 2,
@@ -128,6 +129,16 @@ describe("createLlmClient", () => {
     const body = server.requests[0].body as Record<string, unknown>;
     expect(body.stream).toBe(false);
     expect(body.temperature).toBe(0.3);
+    expect(body.max_tokens).toBe(4096);
+  });
+
+  it("sends an explicit max_tokens override", async () => {
+    server = await startFakeServer((_req, res) => sendJson(res, 200, { choices: [{ message: { content: "ok" } }] }));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    await expect(client.chat([{ role: "user", content: "hi" }], { maxTokens: 1024 })).resolves.toBe("ok");
+    const body = server.requests[0].body as Record<string, unknown>;
+    expect(body.max_tokens).toBe(1024);
   });
 
   it("returns embeddings in input order", async () => {
