@@ -1,18 +1,24 @@
 // ChromaDB vector store client for RAG
-// Connects to a running ChromaDB server via its REST API
+// Connects to a running ChromaDB server via its REST API. Each LLM stack uses its own collection.
 
-import { getEmbedding } from "./ollama.js";
+import { getActiveStack } from "../config/llm-stacks.js";
+import { getLlmClient } from "./llm-client.js";
+import { assertIndexUsable, expectedIndexMeta, indexMetaFromChroma, indexMetaToChroma } from "./index-guard.js";
+import type { IndexMeta } from "./index-guard.js";
+import { toBatches } from "../utils/batches.js";
 
 const CHROMADB_URL = process.env.CHROMADB_URL ?? "http://localhost:8100";
 const TENANT = "default_tenant";
 const DATABASE = "default_database";
-const COLLECTION_NAME = "knowledge_base";
+const EMBED_BATCH_SIZE = 32;
+const UPSERT_BATCH_SIZE = 500;
 
 const BASE = `${CHROMADB_URL}/api/v2/tenants/${TENANT}/databases/${DATABASE}/collections`;
 
 interface ChromaCollection {
   id: string;
   name: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface ChromaQueryResult {
@@ -22,40 +28,61 @@ interface ChromaQueryResult {
   distance: number;
 }
 
-// Resolve the collection ID from its name (cached after first call)
-let collectionId: string | null = null;
+export interface ChromaEntry {
+  id: string;
+  document: string;
+  metadata: Record<string, unknown>;
+}
 
-async function getCollectionId(): Promise<string> {
-  if (collectionId) return collectionId;
+export interface ChromaCollectionInfo {
+  meta: IndexMeta | null;
+  count: number;
+}
 
+// Cached collection ID, keyed by name so a different stack never reuses it
+let cachedCollection: { name: string; id: string } | null = null;
+
+function collectionName(): string {
+  return getActiveStack().chromaCollection;
+}
+
+async function findCollection(): Promise<ChromaCollection | null> {
   const resp = await fetch(BASE);
   if (!resp.ok) {
     throw new Error(`ChromaDB: failed to list collections (${resp.status})`);
   }
-
   const collections = (await resp.json()) as ChromaCollection[];
-  const match = collections.find((c) => c.name === COLLECTION_NAME);
+  return collections.find((c) => c.name === collectionName()) ?? null;
+}
 
-  if (!match) {
-    // Create the collection if it doesn't exist
-    const createResp = await fetch(BASE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: COLLECTION_NAME,
-        metadata: { "hnsw:space": "cosine" },
-      }),
-    });
-    if (!createResp.ok) {
-      throw new Error(`ChromaDB: failed to create collection (${createResp.status})`);
-    }
-    const created = (await createResp.json()) as ChromaCollection;
-    collectionId = created.id;
-  } else {
-    collectionId = match.id;
+// Resolve the active stack's collection ID, creating the collection with index metadata if needed
+async function getCollectionId(): Promise<string> {
+  const name = collectionName();
+  if (cachedCollection?.name === name) return cachedCollection.id;
+
+  const existing = await findCollection();
+  if (existing) {
+    cachedCollection = { name, id: existing.id };
+    return existing.id;
   }
 
-  return collectionId;
+  const createResp = await fetch(BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      metadata: {
+        "hnsw:space": "cosine",
+        ...indexMetaToChroma(expectedIndexMeta(getActiveStack())),
+      },
+    }),
+  });
+  if (!createResp.ok) {
+    throw new Error(`ChromaDB: failed to create collection (${createResp.status})`);
+  }
+  const created = (await createResp.json()) as ChromaCollection;
+  cachedCollection = { name, id: created.id };
+  return created.id;
 }
 
 // Split text into chunks of roughly ~500 tokens (≈ 2000 chars)
@@ -104,17 +131,28 @@ function makeId(text: string): string {
   return Math.abs(hash).toString(36).padStart(8, "0");
 }
 
+// Chroma rejects duplicate IDs inside one upsert, and identical chunks hash to the same ID
+export function dedupeEntries(entries: ChromaEntry[]): ChromaEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+}
+
 /**
  * Query ChromaDB for the most relevant chunks.
- * Accepts an optional pre-computed embedding to avoid redundant Ollama calls.
+ * Accepts an optional pre-computed embedding to avoid a redundant embedding call.
  */
 export async function searchChromaDB(
   query: string,
   topK: number = 5,
   precomputedEmbedding?: number[]
 ): Promise<ChromaQueryResult[]> {
+  assertIndexUsable();
   const id = await getCollectionId();
-  const queryEmbedding = precomputedEmbedding ?? await getEmbedding(query);
+  const queryEmbedding = precomputedEmbedding ?? await getLlmClient().embed(query, "query");
 
   const resp = await fetch(`${BASE}/${id}/query`, {
     method: "POST",
@@ -153,56 +191,57 @@ export async function searchChromaDB(
 }
 
 /**
- * Chunk texts, embed via Ollama, and upsert into ChromaDB.
+ * Chunk texts, embed them on the active stack in batches, and upsert into ChromaDB.
  */
 export async function addToChromaDB(
   texts: string[],
   metadatas: Record<string, unknown>[]
 ): Promise<number> {
   const id = await getCollectionId();
+  const addedAt = new Date().toISOString();
 
-  const allIds: string[] = [];
-  const allDocs: string[] = [];
-  const allEmbeddings: number[][] = [];
-  const allMetadatas: Record<string, unknown>[] = [];
-
-  for (let t = 0; t < texts.length; t++) {
-    const chunks = chunkText(texts[t]);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const chunkId = makeId(chunk);
-      const embedding = await getEmbedding(chunk);
-      allIds.push(chunkId);
-      allDocs.push(chunk);
-      allEmbeddings.push(embedding);
-      allMetadatas.push({
-        ...metadatas[t],
-        chunk_index: i,
-        total_chunks: chunks.length,
-        added_at: new Date().toISOString(),
+  const entries: ChromaEntry[] = [];
+  texts.forEach((text, t) => {
+    const chunks = chunkText(text);
+    chunks.forEach((chunk, i) => {
+      entries.push({
+        id: makeId(chunk),
+        document: chunk,
+        metadata: { ...metadatas[t], chunk_index: i, total_chunks: chunks.length, added_at: addedAt },
       });
-    }
-  }
-
-  if (allIds.length === 0) return 0;
-
-  const resp = await fetch(`${BASE}/${id}/upsert`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ids: allIds,
-      documents: allDocs,
-      embeddings: allEmbeddings,
-      metadatas: allMetadatas,
-    }),
+    });
   });
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`ChromaDB upsert failed (${resp.status}): ${body}`);
+  const unique = dedupeEntries(entries);
+  if (unique.length === 0) return 0;
+
+  const client = getLlmClient();
+  const embeddings: number[][] = [];
+  for (const batch of toBatches(unique, EMBED_BATCH_SIZE)) {
+    embeddings.push(...(await client.embedMany(batch.map((e) => e.document), "document")));
   }
 
-  return allIds.length;
+  let offset = 0;
+  for (const batch of toBatches(unique, UPSERT_BATCH_SIZE)) {
+    const resp = await fetch(`${BASE}/${id}/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ids: batch.map((e) => e.id),
+        documents: batch.map((e) => e.document),
+        embeddings: embeddings.slice(offset, offset + batch.length),
+        metadatas: batch.map((e) => e.metadata),
+      }),
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(`ChromaDB upsert failed (${resp.status}): ${body}`);
+    }
+    offset += batch.length;
+  }
+
+  return unique.length;
 }
 
 /**
@@ -225,6 +264,19 @@ export async function chromaDocumentExists(source: string): Promise<boolean> {
 
   const data = (await resp.json()) as { ids: string[] };
   return data.ids.length > 0;
+}
+
+/**
+ * Metadata and size of the active stack's collection, or null if it doesn't exist.
+ * Unlike the other functions, this never creates the collection.
+ */
+export async function getChromaCollectionInfo(): Promise<ChromaCollectionInfo | null> {
+  const collection = await findCollection();
+  if (!collection) return null;
+
+  const countResp = await fetch(`${BASE}/${collection.id}/count`);
+  const count = countResp.ok ? ((await countResp.json()) as number) : 0;
+  return { meta: indexMetaFromChroma(collection.metadata), count };
 }
 
 /**
@@ -286,26 +338,24 @@ export async function isChromaDBAvailable(): Promise<boolean> {
 }
 
 /**
- * Delete the collection and reset the cached ID.
+ * Delete the active stack's collection and reset the cached ID.
  */
 export async function deleteChromaCollection(): Promise<void> {
-  const id = await getCollectionId().catch(() => null);
-  if (!id) return;
+  cachedCollection = null;
+  const existing = await findCollection();
+  if (!existing) return;
 
-  const resp = await fetch(`${BASE}/${id}`, { method: "DELETE" });
+  const resp = await fetch(`${BASE}/${encodeURIComponent(existing.name)}`, { method: "DELETE" });
   if (!resp.ok && resp.status !== 404) {
     throw new Error(`ChromaDB: failed to delete collection (${resp.status})`);
   }
-  collectionId = null;
 }
 
 /**
- * Delete and recreate the collection (empty).
+ * Delete and recreate the active stack's collection (empty, with index metadata).
  */
 export async function recreateChromaCollection(): Promise<void> {
   await deleteChromaCollection();
-  // Force re-creation
-  collectionId = null;
   await getCollectionId();
 }
 
