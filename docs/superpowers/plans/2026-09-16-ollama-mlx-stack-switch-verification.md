@@ -240,3 +240,45 @@ All steps (1–8) passed with no deviations from expected behavior. No
 workarounds beyond the brief's own documented fallback (the Homebrew
 upgrade in Step 3, which was itself expected/prescribed by the brief) were
 needed. Proceeding to Step 10 (commit).
+
+## Bring-up (2026-09-16)
+
+### Index builds
+
+| Stack | In-memory chunks | ChromaDB chunks | Raw documents skipped | Build time |
+|---|---|---|---|---|
+| Ollama (`qwen3-embedding:0.6b-q8_0`) | 7,614 | 7,277 upserted (7,262 unique) | 0 | 935.6 s (15.6 min) |
+| MLX (`Qwen3-Embedding-0.6B-8bit`) | 7,617 | 7,280 | 0 | 697.9 s (11.6 min) |
+
+Sources: `data/logs/reindex-ollama.log`, `data/logs/reindex-mlx.log`. The MLX build included 3 more raw documents (news saved by the app between builds). The partial Ollama index built earlier by the long-running dev server was moved aside before the rebuild and deleted afterwards.
+
+### Embedding smoke tests
+
+- Ollama (`:11434`): `dims=1024 relevant=0.798 unrelated=0.191 determinism=1.000000` → PASS
+- MLX (`:8081`): `dims=1024 relevant=0.799 unrelated=0.194 determinism=1.000000` → PASS
+
+### Cross-stack embedding parity
+
+`ollama vs mlx: mean cosine 0.9986, min 0.9875 over 20 texts` → PASS (threshold 0.98)
+
+### Benchmark-mode chat (same question, via `/api/chat`)
+
+| Stack | Run | TTFT | Decode | Prompt / completion tokens | Total |
+|---|---|---|---|---|---|
+| Ollama | 1st | 21,765 ms | 12.3 tok/s | 2,320 / 912 | 96.4 s |
+| MLX | 1st | 55,551 ms | 12.8 tok/s | 2,320 / 512 | 95.6 s |
+| MLX | repeat, same question | 611 ms | 12.9 tok/s | 2,320 / 512 | 40.4 s |
+| MLX | new question | 54,443 ms | 7.6 tok/s | 2,413 / 512 | 121.9 s |
+
+Findings that affect the benchmark (to resolve before Task 18):
+1. **`mlx_lm.server` caps completions at 512 tokens by default**; Ollama produced 912. The client sends no `max_tokens`, so MLX answers are truncated. Both stacks must receive the same explicit `max_tokens`.
+2. **Prompt caching**: repeating a question gives a near-instant TTFT (611 ms) because the server reuses the cached prompt prefix. Runs 2–3 of a question measure cached performance; the first run of each question must be reported separately.
+3. Early signal: MLX prompt processing was slower than Ollama (~43–44 tok/s vs ~107 tok/s) in these first samples.
+
+### Switching and rollback
+
+- `switch-stack.sh mlx`: Ollama stopped (`:11434` closed), MLX servers up on `:8080`/`:8081`, index built, app healthy on `mlx`.
+- `switch-stack.sh ollama`: MLX servers stopped, existing Ollama indexes reused ("Indexes for ollama are ready"), app healthy on `ollama`.
+- Rollback test: a foreign `python3 -m http.server 8081` blocked the MLX embedding port; `switch-stack.sh mlx` exited 1 after "MLX embedding server did not become ready", rolled back ("Port 8081 is used by another program … leaving it alone"), and ended with only Ollama running and the app healthy. The blocker was left untouched by the script and stopped manually afterwards. Note: the up-front "cannot start MLX" foreign-port check did not trigger; the switch waited for the readiness timeout instead.
+
+Final state: active stack `ollama`, app healthy.
