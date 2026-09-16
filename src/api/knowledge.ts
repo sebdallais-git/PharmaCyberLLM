@@ -4,7 +4,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import multer from "multer";
 import { join } from "node:path";
-import { writeFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import {
   ingestText,
   ingestFile,
@@ -17,9 +17,9 @@ import {
   chromaDocumentExists,
   getChromaStatus,
   isChromaDBAvailable,
-  recreateChromaCollection,
 } from "../services/chromadb-store.js";
-import { RAW_DOCUMENTS_DIR, saveRawDocument } from "../services/raw-documents.js";
+import { saveRawDocument } from "../services/raw-documents.js";
+import { reindexActiveStack } from "../services/reindex.js";
 import { isSupportedFile, getSupportedExtensions, parseBuffer } from "../services/file-parser.js";
 import {
   getRecentGaps,
@@ -409,79 +409,17 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
   }
 });
 
-// POST /api/knowledge/reindex - Re-chunk and re-embed all raw documents
+// POST /api/knowledge/reindex - Rebuild the active stack's indexes from knowledge/ and raw documents
 router.post("/reindex", async (_req: Request, res: Response): Promise<void> => {
-  const startTime = Date.now();
-
   try {
-    const available = await isChromaDBAvailable();
-    if (!available) {
-      res.status(503).json({ error: "ChromaDB server is not reachable" });
-      return;
-    }
-
-    // Read all raw documents
-    let files: string[];
-    try {
-      await mkdir(RAW_DOCUMENTS_DIR, { recursive: true });
-      files = await readdir(RAW_DOCUMENTS_DIR);
-    } catch {
-      res.status(404).json({ error: "No raw_documents directory found" });
-      return;
-    }
-
-    const jsonFiles = files.filter((f) => f.endsWith(".json"));
-    if (jsonFiles.length === 0) {
-      res.json({
-        message: "No raw documents to re-index",
-        documents_processed: 0,
-        chunks_created: 0,
-        time_seconds: 0,
-      });
-      return;
-    }
-
-    // Delete and recreate the ChromaDB collection
-    console.log("[Reindex] Deleting and recreating ChromaDB collection...");
-    await recreateChromaCollection();
-
-    // Re-ingest all documents
-    let totalChunks = 0;
-    let docsProcessed = 0;
-
-    for (const file of jsonFiles) {
-      try {
-        const raw = await readFile(join(RAW_DOCUMENTS_DIR, file), "utf-8");
-        const doc = JSON.parse(raw) as {
-          source: string;
-          content: string;
-          metadata?: Record<string, unknown>;
-        };
-
-        const added = await addToChromaDB(
-          [doc.content],
-          [{ source: doc.source, ...(doc.metadata ?? {}) }]
-        );
-
-        totalChunks += added;
-        docsProcessed++;
-        console.log(`[Reindex] ${file}: ${added} chunks (source: ${doc.source})`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        console.error(`[Reindex] Failed to process ${file}: ${msg}`);
-      }
-    }
-
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(
-      `[Reindex] Complete: ${docsProcessed} documents, ${totalChunks} chunks in ${elapsed}s`
-    );
-
+    const result = await trackJob("reindex", () => reindexActiveStack());
     res.json({
       message: "Re-indexing complete",
-      documents_processed: docsProcessed,
-      chunks_created: totalChunks,
-      time_seconds: parseFloat(elapsed),
+      ...result,
+      // Fields kept for existing callers (n8n knowledge QA workflow)
+      documents_processed: result.knowledgeFiles + result.rawDocuments,
+      chunks_created: result.chromaChunks,
+      time_seconds: result.seconds,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
