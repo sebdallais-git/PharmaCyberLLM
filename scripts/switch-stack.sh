@@ -88,16 +88,10 @@ start_ollama() {
 }
 
 stop_pidfile() {
-  local name="$1" port="$2" pidfile="$RUN_DIR/$1.pid"
-  if [ -f "$pidfile" ]; then
-    kill -TERM "$(cat "$pidfile")" 2>/dev/null || true
-    rm -f "$pidfile"
-  fi
-  if ! wait_port_closed "$port" 20; then
-    # Whatever still holds the port (for example a server started by hand)
-    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs kill -KILL 2>/dev/null || true
-    wait_port_closed "$port" 5 || { log "Port $port ($name) is still in use"; return 1; }
-  fi
+  local name="$1" port="$2"
+  stop_pidfile_process "$RUN_DIR/$name.pid"
+  # Also covers a project server started by hand; another program on the port makes this fail
+  stop_port "$port" 20 || { log "Port $port ($name) is still in use"; return 1; }
 }
 
 stop_mlx() {
@@ -177,18 +171,14 @@ ensure_index() {
 # --- PharmaLLM app --------------------------------------------------------------
 
 stop_app() {
-  local pidfile="$RUN_DIR/app.pid" port
-  if [ -f "$pidfile" ]; then
-    pkill -TERM -P "$(cat "$pidfile")" 2>/dev/null || true
-    kill -TERM "$(cat "$pidfile")" 2>/dev/null || true
-    rm -f "$pidfile"
-  fi
-  # Also stop an app started another way (npm run dev, manual tsx); tsx watch would respawn its child
-  pkill -TERM -f "tsx watch src/server.ts" 2>/dev/null || true
-  for port in "$APP_PORT" "$APP_HTTPS_PORT"; do
-    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs kill -TERM 2>/dev/null || true
+  local pid
+  stop_pidfile_process "$RUN_DIR/app.pid"
+  # Also stop an app started another way (npm run dev, manual tsx); tsx watch would respawn its child.
+  # Other projects run the same command, so only this project's copy is stopped.
+  for pid in $(pgrep -f "tsx watch src/server.ts" 2>/dev/null || true); do
+    if is_project_pid "$pid"; then kill -TERM "$pid" 2>/dev/null || true; fi
   done
-  if ! wait_port_closed "$APP_PORT" 20 || ! wait_port_closed "$APP_HTTPS_PORT" 20; then
+  if ! stop_port "$APP_PORT" 20 || ! stop_port "$APP_HTTPS_PORT" 20; then
     log "App ports are still in use"
     return 1
   fi
@@ -246,7 +236,10 @@ switch_to() {
   if [ "$previous" != "$target" ]; then
     log "Rolling back to $previous..."
     stop_app || true
-    stop_stack "$target" || true
+    if ! stop_stack "$target"; then
+      log "Could not stop $target; not starting $previous to avoid running both stacks"
+      exit 1
+    fi
     if start_stack "$previous" && warm_up "$previous" && start_app "$previous"; then
       log "Rolled back to $previous"
     else
