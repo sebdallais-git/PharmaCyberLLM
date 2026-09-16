@@ -10,8 +10,8 @@ Make every local-model call in PharmaLLM (chat generation and embeddings) run on
 |-------|----------|
 | Exclusivity | Only one stack runs at a time. Switching stops the other stack's processes completely. |
 | Scope | Whole stack: chat **and** embeddings move together. |
-| Chat model | Qwen3.8 27B, 4-bit, on both stacks |
-| Embedding model | Qwen3-Embedding-0.6B, 8-bit, on both stacks |
+| Chat model | Qwen3.8 27B (`Qwen/Qwen3.8-27B`), 4-bit, on both stacks |
+| Embedding model | Qwen3-Embedding-0.6B, 8-bit, on both stacks (no Qwen3.8 embedding model exists as of 2026-09-16) |
 | Integration | One OpenAI-compatible client for both stacks; switching only changes base URLs and model names |
 | Indexes | Separate ChromaDB collection and JSON index per stack |
 | Fallback | None. If the active stack is down, requests fail with a clear error. |
@@ -28,7 +28,7 @@ Make every local-model call in PharmaLLM (chat generation and embeddings) run on
 | Ports | `:11434` | `:8080` (chat), `:8081` (embeddings) |
 | Chat endpoint | `/v1/chat/completions` | `/v1/chat/completions` |
 | Embedding endpoint | `/v1/embeddings` | `/v1/embeddings` (custom server) |
-| Chat model | `qwen3.8-pharma` (Modelfile: `FROM` Qwen3.8 27B Q4 tag + `PARAMETER num_ctx 16384`) | `mlx-community/Qwen3.8-27B-4bit` (16.1 GB) |
+| Chat model | `qwen3.8-pharma` (Modelfile: `FROM qwen3.8:27b-q4_*` + `PARAMETER num_ctx 16384`) | `mlx-community/Qwen3.8-27B-4bit` (16.1 GB) |
 | Embedding model | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` |
 | ChromaDB collection | `knowledge_base_ollama` | `knowledge_base_mlx` |
 | JSON index | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` |
@@ -225,7 +225,7 @@ Runs the full pipeline through the app (`POST /api/chat`) on the active stack.
 1. Exact Ollama tag for Qwen3.8 27B at 4-bit (`qwen3.8:27b-q4_*`), and that Ollama 0.17.6 can run it; upgrade Ollama if required
 2. The `qwen3.8-pharma` Modelfile `num_ctx` is honored by Ollama's `/v1/chat/completions`
 3. Mechanism to disable thinking on each stack via the OpenAI-compatible API (Ollama; `mlx_lm.server` chat template kwargs)
-4. `mlx_lm.server` supports the `Qwen3_5ForConditionalGeneration` architecture with the installed/pinned `mlx-lm` version, and reports usage in streaming responses
+4. `mlx_lm.server` supports Qwen3.8's architecture with the installed/pinned `mlx-lm` version, and reports usage in streaming responses. Qwen3.8 reuses the Qwen3.5 architecture code: its `config.json` declares `model_type: qwen3_5` / `Qwen3_5ForConditionalGeneration` while `base_model` is `Qwen/Qwen3.8-27B`.
 5. `mlx-embeddings` produces correct Qwen3-Embedding vectors (last-token pooling), else fall back to `mlx-lm` pooling
 6. Port `:8080` and `:8081` are free on the host
 
