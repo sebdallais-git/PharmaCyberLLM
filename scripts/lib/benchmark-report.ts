@@ -107,10 +107,14 @@ export function buildMarkdownReport(a: BenchmarkFile, b: BenchmarkFile): string 
   }
 
   const overlap = meanRetrievalOverlap(a, b);
+  const processChange = formatChange(percentChange(a.memoryPeak.processMb, b.memoryPeak.processMb));
+  const systemChange = formatChange(percentChange(a.memoryPeak.systemUsedMb, b.memoryPeak.systemUsedMb));
   lines.push(
     "",
-    `| Peak stack process memory (MB) | ${a.memoryPeak.processMb} | ${b.memoryPeak.processMb} |`,
-    `| Peak system used memory (MB) | ${a.memoryPeak.systemUsedMb} | ${b.memoryPeak.systemUsedMb} |`,
+    `| Memory | ${a.stack} | ${b.stack} | ${b.stack} vs ${a.stack} |`,
+    "|---|---|---|---|",
+    `| Peak stack process memory (MB) | ${a.memoryPeak.processMb} | ${b.memoryPeak.processMb} | ${processChange} |`,
+    `| Peak system used memory (MB) | ${a.memoryPeak.systemUsedMb} | ${b.memoryPeak.systemUsedMb} | ${systemChange} |`,
     "",
     `Failed runs: ${a.stack} ${errorCount(a)}, ${b.stack} ${errorCount(b)}`,
     "",

@@ -69,7 +69,8 @@ describe("buildMarkdownReport", () => {
   it("includes the performance table, memory, errors and overlap", () => {
     const report = buildMarkdownReport(ollama, mlx);
     expect(report).toContain("| TTFT (ms) | 5000 | 6000 | 2500 | 3000 | -50.0% |");
-    expect(report).toContain("Peak stack process memory");
+    expect(report).toContain("| Memory | ollama | mlx | mlx vs ollama |");
+    expect(report).toContain("| Peak stack process memory (MB) | 18000 | 18000 | 0.0% |");
     expect(report).toContain("Failed runs: ollama 1, mlx 0");
     expect(report).toContain("Retrieval overlap");
   });

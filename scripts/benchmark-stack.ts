@@ -24,6 +24,7 @@ interface ChatEvent {
 }
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 
 function parseOptions(argv: string[]): Options {
   const value = (flag: string): string | undefined => {
@@ -77,40 +78,47 @@ async function getJson<T>(url: string, method: "GET" | "POST" = "GET"): Promise<
 }
 
 async function ask(appUrl: string, question: string, runNumber: number): Promise<RunResult> {
-  const resp = await fetch(`${appUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: question, benchmark: true }),
-  });
-  if (!resp.ok || !resp.body) {
-    return { run: runNumber, answer: "", timings: null, chunkIds: [], error: `HTTP ${resp.status}` };
-  }
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let answer = "";
+  try {
+    const resp = await fetch(`${appUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: question, benchmark: true }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!resp.ok || !resp.body) {
+      return { run: runNumber, answer: "", timings: null, chunkIds: [], error: `HTTP ${resp.status}` };
+    }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parsed = parseSseLines(buffer);
-    buffer = parsed.rest;
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    for (const data of parsed.events) {
-      const event = JSON.parse(data) as ChatEvent;
-      if (event.error) {
-        return { run: runNumber, answer, timings: null, chunkIds: [], error: event.error };
-      }
-      if (event.token) answer += event.token;
-      if (event.done) {
-        return { run: runNumber, answer, timings: event.timings ?? null, chunkIds: event.chunkIds ?? [] };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = parseSseLines(buffer);
+      buffer = parsed.rest;
+
+      for (const data of parsed.events) {
+        const event = JSON.parse(data) as ChatEvent;
+        if (event.error) {
+          return { run: runNumber, answer, timings: null, chunkIds: [], error: event.error };
+        }
+        if (event.token) answer += event.token;
+        if (event.done) {
+          return { run: runNumber, answer, timings: event.timings ?? null, chunkIds: event.chunkIds ?? [] };
+        }
       }
     }
-  }
 
-  return { run: runNumber, answer, timings: null, chunkIds: [], error: "stream ended without a done event" };
+    return { run: runNumber, answer, timings: null, chunkIds: [], error: "stream ended without a done event" };
+  } catch (err) {
+    const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    const message = isTimeout ? "request timed out after 600 s" : err instanceof Error ? err.message : String(err);
+    return { run: runNumber, answer, timings: null, chunkIds: [], error: message };
+  }
 }
 
 async function waitForIdle(appUrl: string): Promise<void> {
