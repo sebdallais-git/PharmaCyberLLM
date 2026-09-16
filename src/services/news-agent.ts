@@ -4,6 +4,7 @@ import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ingestText, saveIndex, getStats } from "./knowledge-store.js";
 import { addToChromaDB, isChromaDBAvailable } from "./chromadb-store.js";
+import { saveRawDocument } from "./raw-documents.js";
 import { isNeo4jAvailable, writeEntities } from "./graph-store.js";
 import type { GraphEntity, GraphRelationship } from "./graph-store.js";
 import { chatWithOllama } from "./ollama.js";
@@ -417,10 +418,18 @@ export async function runNewsAgent(): Promise<{ newArticles: number; topics: num
       const text = `[${item.date}] ${item.title}\nSource: ${item.source}\nURL: ${item.link}`;
       const sourceName = `news-${item.date}`;
 
-      // 1. In-memory store
-      ingestText(text, sourceName);
+      // 1. Raw document: lets every stack's index be rebuilt from disk
+      await saveRawDocument(
+        sourceName,
+        text,
+        { type: "news", link: item.link, title: item.title },
+        { key: item.link || text }
+      );
 
-      // 2. ChromaDB (persistent vector store)
+      // 2. In-memory store (awaited so saveIndex below includes the embedding)
+      await ingestText(text, sourceName);
+
+      // 3. ChromaDB (persistent vector store)
       if (chromaOk) {
         try {
           await addToChromaDB([text], [{ source: sourceName }]);
@@ -441,7 +450,7 @@ export async function runNewsAgent(): Promise<{ newArticles: number; topics: num
     await saveIndex();
   }
 
-  // 3. Neo4j graph extraction (batched, non-blocking)
+  // 4. Neo4j graph extraction (batched, non-blocking)
   if (newTexts.length > 0) {
     setImmediate(() => {
       extractNewsEntities(newTexts).catch((err) =>

@@ -4,7 +4,6 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import multer from "multer";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { writeFile, mkdir, readdir, readFile } from "node:fs/promises";
 import {
   ingestText,
@@ -20,6 +19,7 @@ import {
   isChromaDBAvailable,
   recreateChromaCollection,
 } from "../services/chromadb-store.js";
+import { RAW_DOCUMENTS_DIR, saveRawDocument } from "../services/raw-documents.js";
 import { isSupportedFile, getSupportedExtensions, parseBuffer } from "../services/file-parser.js";
 import {
   getRecentGaps,
@@ -37,27 +37,6 @@ import type { GraphEntity, GraphRelationship } from "../services/graph-store.js"
 const router = Router();
 
 const KNOWLEDGE_DIR = join(process.cwd(), "knowledge");
-const RAW_DOCUMENTS_DIR = join(process.cwd(), "data", "raw_documents");
-
-function sourceHash(source: string): string {
-  return createHash("sha256").update(source).digest("hex").slice(0, 16);
-}
-
-async function saveRawDocument(
-  source: string,
-  content: string,
-  metadata: Record<string, unknown> = {}
-): Promise<void> {
-  await mkdir(RAW_DOCUMENTS_DIR, { recursive: true });
-  const filename = `${sourceHash(source)}.json`;
-  const payload = JSON.stringify({
-    source,
-    content,
-    metadata,
-    saved_at: new Date().toISOString(),
-  });
-  await writeFile(join(RAW_DOCUMENTS_DIR, filename), payload, "utf-8");
-}
 
 async function extractAndWriteEntities(text: string, source: string): Promise<void> {
   try {
