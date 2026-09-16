@@ -29,7 +29,8 @@ import {
   markUnresolved,
   getGapById,
 } from "../services/gap-detector.js";
-import { getLlmClient } from "../services/llm-client.js";
+import { getLlmClient, StackUnavailableError } from "../services/llm-client.js";
+import { assertIndexUsable } from "../services/index-guard.js";
 import type { ChatMessage } from "../services/llm-client.js";
 import { getRunningJobs, isBenchmarkActive, trackJob } from "../services/bench-mode.js";
 import { isNeo4jAvailable, writeEntities } from "../services/graph-store.js";
@@ -131,8 +132,19 @@ router.post("/ingest-text", async (req: Request, res: Response): Promise<void> =
     return;
   }
 
-  const added = ingestText(text, source);
-  await saveIndex();
+  let added: number;
+  try {
+    // Raw document first, so the text is included in the next rebuild even if indexing fails now
+    await saveRawDocument(source, text, { type: "text" });
+    assertIndexUsable();
+    added = await ingestText(text, source);
+    await saveIndex();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Ingestion failed";
+    const unavailable = err instanceof StackUnavailableError || message.startsWith("Search refused");
+    res.status(unavailable ? 503 : 500).json({ error: message });
+    return;
+  }
 
   // Async graph entity extraction (non-blocking)
   setImmediate(() => {

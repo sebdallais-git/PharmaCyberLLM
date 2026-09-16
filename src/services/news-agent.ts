@@ -436,7 +436,6 @@ async function runNewsScrub(): Promise<{ newArticles: number; topics: number }> 
     for (const item of items) {
       // Skip duplicates
       if (seenSet.has(item.title)) continue;
-      seenSet.add(item.title);
 
       // Format as knowledge text
       const text = `[${item.date}] ${item.title}\nSource: ${item.source}\nURL: ${item.link}`;
@@ -454,9 +453,11 @@ async function runNewsScrub(): Promise<{ newArticles: number; topics: number }> 
         );
         await ingestText(text, sourceName);
       } catch (err) {
+        // Not marked as seen, so the next run retries it
         console.error(`[News Agent] Skipped article "${item.title}":`, err instanceof Error ? err.message : err);
         continue;
       }
+      seenSet.add(item.title);
 
       // 3. ChromaDB (persistent vector store)
       if (chromaOk) {
