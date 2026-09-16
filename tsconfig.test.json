@@ -5,7 +5,8 @@
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "isolatedModules": true
   },
   "include": [
     "src/**/*",
