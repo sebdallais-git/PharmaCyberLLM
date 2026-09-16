@@ -132,7 +132,8 @@ If any of steps 4–8 fails: print the relevant log tail, roll back to the previ
 | Index/embedding mismatch | Search refused, error suggests `reindex-stack` |
 | Switch fails mid-way | Log tail, automatic rollback to previous stack, non-zero exit |
 | Background job while stack down | News agent / gap detector skip the run with a warning; nothing queued |
-| Health | `unhealthy` if the active stack's chat or embedding endpoint is down; `degraded` if only ChromaDB/Neo4j/SearXNG is down; the inactive stack is never probed |
+| n8n workflows | Call `POST /api/llm/complete` on PharmaLLM instead of Ollama, so they follow the active stack |
+| Health | `unhealthy` if the active stack's chat or embedding endpoint is down or the search index is incompatible; `degraded` if only ChromaDB/Neo4j/SearXNG is down; the inactive stack is never probed |
 
 ## Testing
 
@@ -161,7 +162,7 @@ The project currently has no test runner. Per `CLAUDE.md`, add **Jest** (`ts-jes
 Runs the full pipeline through the app (`POST /api/chat`) on the active stack.
 
 - **Question set:** `bench/questions.json`, ~20 questions across vendors, threats, regulations, and pharma sites, plus 3 not covered by the knowledge base
-- **Benchmark mode:** request flag `benchmark: true` sets temperature 0, bypasses `response-cache.ts`, and disables web search. While benchmarking, the news agent and gap detector schedulers are paused.
+- **Benchmark mode:** request flag `benchmark: true` sets temperature 0, disables web search, and skips the post-answer gap detection and request logging. (`response-cache.ts` only stores feedback metadata and never answers repeated questions, so no cache bypass is needed.) While benchmarking, the news agent and other background LLM jobs are paused.
 - **Per-phase timings:** the final SSE `done` event gains `timings: { embedMs, retrievalMs, ttftMs, decodeTokPerSec, promptTokens, completionTokens, totalMs }`
 - **Protocol:** one discarded warm-up, then 3 runs per question; report median and p90
 - **Also recorded:**
