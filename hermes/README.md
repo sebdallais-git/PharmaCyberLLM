@@ -4,9 +4,9 @@ Everything needed to run [Hermes Agent](https://hermes-agent.nousresearch.com/) 
 
 | File | Purpose |
 |---|---|
-| `config.template.yaml` | Hermes config: PharmaLLM `/v1` model with 64k context, `pharmallm` MCP server (15 tools, no `start_reindex`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
+| `config.template.yaml` | Hermes config: PharmaLLM `/v1` model with 64k context, `pharmallm` MCP server (15 tools, no `start_reindex`), a `pharmallm_cron` server for scheduled runs (14 tools, also no `add_knowledge`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
 | `SOUL.md` | Assistant role and tool policy |
-| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/14/19 (silent when healthy), feedback digest Monday 08:00 |
+| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00 |
 | `com.pharmallm.mcp.plist.template` | launchd service for `pharmallm-mcp` |
 
 ## 1. Install Hermes (once)
@@ -18,7 +18,13 @@ HERMES_COMMIT=228022ef5b209cb0a3d739394edddf887e1db0f6
 curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/$HERMES_COMMIT/scripts/install.sh" -o /tmp/hermes-install.sh
 less /tmp/hermes-install.sh     # review before running
 bash /tmp/hermes-install.sh --commit "$HERMES_COMMIT" --skip-setup --skip-browser --skip-computer-use --non-interactive
-exec zsh -l && hermes --version
+exec zsh -l
+```
+
+`exec` replaces the shell, so anything after it on the same line never runs. Check the install in the new shell:
+
+```bash
+hermes --version
 ```
 
 ## 2. Create the Telegram bot
@@ -67,6 +73,8 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | One-shot question | `hermes chat -q "…" --format stream-json` (shows each tool call) |
 | Update jobs or config after editing this folder | `scripts/hermes-setup.sh install-config` or `install-cron` |
 
+**After a reboot.** `com.pharmallm.mcp` and the Hermes gateway come back on their own; the PharmaLLM app and the model stack do not (they have no launch agent). Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before the first job fires — until then `/healthz` reports `pharmallm:false`, `scripts/hermes-setup.sh check` says `pharmallm-mcp: up, PharmaLLM not reachable`, and the scheduled jobs deliver failure messages.
+
 ### Docker sandbox
 
 The `terminal` toolset runs in a Docker container. Pull the image once before the first use — the first pull otherwise runs inside the tool-call timeout and the sandbox fails to start:
@@ -79,17 +87,19 @@ The sandbox is sized for a small VM (`container_cpu: 1`, `container_memory: 512`
 
 If `docker pull` hangs with no output, the daemon is wedged: `colima restart` clears it. That also restarts Neo4j and SearXNG, so PharmaLLM's graph and web search are briefly unavailable.
 
-**Speed.** The first reply of a session takes about 1.5–2 minutes while the local 27B model reads Hermes' long prompt. Later steps take about 5–25 s. On Ollama, a PharmaLLM web chat between Hermes steps evicts Hermes' cached prompt, so the next step is slow again; MLX keeps several caches.
+**Speed and GPU budget (measured).** Every Hermes step is a full cold prefill of about 160 s: Hermes' prompt prefix changes from request to request, so the prompt cache never hits. A Telegram answer with 3–4 tool calls therefore takes about 10–20 minutes, and the four scheduled jobs on this branch's schedule cost about 45–55 minutes of GPU per day. A PharmaLLM web chat between two Hermes steps evicts the shared Ollama prompt cache, so nothing is saved even when a prefix would have matched.
 
 **Stack switches and benchmarks.** Hermes always uses the active stack. During a switch or a benchmark, PharmaLLM is unavailable or answers 503, and Hermes says so.
 
 ## Moving Hermes to a second Mac
 
-On the PharmaLLM Mac, let the MCP service listen on the network (the token is required then):
+On the PharmaLLM Mac, let the MCP service listen on the network:
 
 ```bash
-launchctl setenv MCP_HOST 0.0.0.0 && scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start
+MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services
 ```
+
+This bakes `MCP_HOST` into the launch agent, so it survives a reboot — `launchctl setenv` would not, and `run-mcp.sh` would silently fall back to loopback. An MCP token is then required: `run-mcp.sh` refuses to listen on a non-loopback host without one (`scripts/switch-stack.sh mcp-token`).
 
 On the Hermes Mac, clone this repo, install Hermes (step 1), then set the URLs and copy the two token values into `~/.hermes/.env` by hand before running `scripts/hermes-setup.sh install-config`, `scripts/hermes-setup.sh install-cron` and `hermes gateway install --force --start-now --start-on-login`:
 
@@ -98,6 +108,8 @@ PHARMALLM_URL=http://<pharmallm-mac>:3000
 PHARMALLM_MCP_URL=http://<pharmallm-mac>:3200/mcp
 SEARXNG_URL=http://<pharmallm-mac>:8888
 ```
+
+On the Hermes Mac, `scripts/hermes-setup.sh check` reports `service com.pharmallm.mcp: not loaded` by design: that service runs on the PharmaLLM Mac, so its absence here is expected and not a fault. To make the health line meaningful there, point the probe at the other Mac: `MCP_HEALTH_URL=http://<pharmallm-mac>:3200/healthz scripts/hermes-setup.sh check`.
 
 ## Troubleshooting
 

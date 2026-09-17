@@ -360,7 +360,7 @@ PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 - **Browser routes stay open:** chat, search, upload, ingest-text, news agent run and the dashboard reads (see [API Reference](#api-reference)) are open by design to anyone who can reach the app.
 - **Reverse proxies:** a local reverse proxy in front of the app (e.g. `tailscale serve`, caddy) makes every request look like it comes from the same machine; enable the token in that setup.
 - **Gateway fields:** only `messages`, `tools`, `tool_choice`, `stream`, `stream_options`, `temperature` and `max_tokens` (capped at 4096) are forwarded; the stack's model is always used and other fields such as `stop`, `top_p` or `response_format` are dropped.
-- **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)).
+- **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)); under launchd, `MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services` bakes the host into the launch agent so it survives a reboot.
 - **One stack at a time still holds:** gateway requests go to the active stack and are refused (503) during benchmarks.
 
 ### Hermes Agent on Telegram
@@ -374,8 +374,9 @@ scripts/switch-stack.sh mcp status     # pharmallm-mcp runs under launchd (com.p
 ```
 
 - **Context:** the chat model runs with a 64k context on both stacks (Hermes needs at least 64k). The KV cache grows from about 1 GB to about 4 GB; MLX caps its prompt cache at 8 GB (`MLX_PROMPT_CACHE_BYTES`). Keep `OLLAMA_NUM_PARALLEL` at 1 so Ollama allocates one 64k context.
-- **Speed:** a session's first reply takes about 1.5–2 minutes (Hermes' prompt is 10–15k tokens), later steps about 5–25 s. On Ollama, a web chat between Hermes steps evicts Hermes' cached prompt.
-- **Safety:** Hermes gets 15 of the 16 MCP tools (no `start_reindex`), runs shell commands only in a Docker container without network, answers only your Telegram user ID, and denies risky commands in scheduled runs. Web search uses the local SearXNG with cloud fallbacks disabled.
+- **Speed:** every Hermes step is a full cold prefill of about 160 s (the prompt prefix changes per request), so a Telegram answer with 3–4 tool calls takes about 10–20 minutes and the four scheduled jobs cost about 45–55 minutes of GPU per day. A web chat between two Hermes steps evicts the shared Ollama prompt cache.
+- **Safety:** Hermes gets 15 of the 16 MCP tools (no `start_reindex`), runs shell commands only in a Docker container without network, answers only your Telegram user ID, and denies risky commands in scheduled runs. Scheduled runs go through a separate `pharmallm_cron` MCP server without `add_knowledge` and get no web, memory or shell toolset — MCP calls are never approval-gated, so the tool list is the control. Web search uses the local SearXNG with cloud fallbacks disabled.
+- **After a reboot:** run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before Hermes' jobs fire. The MCP service and the gateway restart on their own, the app and the model stack do not; until then `/healthz` reports `pharmallm:false` and the jobs report failures.
 
 ---
 

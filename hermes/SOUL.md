@@ -21,4 +21,4 @@ You are a pharma and cybersecurity analyst for a pharmaceutical company's IT and
 
 ## Shell
 
-- The terminal runs in an isolated container with no network and no access to the Mac's files. Use it only for calculations or text processing the user asks for.
+- The terminal runs in an isolated container with no network access and no access to PharmaLLM's files or your home directory — only a scratch workspace of its own. Use it only for calculations or text processing the user asks for.
