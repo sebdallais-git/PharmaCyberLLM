@@ -23,6 +23,7 @@ import graphRouter from "./api/graph.js";
 import benchRouter from "./api/bench.js";
 import llmRouter from "./api/llm.js";
 import { createAuthMiddleware } from "./api/auth.js";
+import v1Router from "./api/v1.js";
 import { isNeo4jAvailable, getNeo4jStats } from "./services/graph-store.js";
 
 // Prevent the process from crashing on unhandled errors
@@ -52,6 +53,7 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/graph", graphRouter);
 app.use("/api/bench", benchRouter);
 app.use("/api/llm", llmRouter);
+app.use("/v1", v1Router);
 app.use("/api", dashboardRouter); // /api/health
 app.use("/dashboard", express.static(join(process.cwd(), "dashboard")));
 
