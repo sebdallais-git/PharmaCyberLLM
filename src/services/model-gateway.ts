@@ -1,6 +1,7 @@
 // OpenAI-compatible gateway: forwards agent chat completions to the active LLM stack
 
 import type { Response as ExpressResponse } from "express";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { StackConfig } from "../config/llm-stacks.js";
 import { StackUnavailableError } from "./llm-client.js";
 
@@ -25,9 +26,38 @@ export interface OpenAiErrorBody {
   error: { message: string; type: string };
 }
 
+export interface UpstreamInit {
+  method: "POST";
+  headers: Record<string, string>;
+  body: string;
+  signal: AbortSignal;
+}
+
+export interface UpstreamReader {
+  read(): Promise<{ done: false; value: Uint8Array } | { done: true; value?: undefined }>;
+  cancel(): Promise<void>;
+}
+
+// The parts of a fetch Response the gateway reads (undici's fetch satisfies it; tests can inject stubs)
+export interface UpstreamResponse {
+  readonly status: number;
+  readonly headers: { get(name: string): string | null };
+  readonly body: { getReader(): UpstreamReader } | null;
+}
+
+export interface GatewayFetch {
+  (url: string, init: UpstreamInit): Promise<UpstreamResponse>;
+}
+
+// Node's built-in fetch gives up after 300 s without headers or body data, which a long non-streaming
+// completion can exceed; turn undici's limits off so only the agent disconnecting ends the request
+const noTimeoutAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
+export const gatewayFetch: GatewayFetch = (url, init) => undiciFetch(url, { ...init, dispatcher: noTimeoutAgent });
+
 export interface GatewayDeps {
   stack: StackConfig;
-  fetchImpl: typeof fetch;
+  fetchImpl: GatewayFetch;
   isBenchmarkActive: () => boolean;
   trackJob: <T>(name: string, job: () => Promise<T>) => Promise<T>;
 }
@@ -85,7 +115,7 @@ export async function forwardChatCompletion(body: unknown, res: ExpressResponse,
   res.on("close", () => controller.abort());
 
   await deps.trackJob("agent-completion", async () => {
-    let upstream: Response;
+    let upstream: UpstreamResponse;
     try {
       upstream = await deps.fetchImpl(url, {
         method: "POST",

@@ -2,9 +2,17 @@ import { afterEach, describe, expect, it } from "@jest/globals";
 import express from "express";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createV1Router } from "../src/api/v1.js";
 import { buildStacks } from "../src/config/llm-stacks.js";
 import type { StackConfig } from "../src/config/llm-stacks.js";
-import { buildUpstreamBody, forwardChatCompletion, GatewayError, modelList } from "../src/services/model-gateway.js";
+import { createLlmClient } from "../src/services/llm-client.js";
+import {
+  buildUpstreamBody,
+  forwardChatCompletion,
+  GatewayError,
+  gatewayFetch,
+  modelList,
+} from "../src/services/model-gateway.js";
 import type { GatewayDeps } from "../src/services/model-gateway.js";
 import { sendJson, sendSse, startFakeServer } from "./helpers/fake-openai-server.js";
 import type { FakeServer } from "./helpers/fake-openai-server.js";
@@ -28,9 +36,17 @@ afterEach(async () => {
   upstream = null;
 });
 
+async function listen(app: express.Express): Promise<string> {
+  gateway = await new Promise<Server>((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  return `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
+}
+
 async function startGateway(overrides: Partial<GatewayDeps> & { stack: StackConfig }): Promise<string> {
   const deps: GatewayDeps = {
-    fetchImpl: fetch,
+    // The production default: undici fetch without its 300 s header/body limits
+    fetchImpl: gatewayFetch,
     isBenchmarkActive: () => false,
     trackJob: async <T>(_name: string, job: () => Promise<T>) => job(),
     ...overrides,
@@ -40,10 +56,22 @@ async function startGateway(overrides: Partial<GatewayDeps> & { stack: StackConf
   app.post("/v1/chat/completions", (req, res) => {
     void forwardChatCompletion(req.body, res, deps);
   });
-  gateway = await new Promise<Server>((resolve) => {
-    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
-  });
-  return `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/v1/chat/completions`;
+  return `${await listen(app)}/v1/chat/completions`;
+}
+
+async function startV1Router(stack: StackConfig): Promise<string> {
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/v1",
+    createV1Router({
+      getLlm: () => createLlmClient(stack),
+      fetchImpl: gatewayFetch,
+      isBenchmarkActive: () => false,
+      trackJob: async <T>(_name: string, job: () => Promise<T>) => job(),
+    })
+  );
+  return `${await listen(app)}/v1`;
 }
 
 const toolRequest = {
@@ -183,5 +211,45 @@ describe("forwardChatCompletion", () => {
     expect(await resp.json()).toEqual({
       error: { message: "messages must be a non-empty array", type: "invalid_request_error" },
     });
+  });
+});
+
+describe("v1 router", () => {
+  it("lists the stack's chat model on GET /v1/models", async () => {
+    upstream = await startFakeServer((_req, res) =>
+      sendJson(res, 200, { object: "list", data: [{ id: "mlx-community/Qwen3.8-27B-4bit", object: "model" }] })
+    );
+    const url = await startV1Router(mlxStackAt(upstream.baseUrl));
+
+    const resp = await fetch(`${url}/models`);
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toEqual(modelList(mlxStackAt(upstream.baseUrl)));
+    expect(upstream.requests[0].url).toBe("/v1/models");
+  });
+
+  it("returns 503 on GET /v1/models when the stack is down", async () => {
+    const url = await startV1Router(mlxStackAt(CLOSED_URL));
+
+    const resp = await fetch(`${url}/models`);
+
+    expect(resp.status).toBe(503);
+    const body = (await resp.json()) as { error: { message: string; type: string } };
+    expect(body.error.type).toBe("service_unavailable");
+    expect(body.error.message).toContain("MLX stack not reachable");
+  });
+
+  it("forwards POST /v1/chat/completions to the stack", async () => {
+    upstream = await startFakeServer((_req, res) => sendJson(res, 200, { choices: [{ message: { content: "hi" } }] }));
+    const url = await startV1Router(mlxStackAt(upstream.baseUrl));
+
+    const resp = await fetch(`${url}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toEqual({ choices: [{ message: { content: "hi" } }] });
   });
 });
