@@ -5,7 +5,8 @@ import type { PharmaLLMClient } from "../pharmallm-client.js";
 import { runTool } from "./result.js";
 import type { ToolLogger } from "./result.js";
 
-export const NEWS_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
+// 14 minutes: the tool reports its own timeout before Hermes gives up on the call at 900 s
+export const NEWS_AGENT_TIMEOUT_MS = 14 * 60 * 1000;
 
 export function registerOperationsTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
   server.registerTool(

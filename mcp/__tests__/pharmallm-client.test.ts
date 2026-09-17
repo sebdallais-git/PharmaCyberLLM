@@ -1,17 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
+import type { ServerResponse } from "node:http";
 import { createPharmaLLMClient, PharmaLLMError } from "../src/pharmallm-client.js";
+import type { FetchImpl } from "../src/pharmallm-client.js";
 import { sendJson, sendSse, startFakePharmaLLM } from "./helpers/fake-pharmallm.js";
 import type { FakePharmaLLM } from "./helpers/fake-pharmallm.js";
 
 let pharma: FakePharmaLLM;
+// Responses a test left hanging on purpose; ended in cleanup so Jest exits cleanly
+let stalled: ServerResponse[] = [];
 
 beforeEach(async () => {
   pharma = await startFakePharmaLLM();
 });
 
 afterEach(async () => {
+  for (const res of stalled) res.end();
+  stalled = [];
   await pharma.close();
 });
+
+function rejectingFetch(code: string): FetchImpl {
+  return async () => {
+    throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
+  };
+}
 
 describe("get and post", () => {
   it("sends the API token and parses JSON", async () => {
@@ -66,6 +78,29 @@ describe("get and post", () => {
     const client = createPharmaLLMClient(pharma.url, null);
     await expect(client.get("/api/health", 50)).rejects.toThrow("PharmaLLM did not answer within 0.05 s");
   });
+
+  it("treats undici's own header and body timeouts as timeouts, not as unreachable", async () => {
+    const headers = createPharmaLLMClient(pharma.url, null, rejectingFetch("UND_ERR_HEADERS_TIMEOUT"));
+    await expect(headers.post("/api/agent/run", {}, 840_000)).rejects.toThrow(
+      "PharmaLLM did not answer within 840 s"
+    );
+
+    const body = createPharmaLLMClient(pharma.url, null, rejectingFetch("UND_ERR_BODY_TIMEOUT"));
+    await expect(body.get("/api/health", 5000)).rejects.toThrow("did not answer within");
+
+    const refused = createPharmaLLMClient(pharma.url, null, rejectingFetch("ECONNREFUSED"));
+    await expect(refused.get("/api/health", 5000)).rejects.toThrow("PharmaLLM not reachable at");
+  });
+
+  it("keeps the deadline running while the JSON body is read", async () => {
+    pharma.on("GET", "/api/health", (_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"status":');
+      stalled.push(res);
+    });
+    const client = createPharmaLLMClient(pharma.url, null);
+    await expect(client.get("/api/health", 300)).rejects.toThrow("PharmaLLM did not answer within 0.3 s");
+  });
 });
 
 describe("ask", () => {
@@ -106,5 +141,17 @@ describe("ask", () => {
     const client = createPharmaLLMClient(pharma.url, null);
 
     await expect(client.ask("hi", false, 5000)).rejects.toThrow("PharmaLLM chat stream ended without an answer");
+  });
+
+  it("times out a chat stream that stalls after the first event", async () => {
+    pharma.on("POST", "/api/chat", (_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ token: "Dell " })}\n\n`);
+      stalled.push(res);
+    });
+    const client = createPharmaLLMClient(pharma.url, null);
+
+    await expect(client.ask("hi", false, 300)).rejects.toThrow("PharmaLLM did not answer within 0.3 s");
   });
 });

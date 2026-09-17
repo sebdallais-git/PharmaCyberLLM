@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
+import { NEWS_AGENT_TIMEOUT_MS } from "../src/tools/operations.js";
 import { sendJson } from "./helpers/fake-pharmallm.js";
 import { isToolError, startHarness, toolText } from "./helpers/harness.js";
 import type { Harness } from "./helpers/harness.js";
@@ -99,6 +100,10 @@ describe("operations tools", () => {
   it("runs the news agent", async () => {
     harness.pharma.on("POST", "/api/agent/run", (_req, res) => sendJson(res, 200, { newArticles: 3, topics: 188 }));
     expect(JSON.parse(toolText(await call("run_news_agent")))).toEqual({ newArticles: 3, topics: 188 });
+  });
+
+  it("gives up on the news agent at 14 minutes, before Hermes' 900 s tool timeout", () => {
+    expect(NEWS_AGENT_TIMEOUT_MS).toBe(840_000);
   });
 
   it("starts a reindex and reports its status", async () => {
