@@ -32,6 +32,13 @@ describe("isProtectedRequest", () => {
     expect(isProtectedRequest("POST", "/v1/chat/completions")).toBe(true);
     expect(isProtectedRequest("GET", "/v1/models")).toBe(true);
   });
+
+  it("matches case-insensitively, like Express's default routing", () => {
+    expect(isProtectedRequest("POST", "/API/knowledge/reindex")).toBe(true);
+    expect(isProtectedRequest("GET", "/V1/models")).toBe(true);
+    expect(isProtectedRequest("GET", "/Api/Knowledge/Gaps/")).toBe(true);
+    expect(isProtectedRequest("GET", "/API/health")).toBe(false); // allowlisted route in another case
+  });
 });
 
 describe("authorizeRequest", () => {
@@ -118,5 +125,11 @@ describe("createAuthMiddleware", () => {
     const url = await start(null);
     const resp = await fetch(`${url}/api/knowledge/reindex`, { method: "POST" });
     expect(resp.status).toBe(200);
+  });
+
+  it("blocks an uppercase-path bypass attempt without the token", async () => {
+    const url = await start("s3cret");
+    const denied = await fetch(`${url}/API/knowledge/reindex`, { method: "POST" });
+    expect(denied.status).toBe(401);
   });
 });

@@ -51,7 +51,9 @@ export function tokensMatch(expected: string, provided: string): boolean {
 }
 
 export function isProtectedRequest(method: string, path: string): boolean {
-  const normalized = path.length > 1 ? path.replace(/\/+$/, "") : path;
+  // Lowercase to mirror Express's default case-insensitive, non-strict routing:
+  // otherwise "/API/..." or "/V1/..." would reach protected handlers unauthenticated
+  const normalized = (path.length > 1 ? path.replace(/\/+$/, "") : path).toLowerCase();
   if (normalized === "/v1" || normalized.startsWith("/v1/")) return true;
   if (!normalized.startsWith("/api/")) return false;
   const upper = method.toUpperCase();
