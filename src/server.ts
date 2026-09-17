@@ -22,6 +22,7 @@ import { initRequestLog } from "./services/request-log.js";
 import graphRouter from "./api/graph.js";
 import benchRouter from "./api/bench.js";
 import llmRouter from "./api/llm.js";
+import { createAuthMiddleware } from "./api/auth.js";
 import { isNeo4jAvailable, getNeo4jStats } from "./services/graph-store.js";
 
 // Prevent the process from crashing on unhandled errors
@@ -38,6 +39,8 @@ const AGENT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // Middleware
 app.use(express.json({ limit: "10mb" }));
+// Token check for agent and operations routes (browser UI routes and static files stay open)
+app.use(createAuthMiddleware());
 app.use(express.static(join(process.cwd(), "public")));
 
 // Routes API

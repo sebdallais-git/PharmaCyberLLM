@@ -4,9 +4,23 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { parseSseLines } from "../src/services/llm-client.js";
 import type { ChatTimings } from "../src/services/bench-mode.js";
 import type { BenchEnvironment, BenchQuestion, BenchmarkFile, MemoryPeak, QuestionResult, RunResult } from "./lib/benchmark-types.js";
+
+// Benchmark routes (/api/bench/*) are protected: send the API token when one is configured
+function apiToken(): string | null {
+  const fromEnv = process.env.PHARMALLM_API_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  const tokenFile = join(process.cwd(), "data", "run", "api-token");
+  return existsSync(tokenFile) ? readFileSync(tokenFile, "utf-8").trim() || null : null;
+}
+
+const AUTH_HEADERS: Record<string, string> = ((): Record<string, string> => {
+  const token = apiToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+})();
 
 interface Options {
   runs: number;
@@ -77,7 +91,7 @@ function sampleMemory(stack: string): MemoryPeak {
 }
 
 async function getJson<T>(url: string, method: "GET" | "POST" = "GET", signal?: AbortSignal): Promise<T> {
-  const resp = await fetch(url, { method, signal });
+  const resp = await fetch(url, { method, signal, headers: AUTH_HEADERS });
   if (!resp.ok) throw new Error(`${method} ${url} failed (${resp.status})`);
   return (await resp.json()) as T;
 }
@@ -106,7 +120,7 @@ async function ask(appUrl: string, question: string, runNumber: number): Promise
   try {
     const resp = await fetch(`${appUrl}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
       body: JSON.stringify({ message: question, benchmark: true }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
