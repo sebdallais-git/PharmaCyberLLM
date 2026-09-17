@@ -21,12 +21,14 @@ export const BROWSER_ROUTES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export interface AuthRequest {
   method: string;
   path: string;
   authorization: string | undefined;
   remoteAddress: string | undefined;
+  host: string | undefined;
 }
 
 export interface AuthDecision {
@@ -36,6 +38,16 @@ export interface AuthDecision {
 
 export function isLoopbackAddress(address: string | undefined): boolean {
   return address !== undefined && LOOPBACK_ADDRESSES.has(address);
+}
+
+// True when a Host header names this machine (localhost, 127.0.0.1 or [::1], any port). A page served
+// from another name that resolves to 127.0.0.1 (DNS rebinding) sends its own name here and is refused.
+export function isLocalHostHeader(host: string | undefined): boolean {
+  if (host === undefined) return false;
+  const value = host.trim().toLowerCase();
+  if (value === "::1") return true;
+  const match = value.match(/^(\[[0-9a-f:.]+\]|[^:[\]]+)(?::(\d{1,5}))?$/);
+  return match !== null && LOCAL_HOSTNAMES.has(match[1]);
 }
 
 export function bearerToken(authorization: string | undefined): string | null {
@@ -55,7 +67,7 @@ export function isProtectedRequest(method: string, path: string): boolean {
   // otherwise "/API/..." or "/V1/..." would reach protected handlers unauthenticated
   const normalized = (path.length > 1 ? path.replace(/\/+$/, "") : path).toLowerCase();
   if (normalized === "/v1" || normalized.startsWith("/v1/")) return true;
-  if (!normalized.startsWith("/api/")) return false;
+  if (normalized !== "/api" && !normalized.startsWith("/api/")) return false;
   const upper = method.toUpperCase();
   return !BROWSER_ROUTES.some(([routeMethod, routePath]) => routeMethod === upper && routePath === normalized);
 }
@@ -71,11 +83,17 @@ export function authorizeRequest(request: AuthRequest, token: string | null): Au
   }
 
   // No token configured: operations stay local-only
-  return isLoopbackAddress(request.remoteAddress)
+  if (!isLoopbackAddress(request.remoteAddress)) {
+    return {
+      ok: false,
+      message: "Unauthorized: set PHARMALLM_API_TOKEN (scripts/switch-stack.sh token) to allow requests from other machines",
+    };
+  }
+  return isLocalHostHeader(request.host)
     ? { ok: true, message: "" }
     : {
         ok: false,
-        message: "Unauthorized: set PHARMALLM_API_TOKEN (scripts/switch-stack.sh token) to allow requests from other machines",
+        message: "Unauthorized: without PHARMALLM_API_TOKEN, call the API as localhost, 127.0.0.1 or [::1]",
       };
 }
 
@@ -91,6 +109,7 @@ export function createAuthMiddleware(getToken: () => string | null = () => readA
         path: req.path,
         authorization: req.headers.authorization,
         remoteAddress: req.socket.remoteAddress,
+        host: req.headers.host,
       },
       getToken()
     );

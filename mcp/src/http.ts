@@ -2,6 +2,7 @@
 
 import express from "express";
 import type { Express, NextFunction, Request, Response } from "express";
+import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { bearerToken, isLoopbackAddress, tokensMatch } from "./config.js";
 import type { McpConfig } from "./config.js";
@@ -36,7 +37,6 @@ function jsonRpcError(res: Response, status: number, code: number, message: stri
 
 export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: ToolLogger): Express {
   const app = express();
-  app.use(express.json({ limit: "2mb" }));
 
   app.get("/healthz", async (_req: Request, res: Response) => {
     let pharmallm = false;
@@ -49,6 +49,13 @@ export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: T
     res.json({ ok: true, pharmallm });
   });
 
+  // Without a token, loopback is the only protection: also require a localhost Host header so a web page
+  // can't reach the service through DNS rebinding. With a token set, the token is the protection.
+  if (!config.mcpToken) {
+    app.use("/mcp", localhostHostValidation());
+  }
+
+  // Auth runs before body parsing so unauthenticated requests never get their body read
   app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
     const verdict = authorizeMcpRequest(config.mcpToken, req.headers.authorization, req.socket.remoteAddress);
     if (!verdict.ok) {
@@ -59,7 +66,7 @@ export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: T
   });
 
   // Stateless: a fresh server and transport per request, no sessions to keep
-  app.post("/mcp", async (req: Request, res: Response) => {
+  app.post("/mcp", express.json({ limit: "2mb" }), async (req: Request, res: Response) => {
     const server = buildMcpServer(client, log);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {

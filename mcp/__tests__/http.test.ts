@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
+import { request } from "node:http";
 import { authorizeMcpRequest } from "../src/http.js";
 import { sendJson } from "./helpers/fake-pharmallm.js";
 import { startHarness } from "./helpers/harness.js";
@@ -17,6 +18,35 @@ const initializeBody = {
   method: "initialize",
   params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "1" } },
 };
+
+interface RawResponse {
+  status: number;
+  body: string;
+}
+
+// node:http lets the test send an arbitrary Host header, which fetch does not
+function rawPost(url: string, headers: Record<string, string>, body: string): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...headers },
+        agent: false,
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text }));
+      }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
 
 describe("authorizeMcpRequest", () => {
   it("allows loopback without a token and refuses other addresses", () => {
@@ -52,6 +82,34 @@ describe("HTTP app", () => {
     });
     expect(resp.status).toBe(401);
     expect(await resp.json()).toMatchObject({ error: { code: -32001 } });
+  });
+
+  it("refuses a foreign Host header without a token (DNS rebinding)", async () => {
+    harness = await startHarness();
+    const evil = await rawPost(harness.mcpUrl, { Host: "evil.example:3200" }, JSON.stringify(initializeBody));
+    expect(evil.status).toBe(403);
+
+    const local = await rawPost(harness.mcpUrl, { Host: "localhost:3200" }, JSON.stringify(initializeBody));
+    expect(local.status).toBe(200);
+    const { tools } = await harness.client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+  });
+
+  it("accepts any Host header once the token is configured", async () => {
+    harness = await startHarness({ mcpToken: "agent-secret" });
+    const resp = await rawPost(
+      harness.mcpUrl,
+      { Host: "mac-mini.example:3200", Authorization: "Bearer agent-secret" },
+      JSON.stringify(initializeBody)
+    );
+    expect(resp.status).toBe(200);
+  });
+
+  it("checks the token before parsing the body", async () => {
+    harness = await startHarness({ mcpToken: "agent-secret" });
+    const resp = await rawPost(harness.mcpUrl, {}, "{not json");
+    expect(resp.status).toBe(401);
+    expect(JSON.parse(resp.body)).toMatchObject({ error: { code: -32001 } });
   });
 
   it("answers GET /mcp with 405", async () => {
