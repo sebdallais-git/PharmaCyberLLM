@@ -45,6 +45,11 @@ export function batchRangeLabel(batchIndex: number, batchSize: number, total: nu
   return `${start}-${end}`;
 }
 
+export interface ReindexProgress {
+  rawDocumentsDone: number;
+  rawDocumentsTotal: number;
+}
+
 export interface IndexState {
   memory: { check: IndexCheck; chunkCount: number; complete: boolean };
   chroma: { check: IndexCheck; count: number; complete: boolean };
@@ -115,7 +120,8 @@ export function indexesReady(state: IndexState): boolean {
 
 export async function reindexActiveStack(
   log: (message: string) => void = console.log,
-  deps?: ReindexDeps
+  deps?: ReindexDeps,
+  onProgress?: (progress: ReindexProgress) => void
 ): Promise<ReindexResult> {
   if (!deps) {
     // A test that forgets to inject deps must not silently fall back to live services
@@ -159,6 +165,7 @@ export async function reindexActiveStack(
     }
 
     const docs = await deps.listRawDocuments();
+    onProgress?.({ rawDocumentsDone: 0, rawDocumentsTotal: docs.length });
     let processed = 0;
     const batches = toBatches(docs, RAW_DOCUMENT_BATCH_SIZE);
     for (let i = 0; i < batches.length; i++) {
@@ -180,6 +187,10 @@ export async function reindexActiveStack(
         const range = batchRangeLabel(i, RAW_DOCUMENT_BATCH_SIZE, docs.length);
         log(`[Reindex] skipped raw documents ${range}: ${errorMessage(err)}`);
       }
+      onProgress?.({
+        rawDocumentsDone: Math.min((i + 1) * RAW_DOCUMENT_BATCH_SIZE, docs.length),
+        rawDocumentsTotal: docs.length,
+      });
     }
 
     // The rebuild ran to the end (isolated skips are reported, not fatal): stamp both completeness markers

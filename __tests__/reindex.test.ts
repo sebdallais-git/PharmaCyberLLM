@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
 import { batchRangeLabel, indexesReady, reindexActiveStack } from "../src/services/reindex.js";
-import type { IndexState, ReindexDeps } from "../src/services/reindex.js";
+import type { IndexState, ReindexDeps, ReindexProgress } from "../src/services/reindex.js";
 import { StackUnavailableError } from "../src/services/llm-client.js";
 import { getIndexStatus, setIndexStatus } from "../src/services/index-guard.js";
 import { getActiveStack } from "../src/config/llm-stacks.js";
@@ -189,6 +189,20 @@ describe("reindexActiveStack", () => {
 
     expect(statusDuringRebuild).toEqual({ ok: false, reason: "reindex in progress" });
     expect(getIndexStatus()).toEqual({ ok: true, reason: "" });
+  });
+
+  it("reports raw-document progress after each batch", async () => {
+    const { deps } = fakeDeps();
+    const progress: ReindexProgress[] = [];
+
+    await reindexActiveStack(quiet, deps, (p) => progress.push(p));
+
+    expect(progress).toEqual([
+      { rawDocumentsDone: 0, rawDocumentsTotal: 130 },
+      { rawDocumentsDone: 64, rawDocumentsTotal: 130 },
+      { rawDocumentsDone: 128, rawDocumentsTotal: 130 },
+      { rawDocumentsDone: 130, rawDocumentsTotal: 130 },
+    ]);
   });
 
   it("refuses to fall back to live services when deps are omitted in a test run", async () => {

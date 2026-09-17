@@ -20,6 +20,7 @@ import {
 } from "../services/chromadb-store.js";
 import { saveRawDocument } from "../services/raw-documents.js";
 import { reindexActiveStack } from "../services/reindex.js";
+import { createReindexJobs } from "../services/reindex-jobs.js";
 import { isSupportedFile, getSupportedExtensions, parseBuffer } from "../services/file-parser.js";
 import {
   getRecentGaps,
@@ -432,9 +433,14 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
   }
 });
 
-// POST /api/knowledge/reindex - Rebuild the active stack's indexes from knowledge/ and raw documents
-router.post("/reindex", async (_req: Request, res: Response): Promise<void> => {
-  if (getRunningJobs().includes("reindex")) {
+// Background reindex jobs (a rebuild takes 12-16 minutes, longer than any HTTP client should wait)
+const reindexJobs = createReindexJobs((onProgress) =>
+  trackJob("reindex", () => reindexActiveStack(console.log, undefined, onProgress))
+);
+
+// POST /api/knowledge/reindex - Start rebuilding the active stack's indexes in the background
+router.post("/reindex", (_req: Request, res: Response): void => {
+  if (reindexJobs.isRunning() || getRunningJobs().includes("reindex")) {
     res.status(409).json({ error: "A reindex is already running" });
     return;
   }
@@ -443,21 +449,13 @@ router.post("/reindex", async (_req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  try {
-    const result = await trackJob("reindex", () => reindexActiveStack());
-    res.json({
-      message: "Re-indexing complete",
-      ...result,
-      // Fields kept for existing callers (n8n knowledge QA workflow)
-      documents_processed: result.knowledgeFiles + result.rawDocuments,
-      chunks_created: result.chromaChunks,
-      time_seconds: result.seconds,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[Reindex] Failed:", message);
-    res.status(500).json({ error: message });
-  }
+  const { job_id } = reindexJobs.start();
+  res.status(202).json({ job_id, status: "running" });
+});
+
+// GET /api/knowledge/reindex/status - State and progress of the most recent reindex job
+router.get("/reindex/status", (_req: Request, res: Response): void => {
+  res.json(reindexJobs.status());
 });
 
 export default router;
