@@ -128,3 +128,51 @@ calling is confirmed live for both non-streaming and streaming responses.
 Task 6 (and later tasks depending on MLX tool calling) can proceed without a
 follow-up. No new loopback address format was found, so no changes are
 needed to the Task 1 / Task 5 loopback helper plans.
+
+## Live verification (Task 9, 2026-09-17)
+
+### Step 1 — restart on the new code, no token
+
+`scripts/switch-stack.sh ollama` → `PharmaLLM is up on the ollama stack`; `/api/health` → `ollama healthy`.
+
+### Step 2 — gateway
+
+- `GET /v1/models` → `{"object":"list","data":[{"id":"qwen3.8-pharma",...}]}`
+- `POST /v1/chat/completions` with `"model": "anything"` and a `get_weather` tool → `qwen3.8-pharma tool_calls [{"function": {"name": "get_weather", "arguments": "{\"city\":\"Basel\"}"}}]` (client model name ignored, stack model forced).
+
+### Step 3 — real tools through the MCP service
+
+The check script has to live inside `mcp/` (from `data/run/`, Node cannot resolve `@modelcontextprotocol/sdk`); it was a temporary file, deleted afterwards.
+
+```
+/healthz: {"ok":true,"pharmallm":true}
+tools: 16
+system_health ok { "status": "healthy", "stack": "ollama", "benchmark_active": false, ...
+search_knowledge ok { "results": [ { "id": "news-2022-07-08-4411", ... "Dell's PowerProtect Cyber Recovery ...
+graph_stats ok { "nodeCount": 582, "relationshipCount": 366, ...
+reindex_status ok { "job_id": null, "status": "idle" }
+```
+
+Service log contains only tool name, outcome and duration (`[mcp] search_knowledge ok 102ms`). Service stopped by PID; port 3200 free.
+
+Loopback-only mode (no token), from the Tailscale IP: protected route 401, localhost 200, uppercase `/V1/models` 401, browser route `/api/health` 200.
+
+### Step 4 — token enabled (user approved)
+
+`scripts/switch-stack.sh token` created `data/run/api-token` (`-rw-------`); app restarted on Ollama.
+
+```
+no token, localhost: 401
+token, localhost: 200
+no token, tailscale: 401
+token, tailscale: 200
+browser route, tailscale: 200
+no token, localhost, uppercase /API reindex status: 401
+browser chat models, https 3443 tailscale: 200
+```
+
+MCP service with `PHARMALLM_API_TOKEN` against protected routes: `reindex_status ok`, `list_knowledge_gaps ok`, `feedback_report ok`. The token string does not appear in any file under `data/logs/`.
+
+### Step 5 — suites
+
+Root: typecheck, typecheck:tests ok; 127 tests passed (19 suites). MCP: typecheck ok; 41 tests passed (5 suites).
