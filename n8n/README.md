@@ -111,3 +111,9 @@ Utiliser `webhook-test` (pas `webhook`) pour tester sans activer le workflow en 
 - Vérifier que PharmaLLM tourne sur le port 3000
 - Tester l'API directement : `curl -X POST http://localhost:3000/api/knowledge/ingest-text -H "Content-Type: application/json" -d '{"text":"test","source":"test"}'`
 - Regarder les logs de l'exécution dans N8N pour voir à quelle étape ça bloque
+
+**Token API PharmaLLM :**
+- Les appels protégés (`/api/llm/complete`, `/api/knowledge/gaps/check-resolution`, `/api/dashboard/kb-health`) envoient `Authorization: Bearer {{ $env.PHARMALLM_API_TOKEN }}`
+- Sans token configuré dans PharmaLLM, ces routes n'acceptent que les requêtes locales : n8n doit tourner sur la même machine
+- Avec un token (`scripts/switch-stack.sh token`), démarrer n8n avec `PHARMALLM_API_TOKEN="$(cat data/run/api-token)"` et `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` pour que l'expression `$env` fonctionne
+- Une réponse 401 signifie un token absent ou différent de celui de PharmaLLM

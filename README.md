@@ -341,6 +341,27 @@ Uploads accept `.txt`, `.md`, `.pdf`, `.csv`, `.json`, `.docx`, `.pptx` and `.pp
 
 ---
 
+## Agents and MCP
+
+PharmaLLM can serve AI agents such as [Hermes Agent](https://hermes-agent.nousresearch.com/) in two ways:
+
+| | Endpoint | Purpose |
+|---|---|---|
+| 🧰 **MCP tools** | `pharmallm-mcp` at `http://<host>:3200/mcp` | 16 tools: search, full RAG answers, add knowledge, graph, gaps, health, news agent, background reindex, feedback |
+| 🧠 **Model gateway** | `http://<host>:3000/v1` | OpenAI-compatible chat completions on the active stack (tools and streaming supported) |
+
+```bash
+scripts/switch-stack.sh token             # create data/run/api-token, then restart the app
+npm --prefix mcp install
+PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
+```
+
+- **Security:** without a token, the gateway and operations routes only accept requests from the same machine. With a token, every protected route requires `Authorization: Bearer <token>`. Browser UI routes stay open.
+- **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)).
+- **One stack at a time still holds:** gateway requests go to the active stack and are refused (503) during benchmarks.
+
+---
+
 ## API Reference
 
 <details>
@@ -431,6 +452,7 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 | `NEO4J_USER` | `neo4j` | Neo4j user |
 | `NEO4J_PASSWORD` | `pharma2024` | Neo4j password |
 | `APP_URL` | `http://localhost:3000` | App URL used by `scripts/reindex-stack.ts` |
+| `PHARMALLM_API_TOKEN` | *(none)* | Token for `/v1` and operations routes; without it they accept local requests only |
 
 </details>
 

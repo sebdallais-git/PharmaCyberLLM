@@ -5,6 +5,7 @@
 #   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
+#   scripts/switch-stack.sh token                    create the API token for agents and other machines
 
 set -euo pipefail
 
@@ -15,6 +16,7 @@ LOG_PREFIX="switch-stack"
 source "$SCRIPT_DIR/lib/services.sh"
 
 RUN_DIR="$PROJECT_DIR/data/run"
+TOKEN_FILE="$RUN_DIR/api-token"
 LOG_DIR="$PROJECT_DIR/data/logs"
 MLX_VENV="$PROJECT_DIR/python/mlx-venv"
 MLX_PYTHON="${MLX_PYTHON:-python3}"
@@ -201,9 +203,29 @@ stop_app() {
   fi
 }
 
+# API token for agents and other machines (readable only by you)
+ensure_token() {
+  if [ -s "$TOKEN_FILE" ]; then
+    log "API token already exists at $TOKEN_FILE"
+  else
+    (umask 077 && openssl rand -hex 32 >"$TOKEN_FILE")
+    log "Created API token at $TOKEN_FILE"
+  fi
+  chmod 600 "$TOKEN_FILE"
+  log "Restart the app to enforce it: scripts/switch-stack.sh $(active_stack)"
+  log "Use it in a shell with: export PHARMALLM_API_TOKEN=\"\$(cat $TOKEN_FILE)\""
+}
+
+api_token() {
+  if [ -s "$TOKEN_FILE" ]; then
+    cat "$TOKEN_FILE"
+  fi
+}
+
 start_app() {
   cd "$PROJECT_DIR"
-  LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
+  LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
+    nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
   echo $! >"$RUN_DIR/app.pid"
 
   local waited=0 status=""
@@ -320,5 +342,6 @@ case "${1:-}" in
   ensure-stack) ensure_stack "${2:-}" ;;
   prepare) prepare ;;
   status) status ;;
-  *) sed -n '2,7p' "$0"; exit 1 ;;
+  token) ensure_token ;;
+  *) sed -n '2,8p' "$0"; exit 1 ;;
 esac
