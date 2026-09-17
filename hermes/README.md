@@ -36,6 +36,8 @@ nano ~/.hermes/.env
 
 ## 3. Configure and start
 
+`scripts/hermes-setup.sh` needs the system `python3` (`/usr/bin/python3`, from the Command Line Tools: `xcode-select --install`). Re-run `install-services` after changing Node versions — the launch agent records an absolute `node` path, so the service dies when that path disappears.
+
 ```bash
 scripts/switch-stack.sh token          # PharmaLLM API token (skip if it exists)
 scripts/switch-stack.sh mcp-token      # token Hermes uses for pharmallm-mcp
@@ -53,7 +55,7 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | `PHARMALLM_API_TOKEN` | from `data/run/api-token` |
 | `PHARMALLM_MCP_TOKEN` | from `data/run/mcp-token` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS` | you add them (step 2) |
-| `TELEGRAM_HOME_CHANNEL` | defaults to your user ID, so scheduled jobs reach your DM |
+| `TELEGRAM_HOME_CHANNEL` | defaults to the first id in `TELEGRAM_ALLOWED_USERS`, so scheduled jobs reach your DM |
 
 ## Operations
 
@@ -64,6 +66,18 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | Scheduled jobs | `hermes cron list`, `hermes cron run <id>` (runs on the next scheduler tick) |
 | One-shot question | `hermes chat -q "…" --format stream-json` (shows each tool call) |
 | Update jobs or config after editing this folder | `scripts/hermes-setup.sh install-config` or `install-cron` |
+
+### Docker sandbox
+
+The `terminal` toolset runs in a Docker container. Pull the image once before the first use — the first pull otherwise runs inside the tool-call timeout and the sandbox fails to start:
+
+```bash
+docker pull nikolaik/python-nodejs:python3.11-nodejs20
+```
+
+The sandbox is sized for a small VM (`container_cpu: 1`, `container_memory: 512`). The Docker VM must keep headroom beyond Neo4j and SearXNG, which already take about 700 MB of colima's 1.91 GB on this Mac; raise those two values only after giving the VM more RAM.
+
+If `docker pull` hangs with no output, the daemon is wedged: `colima restart` clears it. That also restarts Neo4j and SearXNG, so PharmaLLM's graph and web search are briefly unavailable.
 
 **Speed.** The first reply of a session takes about 1.5–2 minutes while the local 27B model reads Hermes' long prompt. Later steps take about 5–25 s. On Ollama, a PharmaLLM web chat between Hermes steps evicts Hermes' cached prompt, so the next step is slow again; MLX keeps several caches.
 
