@@ -179,10 +179,21 @@ router.post(
     const destPath = join(KNOWLEDGE_DIR, file.originalname);
     await writeFile(destPath, file.buffer);
 
-    // Parse and ingest
-    const text = await parseBuffer(file.buffer, file.originalname);
-    const added = await ingestText(text, file.originalname);
-    await saveIndex();
+    let text: string;
+    let added: number;
+    try {
+      text = await parseBuffer(file.buffer, file.originalname);
+      // Raw document first, so the text is included in the next rebuild even if indexing fails now
+      await saveRawDocument(file.originalname, text, { type: "upload" });
+      assertIndexUsable();
+      added = await ingestText(text, file.originalname);
+      await saveIndex();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Ingestion failed";
+      const unavailable = err instanceof StackUnavailableError || message.startsWith("Search refused");
+      res.status(unavailable ? 503 : 500).json({ error: message });
+      return;
+    }
 
     // Async graph entity extraction (non-blocking)
     setImmediate(() => {

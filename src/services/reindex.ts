@@ -115,8 +115,16 @@ export function indexesReady(state: IndexState): boolean {
 
 export async function reindexActiveStack(
   log: (message: string) => void = console.log,
-  deps: ReindexDeps = defaultDeps
+  deps?: ReindexDeps
 ): Promise<ReindexResult> {
+  if (!deps) {
+    // A test that forgets to inject deps must not silently fall back to live services
+    if (process.env.JEST_WORKER_ID) {
+      throw new Error("reindexActiveStack called without injected deps in a test");
+    }
+    deps = defaultDeps;
+  }
+
   const startedAt = Date.now();
   const stack = getActiveStack();
 
@@ -132,6 +140,7 @@ export async function reindexActiveStack(
 
   try {
     log(`[Reindex] ${stack.name}: rebuilding ${stack.indexFile} and ${stack.chromaCollection}`);
+    setIndexStatus({ ok: false, reason: "reindex in progress" });
     deps.resetIndex();
     await deps.recreateChromaCollection();
 

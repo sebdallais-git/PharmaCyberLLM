@@ -174,4 +174,26 @@ describe("reindexActiveStack", () => {
     await expect(reindexActiveStack(quiet, deps)).rejects.toBe(stackDown);
     expect(getIndexStatus().ok).toBe(false);
   });
+
+  it("blocks index use for the duration of the rebuild, then marks it ok again on success", async () => {
+    setIndexStatus({ ok: true, reason: "" });
+    let statusDuringRebuild: { ok: boolean; reason: string } | null = null;
+    const { deps } = fakeDeps({
+      listKnowledgeFiles: async () => {
+        statusDuringRebuild = getIndexStatus();
+        return [];
+      },
+    });
+
+    await reindexActiveStack(quiet, deps);
+
+    expect(statusDuringRebuild).toEqual({ ok: false, reason: "reindex in progress" });
+    expect(getIndexStatus()).toEqual({ ok: true, reason: "" });
+  });
+
+  it("refuses to fall back to live services when deps are omitted in a test run", async () => {
+    await expect(reindexActiveStack(quiet)).rejects.toThrow(
+      "reindexActiveStack called without injected deps in a test"
+    );
+  });
 });

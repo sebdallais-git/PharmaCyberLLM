@@ -9,7 +9,7 @@ import knowledgeRouter from "./api/knowledge.js";
 import agentRouter from "./api/agent.js";
 import feedbackRouter from "./api/feedback.js";
 import dashboardRouter from "./api/dashboard.js";
-import { loadIndex, ingestKnowledgeDir, saveIndex, getIndexMeta } from "./services/knowledge-store.js";
+import { loadIndex, ingestKnowledgeDir, saveIndex, getIndexMeta, isIndexComplete } from "./services/knowledge-store.js";
 import { isChromaDBAvailable, getChromaStatus, getChromaCollectionInfo } from "./services/chromadb-store.js";
 import { getActiveStack } from "./config/llm-stacks.js";
 import { getLlmClient } from "./services/llm-client.js";
@@ -77,12 +77,28 @@ async function verifyIndexes(chromaOk: boolean): Promise<IndexCheck> {
   const probeDim = probe?.length ?? null;
 
   const memoryCheck = checkIndexMeta(expected, getIndexMeta(), probeDim, "in-memory index");
-  if (!memoryCheck.ok || !chromaOk) return memoryCheck;
+  if (!memoryCheck.ok) return memoryCheck;
+  if (!isIndexComplete()) {
+    return {
+      ok: false,
+      reason: "in-memory index: index is incomplete (interrupted rebuild?) — run scripts/reindex-stack.ts",
+    };
+  }
+  if (!chromaOk) return memoryCheck;
 
   const info = await getChromaCollectionInfo();
-  // A missing collection is created with the right metadata on first write
-  if (!info) return { ok: true, reason: "" };
-  return checkIndexMeta(expected, info.meta, probeDim, "ChromaDB collection");
+  if (!info) {
+    return { ok: false, reason: "ChromaDB collection missing — run scripts/reindex-stack.ts" };
+  }
+  const chromaCheck = checkIndexMeta(expected, info.meta, probeDim, "ChromaDB collection");
+  if (!chromaCheck.ok) return chromaCheck;
+  if (!info.complete) {
+    return {
+      ok: false,
+      reason: "ChromaDB collection: index is incomplete (interrupted rebuild?) — run scripts/reindex-stack.ts",
+    };
+  }
+  return { ok: true, reason: "" };
 }
 
 async function start(): Promise<void> {

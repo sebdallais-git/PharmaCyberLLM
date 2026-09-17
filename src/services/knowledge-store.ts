@@ -248,6 +248,11 @@ export function getIndexMeta(): IndexMeta | null {
   return indexMeta;
 }
 
+// Whether the currently loaded in-memory index carries the marker of a rebuild that ran to the end
+export function isIndexComplete(): boolean {
+  return indexComplete;
+}
+
 // Save the index to disk
 export async function saveIndex(): Promise<void> {
   if (indexMeta === null) {
