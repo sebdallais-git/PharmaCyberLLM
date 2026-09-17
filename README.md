@@ -363,6 +363,20 @@ PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 - **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)).
 - **One stack at a time still holds:** gateway requests go to the active stack and are refused (503) during benchmarks.
 
+### Hermes Agent on Telegram
+
+[`hermes/`](hermes/README.md) runs Hermes Agent as a Telegram assistant on the local 27B model, with four scheduled jobs: a morning news digest, knowledge gap resolution, a health watch that stays silent while healthy, and a weekly feedback digest.
+
+```bash
+scripts/switch-stack.sh mcp-token      # token Hermes uses for pharmallm-mcp
+scripts/hermes-setup.sh all            # after installing Hermes and adding the Telegram bot to ~/.hermes/.env
+scripts/switch-stack.sh mcp status     # pharmallm-mcp runs under launchd (com.pharmallm.mcp)
+```
+
+- **Context:** the chat model runs with a 64k context on both stacks (Hermes needs at least 64k). The KV cache grows from about 1 GB to about 4 GB; MLX caps its prompt cache at 8 GB (`MLX_PROMPT_CACHE_BYTES`). Keep `OLLAMA_NUM_PARALLEL` at 1 so Ollama allocates one 64k context.
+- **Speed:** a session's first reply takes about 1.5–2 minutes (Hermes' prompt is 10–15k tokens), later steps about 5–25 s. On Ollama, a web chat between Hermes steps evicts Hermes' cached prompt.
+- **Safety:** Hermes gets 15 of the 16 MCP tools (no `start_reindex`), runs shell commands only in a Docker container without network, answers only your Telegram user ID, and denies risky commands in scheduled runs. Web search uses the local SearXNG with cloud fallbacks disabled.
+
 ---
 
 ## API Reference
@@ -471,6 +485,8 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 | `NEO4J_PASSWORD` | `pharma2024` | Neo4j password |
 | `APP_URL` | `http://localhost:3000` | App URL used by `scripts/reindex-stack.ts` |
 | `PHARMALLM_API_TOKEN` | *(none)* | Token for `/v1` and operations routes; without it they accept only same-machine requests addressed as localhost |
+| `MLX_PROMPT_CACHE_BYTES` | `8589934592` | Memory cap for `mlx_lm.server`'s prompt cache (set by `switch-stack.sh`) |
+| `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `3200` | Where `pharmallm-mcp` listens (`scripts/run-mcp.sh`); a non-loopback host requires `data/run/mcp-token` |
 
 </details>
 
@@ -559,6 +575,10 @@ npm run typecheck:tests   # type-check the test suites
 | Switch or rebuild failed | Check `data/logs/` (`mlx-chat.log`, `mlx-embed.log`, `reindex-<stack>.log`, `app.log`) |
 
 </details>
+
+**Hermes says the context length is below the minimum** — the Ollama model still has the old context. Run `scripts/switch-stack.sh ollama-ctx` (or any `switch-stack.sh ollama`), which recreates `qwen3.8-pharma` from the Modelfile without downloading.
+
+**Hermes tool calls to PharmaLLM fail after 5 minutes** — restart `pharmallm-mcp` so the version with keepalive notifications runs: `scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start`.
 
 ---
 
