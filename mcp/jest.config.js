@@ -4,13 +4,11 @@ export default {
   testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
   testMatch: ["**/__tests__/**/*.test.ts"],
-  // The MCP service is a separate package with its own Jest setup; data/ holds scratch installs
-  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/mcp/", "<rootDir>/data/"],
   moduleNameMapper: {
     // Source files import siblings as "./x.js"; point Jest at the .ts file
     "^(\\.{1,2}/.*)\\.js$": "$1",
   },
   transform: {
-    "^.+\\.ts$": ["ts-jest", { useESM: true, tsconfig: "tsconfig.test.json" }],
+    "^.+\\.ts$": ["ts-jest", { useESM: true, tsconfig: "tsconfig.json" }],
   },
 };
