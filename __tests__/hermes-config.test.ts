@@ -88,12 +88,35 @@ describe("hermes/config.template.yaml", () => {
       "vision",
     ]);
     const telegram = at("platform_toolsets.telegram") as string[];
-    const cron = at("platform_toolsets.cron") as string[];
     expect(telegram).toContain("pharmallm");
     expect(telegram).not.toContain("cronjob");
-    expect(cron).toContain("pharmallm");
-    expect(cron).not.toContain("terminal");
-    expect(cron).not.toContain("file");
+  });
+
+  it("gives unattended runs no ungated write channel", () => {
+    // approvals.cron_mode gates dangerous *commands* only; MCP calls are never approval-gated, so the
+    // cron toolset list and a write-limited MCP server are the real controls for scheduled runs
+    expect(at("platform_toolsets.cron")).toEqual(["session_search", "pharmallm_cron"]);
+    const cron = at("platform_toolsets.cron") as string[];
+    for (const toolset of ["web", "search", "memory", "terminal", "file", "skills", "pharmallm"]) {
+      expect(cron).not.toContain(toolset);
+    }
+    expect(at("mcp_servers.pharmallm_cron.tools.exclude")).toEqual(["start_reindex", "add_knowledge"]);
+    // Same endpoint and credentials as the interactive server, only the tool filter differs
+    expect(at("mcp_servers.pharmallm_cron.url")).toBe(at("mcp_servers.pharmallm.url"));
+    expect(at("mcp_servers.pharmallm_cron.headers.Authorization")).toBe(
+      at("mcp_servers.pharmallm.headers.Authorization")
+    );
+    expect(at("mcp_servers.pharmallm_cron.timeout")).toBe(900);
+    expect(at("mcp_servers.pharmallm_cron.connect_timeout")).toBe(30);
+    expect(at("mcp_servers.pharmallm_cron.tools.resources")).toBe(false);
+    expect(at("mcp_servers.pharmallm_cron.tools.prompts")).toBe(false);
+  });
+
+  it("keeps the tools the scheduled jobs actually call available to the cron server", () => {
+    const excluded = at("mcp_servers.pharmallm_cron.tools.exclude") as string[];
+    for (const tool of ["run_news_agent", "knowledge_status", "list_knowledge_gaps", "resolve_knowledge_gap", "system_health", "feedback_report"]) {
+      expect(excluded).not.toContain(tool);
+    }
   });
 });
 
@@ -105,7 +128,8 @@ describe("hermes/cron/jobs.json", () => {
       "pharmallm-health-watch",
       "pharmallm-feedback-digest",
     ]);
-    expect(jobs.map((job) => job.schedule)).toEqual(["0 6 * * *", "0 7 * * *", "0 9,14,19 * * *", "0 8 * * 1"]);
+    // Two health runs a day, not three: every Hermes step is a full cold prefill (~160 s of GPU)
+    expect(jobs.map((job) => job.schedule)).toEqual(["0 6 * * *", "0 7 * * *", "0 9,19 * * *", "0 8 * * 1"]);
     for (const job of jobs) {
       expect(job.schedule.split(" ")).toHaveLength(5);
       expect(job.deliver).toBe("telegram");
@@ -121,6 +145,9 @@ describe("hermes/cron/jobs.json", () => {
     expect(jobs[1].prompt).toContain("status triggered");
     expect(jobs[1].prompt).not.toContain("status detected");
     expect(jobs[1].prompt).toContain("Do not call add_knowledge");
+    // The silent-exit clause must name the same status the job asked for
+    expect(jobs[1].prompt).toContain("no triggered gaps");
+    expect(jobs[1].prompt).not.toContain("no detected gaps");
   });
 
   it("asks the feedback digest for both report kinds", () => {

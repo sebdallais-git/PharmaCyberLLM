@@ -40,18 +40,36 @@ mcp_servers:
         - start_reindex
       resources: false
       prompts: false
+  # Scheduled runs only. Same endpoint and credentials as `pharmallm`; Hermes namespaces MCP tools as
+  # mcp__<server>__<tool>, so the two entries coexist and only the tool filter differs.
+  pharmallm_cron:
+    url: "${PHARMALLM_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${PHARMALLM_MCP_TOKEN}"
+    connect_timeout: 30
+    timeout: 900
+    tools:
+      exclude:
+        - start_reindex
+        - add_knowledge
+      resources: false
+      prompts: false
 
 platform_toolsets:
   cli: [web, search, terminal, file, memory, skills, todo, session_search, clarify, cronjob, pharmallm]
   telegram: [web, search, terminal, file, memory, skills, todo, session_search, pharmallm]
-  cron: [web, search, memory, session_search, pharmallm]
+  # Scheduled runs read freshly scraped news with nobody in the loop: no web, no memory, no shell,
+  # and a cron-scoped MCP server that cannot write knowledge (MCP calls are never approval-gated)
+  cron: [session_search, pharmallm_cron]
 
 agent:
   disabled_toolsets: [browser, computer_use, code_execution, image_gen, tts, delegation, kanban, vision]
 
 terminal:
   backend: docker
-  # These must fit the Docker VM: colima on this Mac has 1.91 GB / 2 CPUs, shared with Neo4j and SearXNG
+  # These must fit the Docker VM: colima on this Mac has 1.91 GB / 2 CPUs, shared with Neo4j and SearXNG.
+  # container_disk is deliberately unset: Docker on macOS ignores the quota, so setting it would only
+  # suggest a limit that is not enforced.
   container_cpu: 1
   container_memory: 512
   container_persistent: true

@@ -77,6 +77,17 @@ function envFile(box: Sandbox): string {
   return readFileSync(join(box.home, ".env"), "utf-8");
 }
 
+// A curl that answers /healthz with `body`; the script finds it first via PATH (see stubPath)
+function writeCurlStub(box: Sandbox, body: string): void {
+  const path = join(box.root, "curl");
+  writeFileSync(path, ["#!/bin/bash", "cat <<'HEALTHJSON'", body, "HEALTHJSON"].join("\n"));
+  chmodSync(path, 0o755);
+}
+
+function stubPath(box: Sandbox): Record<string, string> {
+  return { PATH: `${box.root}:/usr/bin:/bin` };
+}
+
 describe("hermes-setup.sh install-config", () => {
   it("installs config and SOUL.md and fills a private .env without printing secrets", () => {
     const box = sandbox();
@@ -185,7 +196,7 @@ describe("hermes-setup.sh install-cron", () => {
 
     expect(result.status).toBe(0);
     const calls = readFileSync(box.calls, "utf-8");
-    expect(calls).toContain("hermes [cron] [edit] [abc123] [--schedule] [0 9,14,19 * * *] [--prompt]");
+    expect(calls).toContain("hermes [cron] [edit] [abc123] [--schedule] [0 9,19 * * *] [--prompt]");
     expect(calls.match(/\[create\]/g)).toHaveLength(3);
   });
 });
@@ -205,6 +216,28 @@ describe("hermes-setup.sh install-services", () => {
     const calls = readFileSync(box.calls, "utf-8");
     expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmallm\.mcp\.plist\]/);
     expect(calls).toContain("hermes [gateway] [install] [--force] [--start-now] [--start-on-login]");
+  });
+
+  it("bakes MCP_HOST into the plist so a LAN move survives a reboot", () => {
+    const box = sandbox();
+
+    // launchctl setenv is domain-wide and lost on reboot; the plist is what persists
+    const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node", MCP_HOST: "0.0.0.0" });
+
+    expect(result.status).toBe(0);
+    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    expect(plist).toContain("<key>MCP_HOST</key><string>0.0.0.0</string>");
+    expect(plist).not.toContain("__");
+  });
+
+  it("defaults MCP_HOST to loopback when it is unset", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
+
+    expect(result.status).toBe(0);
+    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    expect(plist).toContain("<key>MCP_HOST</key><string>127.0.0.1</string>");
   });
 
   it(
@@ -268,5 +301,42 @@ describe("hermes-setup.sh check", () => {
     expect(output).toContain("service com.pharmallm.mcp: loaded");
     expect(output).toContain("service ai.hermes.gateway: loaded");
     expect(output).not.toContain("not loaded");
+  });
+
+  it("calls the MCP service healthy only when PharmaLLM behind it answers", () => {
+    const box = sandbox();
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+    writeCurlStub(box, '{"ok":true,"pharmallm":true}');
+
+    const result = setup(box, ["check"], stubPath(box));
+
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("pharmallm-mcp: healthy");
+    expect(output).not.toContain("PharmaLLM not reachable");
+  });
+
+  it("reports a problem when the MCP service is up but the app behind it is down", () => {
+    const box = sandbox();
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+    // /healthz answers 200 with pharmallm:false while the app is stopped — a 200 alone means nothing
+    writeCurlStub(box, '{"ok":true,"pharmallm":false}');
+
+    const result = setup(box, ["check"], stubPath(box));
+
+    expect(result.status).toBe(1);
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("pharmallm-mcp: up, PharmaLLM not reachable");
+    expect(output).not.toContain("pharmallm-mcp: healthy");
+  });
+
+  it("reports the MCP service as not answering when nothing listens", () => {
+    const box = sandbox();
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    // MCP_HEALTH_URL points at port 9, which refuses the connection
+    const result = setup(box, ["check"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("pharmallm-mcp: not answering");
   });
 });
