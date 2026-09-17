@@ -348,7 +348,7 @@ PharmaLLM can serve AI agents such as [Hermes Agent](https://hermes-agent.nousre
 | | Endpoint | Purpose |
 |---|---|---|
 | 🧰 **MCP tools** | `pharmallm-mcp` at `http://<host>:3200/mcp` | 16 tools: search, full RAG answers, add knowledge, graph, gaps, health, news agent, background reindex, feedback |
-| 🧠 **Model gateway** | `http://<host>:3000/v1` | OpenAI-compatible chat completions on the active stack (tools and streaming supported) |
+| 🧠 **Model gateway** | `http://<host>:3000/v1` or `https://<host>:3443/v1` | OpenAI-compatible chat completions on the active stack (tools and streaming supported) |
 
 ```bash
 scripts/switch-stack.sh token             # create data/run/api-token, then restart the app
@@ -356,7 +356,10 @@ npm --prefix mcp install
 PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 ```
 
-- **Security:** without a token, the gateway and operations routes only accept requests from the same machine. With a token, every protected route requires `Authorization: Bearer <token>`. Browser UI routes stay open.
+- **Security:** without a token, the gateway and operations routes only accept requests from the same machine addressed as `localhost`, `127.0.0.1` or `[::1]` (other Host names are refused, which blocks DNS rebinding). With a token, every protected route requires `Authorization: Bearer <token>` on both ports (3000 and HTTPS 3443).
+- **Browser routes stay open:** chat, search, upload, ingest-text, news agent run and the dashboard reads (see [API Reference](#api-reference)) are open by design to anyone who can reach the app.
+- **Reverse proxies:** a local reverse proxy in front of the app (e.g. `tailscale serve`, caddy) makes every request look like it comes from the same machine; enable the token in that setup.
+- **Gateway fields:** only `messages`, `tools`, `tool_choice`, `stream`, `stream_options`, `temperature` and `max_tokens` (capped at 4096) are forwarded; the stack's model is always used and other fields such as `stop`, `top_p` or `response_format` are dropped.
 - **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)).
 - **One stack at a time still holds:** gateway requests go to the active stack and are refused (503) during benchmarks.
 
@@ -364,20 +367,34 @@ PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 
 ## API Reference
 
+The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_API_TOKEN>` once a token is set (without a token, `token` routes accept only same-machine requests addressed as localhost). `open` routes are the browser UI routes in `src/api/auth.ts` and never need the token.
+
+<details>
+<summary><b>Model gateway (OpenAI-compatible)</b></summary>
+
+<br/>
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/v1/models` | GET | token | The active stack's chat model (`503` when the stack is down) |
+| `/v1/chat/completions` | POST | token | Forwarded to the active stack, tools and streaming supported (`503` during a benchmark or when the stack is down) |
+
+</details>
+
 <details>
 <summary><b>Chat, stack and benchmark</b></summary>
 
 <br/>
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/chat` | POST | SSE stream with reasoning steps, token stats and `response_id` |
-| `/api/chat/transcribe` | POST | Multipart `audio` file (max 25 MB) → `{ "text": "..." }` |
-| `/api/chat/models` | GET | Active stack and its chat and embedding models |
-| `/api/llm/complete` | POST | `{ prompt }` → `{ response }` on the active stack (used by n8n) |
-| `/api/bench/start` | POST | Pause background LLM jobs (15-minute lease, refreshed by calling again) |
-| `/api/bench/stop` | POST | Resume background LLM jobs |
-| `/api/bench/status` | GET | Benchmark flag and running background jobs |
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/chat` | POST | open | SSE stream with reasoning steps, token stats and `response_id` |
+| `/api/chat/transcribe` | POST | open | Multipart `audio` file (max 25 MB) → `{ "text": "..." }` |
+| `/api/chat/models` | GET | open | Active stack and its chat and embedding models |
+| `/api/llm/complete` | POST | token | `{ prompt }` → `{ response }` on the active stack (used by n8n) |
+| `/api/bench/start` | POST | token | Pause background LLM jobs (15-minute lease, refreshed by calling again) |
+| `/api/bench/stop` | POST | token | Resume background LLM jobs |
+| `/api/bench/status` | GET | token | Benchmark flag and running background jobs |
 
 </details>
 
@@ -386,18 +403,19 @@ PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 
 <br/>
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/knowledge/stats` | GET | Knowledge base stats |
-| `/api/knowledge/search` | POST | Search the knowledge base |
-| `/api/knowledge/ingest-text` | POST | Ingest raw text (saved to `data/raw_documents/` first) |
-| `/api/knowledge/upload` | POST | Upload and ingest a file (saved as a raw document first) |
-| `/api/knowledge/add` | POST | Add a URL or text to ChromaDB |
-| `/api/knowledge/status` | GET | ChromaDB status |
-| `/api/knowledge/reindex` | POST | Rebuild the active stack's indexes (`409` while a reindex or benchmark runs) |
-| `/api/knowledge/gaps` | GET | Recent gap detections |
-| `/api/knowledge/gaps/stats` | GET | Gap analytics |
-| `/api/knowledge/gaps/check-resolution` | POST | Re-ask a gap through the full RAG pipeline |
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/knowledge/stats` | GET | open | Knowledge base stats |
+| `/api/knowledge/search` | POST | open | Search the knowledge base |
+| `/api/knowledge/ingest-text` | POST | open | Ingest raw text (saved to `data/raw_documents/` first) |
+| `/api/knowledge/upload` | POST | open | Upload and ingest a file (saved as a raw document first) |
+| `/api/knowledge/add` | POST | token | Add a URL or text to ChromaDB |
+| `/api/knowledge/status` | GET | token | ChromaDB status |
+| `/api/knowledge/reindex` | POST | token | Start rebuilding the active stack's indexes in the background: `202 { job_id, status: "running" }`, `409` while a reindex or benchmark runs |
+| `/api/knowledge/reindex/status` | GET | token | Most recent reindex job: `status` (`idle`, `running`, `succeeded`, `failed`), progress, result or error |
+| `/api/knowledge/gaps` | GET | token | Recent gap detections |
+| `/api/knowledge/gaps/stats` | GET | token | Gap analytics |
+| `/api/knowledge/gaps/check-resolution` | POST | token | Re-ask a gap through the full RAG pipeline |
 
 </details>
 
@@ -406,22 +424,22 @@ PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
 
 <br/>
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/feedback` | POST | `{ response_id, rating (1-5), comment? }` |
-| `/api/feedback/stats` | GET | Rating analytics (7d, 30d, RAG vs non-RAG) |
-| `/api/feedback/low-rated` | GET | Answers rated 2 or lower, with chunk IDs |
-| `/api/feedback/weekly-digest` | GET | 7-day summary with improvement priorities |
-| `/api/health` | GET | Active stack (`llm_chat`, `llm_embed`, `search_index`), ChromaDB, SearXNG, Neo4j, SQLite |
-| `/api/dashboard/metrics` | GET | All dashboard metrics (30 s cache) |
-| `/api/dashboard/chromadb-misses` | GET | Recent ChromaDB misses and top missed queries |
-| `/api/dashboard/kb-health` | GET / POST | KB health history, or receive a report from n8n |
-| `/api/graph/health` | GET | Neo4j connection check with latency |
-| `/api/graph/stats` | GET | Node and relationship counts by type |
-| `/api/graph/search` | POST | Search by entity name, returns neighbors |
-| `/api/graph/rebuild` | POST | Clear and rebuild the graph (Ollama stack only, `409` on MLX) |
-| `/api/agent/status` | GET | News agent last run and topics |
-| `/api/agent/run` | POST | Trigger the news agent now |
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/feedback` | POST | token | `{ response_id, rating (1-5), comment? }` |
+| `/api/feedback/stats` | GET | token | Rating analytics (7d, 30d, RAG vs non-RAG) |
+| `/api/feedback/low-rated` | GET | token | Answers rated 2 or lower, with chunk IDs |
+| `/api/feedback/weekly-digest` | GET | token | 7-day summary with improvement priorities |
+| `/api/health` | GET | open | Active stack (`llm_chat`, `llm_embed`, `search_index`), ChromaDB, SearXNG, Neo4j, SQLite |
+| `/api/dashboard/metrics` | GET | open | All dashboard metrics (30 s cache) |
+| `/api/dashboard/chromadb-misses` | GET | open | Recent ChromaDB misses and top missed queries |
+| `/api/dashboard/kb-health` | GET / POST | token | KB health history, or receive a report from n8n |
+| `/api/graph/health` | GET | token | Neo4j connection check with latency |
+| `/api/graph/stats` | GET | open | Node and relationship counts by type |
+| `/api/graph/search` | POST | token | Search by entity name, returns neighbors |
+| `/api/graph/rebuild` | POST | token | Clear and rebuild the graph (Ollama stack only, `409` on MLX) |
+| `/api/agent/status` | GET | open | News agent last run and topics |
+| `/api/agent/run` | POST | open | Trigger the news agent now |
 
 </details>
 
@@ -452,7 +470,7 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 | `NEO4J_USER` | `neo4j` | Neo4j user |
 | `NEO4J_PASSWORD` | `pharma2024` | Neo4j password |
 | `APP_URL` | `http://localhost:3000` | App URL used by `scripts/reindex-stack.ts` |
-| `PHARMALLM_API_TOKEN` | *(none)* | Token for `/v1` and operations routes; without it they accept local requests only |
+| `PHARMALLM_API_TOKEN` | *(none)* | Token for `/v1` and operations routes; without it they accept only same-machine requests addressed as localhost |
 
 </details>
 

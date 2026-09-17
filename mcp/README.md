@@ -17,7 +17,7 @@ npm --prefix mcp start          # http://127.0.0.1:3200/mcp
 | `PHARMALLM_URL` | `http://localhost:3000` | PharmaLLM base URL |
 | `PHARMALLM_API_TOKEN` | *(none)* | PharmaLLM API token (see `scripts/switch-stack.sh token`) |
 
-Without `MCP_TOKEN` the service only accepts requests from the same machine.
+Without `MCP_TOKEN` the service only accepts requests from the same machine with a `localhost`, `127.0.0.1` or `[::1]` Host header (other Host names get `403`, which blocks DNS rebinding). With `MCP_TOKEN` set, the token is required instead and any Host is accepted.
 
 ## Tools
 
@@ -47,7 +47,7 @@ mcp_servers:
     timeout: 900
 ```
 
-The long timeout covers `run_news_agent`. When Hermes runs on another Mac, start this service with `MCP_HOST` set to the model Mac's LAN or Tailscale address and `MCP_TOKEN`, and use that address in `url`.
+The long timeout covers `run_news_agent`, which gives up after 14 minutes so its error reaches Hermes before the 900 s tool timeout. When Hermes runs on another Mac, start this service with `MCP_HOST` set to the model Mac's LAN or Tailscale address and `MCP_TOKEN`, and use that address in `url`.
 
 ## Tests
 
