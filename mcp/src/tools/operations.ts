@@ -1,0 +1,54 @@
+// Operations tools: health, metrics, news agent, background reindex
+
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { PharmaLLMClient } from "../pharmallm-client.js";
+import { runTool } from "./result.js";
+import type { ToolLogger } from "./result.js";
+
+export const NEWS_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
+
+export function registerOperationsTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+  server.registerTool(
+    "system_health",
+    { description: "PharmaLLM health: active LLM stack, chat/embedding/index checks, supporting services, benchmark mode." },
+    async () => runTool("system_health", log, () => client.get("/api/health"))
+  );
+
+  server.registerTool(
+    "dashboard_metrics",
+    { description: "Usage and quality metrics: questions, confidence, response times, gaps, knowledge base health." },
+    async () => runTool("dashboard_metrics", log, () => client.get("/api/dashboard/metrics"))
+  );
+
+  server.registerTool(
+    "run_news_agent",
+    {
+      description:
+        "Run PharmaLLM's news agent now: pulls pharma and cyber news for about 190 topics into the knowledge base. " +
+        "Takes several minutes and uses the GPU.",
+    },
+    async () => runTool("run_news_agent", log, () => client.post("/api/agent/run", {}, NEWS_AGENT_TIMEOUT_MS))
+  );
+
+  server.registerTool(
+    "news_agent_status",
+    { description: "Whether the news agent is running, its last run and its schedule." },
+    async () => runTool("news_agent_status", log, () => client.get("/api/agent/status"))
+  );
+
+  server.registerTool(
+    "start_reindex",
+    {
+      description:
+        "Start rebuilding the active stack's search indexes in the background (12-16 minutes, GPU-heavy; search is " +
+        "refused while it runs). Returns a job id; poll reindex_status.",
+    },
+    async () => runTool("start_reindex", log, () => client.post("/api/knowledge/reindex", {}))
+  );
+
+  server.registerTool(
+    "reindex_status",
+    { description: "State and progress of the most recent background reindex." },
+    async () => runTool("reindex_status", log, () => client.get("/api/knowledge/reindex/status"))
+  );
+}
