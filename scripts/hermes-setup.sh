@@ -147,8 +147,11 @@ install_services() {
   [ -n "$node_bin" ] || { log "node not found on PATH (set NODE_BIN)"; exit 1; }
   mkdir -p "$LAUNCH_AGENTS_DIR" "$PROJECT_DIR/data/logs"
   plist="$LAUNCH_AGENTS_DIR/$MCP_LABEL.plist"
+  # MCP_HOST is baked into the plist: `launchctl setenv` is domain-wide and lost on reboot, after which
+  # run-mcp.sh would silently fall back to loopback and the LAN move would stop working
   sed -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
       -e "s|__NODE_BIN__|$node_bin|g" \
+      -e "s|__MCP_HOST__|${MCP_HOST:-127.0.0.1}|g" \
       -e "s|__PATH__|$(dirname "$node_bin"):/usr/bin:/bin:/usr/sbin:/sbin|g" \
       "$TEMPLATE_DIR/com.pharmallm.mcp.plist.template" >"$plist"
   domain="gui/$(id -u)"
@@ -228,7 +231,24 @@ check() {
       problems=1
     fi
   done
-  if curl -sf -m 3 "$MCP_HEALTH_URL" >/dev/null 2>&1; then log "pharmallm-mcp: healthy"; else log "pharmallm-mcp: not answering"; problems=1; fi
+  # /healthz answers 200 with {"ok":true,"pharmallm":false} while the app behind the service is down,
+  # so a 200 alone says nothing: parse the field instead of trusting the status code
+  local health
+  if health="$(curl -sf -m 3 "$MCP_HEALTH_URL" 2>/dev/null)"; then
+    if printf '%s' "$health" | python3 -c 'import json,sys
+try:
+    sys.exit(0 if json.load(sys.stdin).get("pharmallm") is True else 1)
+except Exception:
+    sys.exit(1)'; then
+      log "pharmallm-mcp: healthy"
+    else
+      log "pharmallm-mcp: up, PharmaLLM not reachable"
+      problems=1
+    fi
+  else
+    log "pharmallm-mcp: not answering"
+    problems=1
+  fi
   return "$problems"
 }
 

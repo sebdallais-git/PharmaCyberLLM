@@ -123,6 +123,8 @@ describe("switch-stack.sh mcp commands", () => {
     expect(template).toContain("<string>com.pharmallm.mcp</string>");
     expect(template).toContain("<string>__PROJECT_DIR__/scripts/run-mcp.sh</string>");
     expect(template).toContain("<key>NODE_BIN</key><string>__NODE_BIN__</string>");
+    // MCP_HOST lives in the plist, not in `launchctl setenv`, so a LAN move survives a reboot
+    expect(template).toContain("<key>MCP_HOST</key><string>__MCP_HOST__</string>");
     expect(template).toContain("<key>KeepAlive</key><true/>");
     expect(template).not.toMatch(/TOKEN/);
 
@@ -133,6 +135,7 @@ describe("switch-stack.sh mcp commands", () => {
       template
         .replaceAll("__PROJECT_DIR__", "/tmp/project")
         .replaceAll("__NODE_BIN__", "/tmp/node")
+        .replaceAll("__MCP_HOST__", "127.0.0.1")
         .replaceAll("__PATH__", "/usr/bin:/bin")
     );
     const lint = spawnSync("/usr/bin/plutil", ["-lint", rendered], { encoding: "utf-8" });

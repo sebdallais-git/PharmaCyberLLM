@@ -12,6 +12,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>NODE_BIN</key><string>__NODE_BIN__</string>
+    <key>MCP_HOST</key><string>__MCP_HOST__</string>
     <key>PATH</key><string>__PATH__</string>
   </dict>
   <key>WorkingDirectory</key><string>__PROJECT_DIR__</string>
