@@ -38,13 +38,7 @@ interface ChatEvent {
 }
 
 function isTimeout(err: unknown): boolean {
-  if (err instanceof Error) {
-    if (err.name === "TimeoutError" || err.name === "AbortError") return true;
-    // Handle cases where the error message contains timeout indicators
-    const msg = err.message.toLowerCase();
-    if (msg.includes("timeout") || msg.includes("timed out") || msg.includes("abort")) return true;
-  }
-  return false;
+  return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
 }
 
 function timeoutError(timeoutMs: number): PharmaLLMError {
