@@ -176,3 +176,32 @@ MCP service with `PHARMALLM_API_TOKEN` against protected routes: `reindex_status
 ### Step 5 — suites
 
 Root: typecheck, typecheck:tests ok; 127 tests passed (19 suites). MCP: typecheck ok; 41 tests passed (5 suites).
+
+## Re-verification after the final review fixes (2026-09-17)
+
+App restarted on the fixed code (`switch-stack.sh ollama`, token enabled):
+
+```
+no token, localhost /v1/models: 401
+token, localhost /v1/models: 200
+no token, tailscale protected: 401
+token, tailscale protected: 200
+browser route, tailscale: 200
+bare /api no token: 401
+iPad https 3443 browser route: 200
+iPad https 3443 UI page: 200
+```
+
+MCP service on the fixed code:
+
+```
+no-token mode, Host evil.example -> 403   (DNS-rebinding guard)
+no-token mode, Host localhost -> 200
+tools: 16
+system_health ok 11ms / search_knowledge ok 105ms / reindex_status ok 3ms / list_knowledge_gaps ok 4ms
+ask_pharmallm ok 23373ms (streamed answer through the body-covering deadline)
+```
+
+Node fetch 300 s limit: a throwaway loopback server withheld response headers for 310 s; the MCP client (default undici fetch with `headersTimeout: 0`, 400 s deadline) returned `PASS after 310 s: {"ok":true}`. Before the fix, Node's bundled fetch failed at ~300 s with `UND_ERR_HEADERS_TIMEOUT`.
+
+Suites: root 135 passed, MCP 48 passed; all typechecks clean.
