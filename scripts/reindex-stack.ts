@@ -59,7 +59,7 @@ async function main(): Promise<void> {
       `Reindex finished but skipped ${result.skippedRawDocuments} raw documents (see the log above). ` +
       "The indexes are usable without them; fix the cause and rebuild to include them."
     );
-    process.exit(1);
+    process.exit(3);
   }
 }
 

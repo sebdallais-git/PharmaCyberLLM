@@ -168,8 +168,14 @@ ensure_index() {
       ;;
     2)
       log "Building indexes for $1 (re-embeds the whole knowledge base, see $LOG_DIR/reindex-$1.log)..."
+      local reindex_rc=0
       (cd "$PROJECT_DIR" && LLM_PROVIDER="$1" npx tsx scripts/reindex-stack.ts) >"$LOG_DIR/reindex-$1.log" 2>&1 \
-        || { log "Reindex failed"; tail -n 15 "$LOG_DIR/reindex-$1.log"; return 1; }
+        || reindex_rc=$?
+      case "$reindex_rc" in
+        0) ;;
+        3) log "Indexes for $1 built with skipped raw documents — see $LOG_DIR/reindex-$1.log" ;;
+        *) log "Reindex failed"; tail -n 15 "$LOG_DIR/reindex-$1.log"; return 1 ;;
+      esac
       tail -n 1 "$LOG_DIR/reindex-$1.log"
       ;;
     *)
