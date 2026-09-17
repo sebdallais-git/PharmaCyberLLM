@@ -17,7 +17,10 @@ export function registerGapTools(server: McpServer, client: PharmaLLMClient, log
     {
       description: "Recent questions PharmaLLM answered with low confidence, with overall gap statistics.",
       inputSchema: {
-        status: z.enum(["detected", "resolved", "unresolved"]).optional().describe("Only gaps with this status"),
+        status: z
+          .enum(["triggered", "skipped", "resolved", "unresolved", "detected"])
+          .optional()
+          .describe("Only gaps with this status (new gaps are 'triggered')"),
       },
     },
     async ({ status }) =>

@@ -59,20 +59,39 @@ describe("graph tools", () => {
 });
 
 describe("gap tools", () => {
-  it("lists gaps filtered by status with stats", async () => {
+  // PharmaLLM inserts new gaps as 'triggered', not 'detected' (src/services/gap-detector.ts)
+  function serveGaps(): void {
     harness.pharma.on("GET", "/api/knowledge/gaps", (_req, res) =>
       sendJson(res, 200, {
         gaps: [
           { id: 1, status: "resolved" },
-          { id: 2, status: "detected" },
+          { id: 2, status: "triggered" },
         ],
       })
     );
     harness.pharma.on("GET", "/api/knowledge/gaps/stats", (_req, res) => sendJson(res, 200, { total: 2 }));
+  }
 
-    const result = await call("list_knowledge_gaps", { status: "detected" });
+  it("lists gaps filtered by status with stats", async () => {
+    serveGaps();
 
-    expect(JSON.parse(toolText(result))).toEqual({ gaps: [{ id: 2, status: "detected" }], stats: { total: 2 } });
+    const result = await call("list_knowledge_gaps", { status: "triggered" });
+
+    expect(JSON.parse(toolText(result))).toEqual({ gaps: [{ id: 2, status: "triggered" }], stats: { total: 2 } });
+  });
+
+  it("returns every gap when no status is given", async () => {
+    serveGaps();
+
+    const result = await call("list_knowledge_gaps");
+
+    expect(JSON.parse(toolText(result))).toEqual({
+      gaps: [
+        { id: 1, status: "resolved" },
+        { id: 2, status: "triggered" },
+      ],
+      stats: { total: 2 },
+    });
   });
 
   it("resolves a gap", async () => {
