@@ -34,11 +34,24 @@ function sandbox(): Sandbox {
   writeFileSync(join(runDir, "api-token"), `${API_TOKEN}\n`);
   writeFileSync(join(runDir, "mcp-token"), `${MCP_TOKEN}\n`);
   for (const name of ["hermes", "launchctl"]) {
-    const stub = join(root, name);
-    writeFileSync(stub, ["#!/bin/bash", `printf '${name}' >> "$STUB_CALLS"`, `printf ' [%s]' "$@" >> "$STUB_CALLS"`, 'echo >> "$STUB_CALLS"'].join("\n"));
-    chmodSync(stub, 0o755);
+    writeStub(join(root, name), name);
   }
   return { root, home, runDir, agentsDir, calls };
+}
+
+// Logs its arguments to $STUB_CALLS; extra lines let a test decide the exit status
+function writeStub(path: string, name: string, extra: string[] = []): void {
+  writeFileSync(
+    path,
+    [
+      "#!/bin/bash",
+      `printf '${name}' >> "$STUB_CALLS"`,
+      `printf ' [%s]' "$@" >> "$STUB_CALLS"`,
+      'echo >> "$STUB_CALLS"',
+      ...extra,
+    ].join("\n")
+  );
+  chmodSync(path, 0o755);
 }
 
 function setup(box: Sandbox, args: string[], extraEnv: Record<string, string> = {}) {
@@ -87,6 +100,38 @@ describe("hermes-setup.sh install-config", () => {
     expect(env).toContain("TELEGRAM_HOME_CHANNEL=424242");
     const output = result.stdout + result.stderr;
     for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN]) expect(output).not.toContain(secret);
+  });
+
+  it("takes only the first allowed user as the home channel", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "111,222" });
+
+    expect(result.status).toBe(0);
+    const env = envFile(box);
+    expect(env).toContain("TELEGRAM_ALLOWED_USERS=111,222");
+    expect(env).toContain("TELEGRAM_HOME_CHANNEL=111\n");
+  });
+
+  it("replaces .env atomically and leaves no temporary file behind", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    expect(result.status).toBe(0);
+    expect(readdirSync(box.home).filter((name) => name.startsWith(".env") && name !== ".env")).toEqual([]);
+  });
+
+  it("names the token helper when a PharmaLLM token is missing", () => {
+    const box = sandbox();
+    rmSync(join(box.runDir, "api-token"));
+
+    const result = setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    expect(result.status).toBe(1);
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("Missing PHARMALLM_API_TOKEN");
+    expect(output).toContain("scripts/switch-stack.sh token");
   });
 
   it("keeps existing values on re-run and backs up a changed config", () => {
@@ -161,6 +206,40 @@ describe("hermes-setup.sh install-services", () => {
     expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmallm\.mcp\.plist\]/);
     expect(calls).toContain("hermes [gateway] [install] [--force] [--start-now] [--start-on-login]");
   });
+
+  it(
+    "retries a bootstrap that fails right after bootout",
+    () => {
+      const box = sandbox();
+      // launchd answers "Input/output error" on the first bootstraps after a bootout
+      writeStub(join(box.root, "launchctl"), "launchctl", [
+        'case "$1" in',
+        '  bootstrap) [ "$(grep -c "\\[bootstrap\\]" "$STUB_CALLS")" -ge 3 ] || exit 1 ;;',
+        "esac",
+        "exit 0",
+      ]);
+
+      const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
+
+      expect(result.status).toBe(0);
+      const calls = readFileSync(box.calls, "utf-8");
+      expect(calls.match(/\[bootstrap\]/g)).toHaveLength(3);
+      expect(calls).toContain("hermes [gateway] [install]");
+    },
+    30_000
+  );
+});
+
+describe("hermes-setup.sh all", () => {
+  it("stops before touching services when install-config fails", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["all"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Missing TELEGRAM_BOT_TOKEN");
+    expect(existsSync(box.calls)).toBe(false);
+  });
 });
 
 describe("hermes-setup.sh check", () => {
@@ -175,5 +254,19 @@ describe("hermes-setup.sh check", () => {
     expect(output).toContain("PHARMALLM_MCP_TOKEN: set");
     expect(output).toContain(".env permissions: 600");
     for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN, "424242"]) expect(output).not.toContain(secret);
+  });
+
+  it("finds services loaded in the user domain as well as gui", () => {
+    const box = sandbox();
+    // `hermes gateway install` loads ai.hermes.gateway in user/$UID, not gui/$UID
+    writeStub(join(box.root, "launchctl"), "launchctl", ['case "${2:-}" in user/*) exit 0 ;; esac', "exit 1"]);
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    const result = setup(box, ["check"]);
+
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("service com.pharmallm.mcp: loaded");
+    expect(output).toContain("service ai.hermes.gateway: loaded");
+    expect(output).not.toContain("not loaded");
   });
 });

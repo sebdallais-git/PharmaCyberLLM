@@ -66,9 +66,20 @@ for line in lines:
     out.append(line)
 if not written:
     out.append(f"{key}={value}")
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w", encoding="utf-8") as handle:
-    handle.write("\n".join(out) + "\n")
+# Write a private temp file next to .env and rename it over: an interruption never truncates the secrets
+directory = os.path.dirname(path) or "."
+tmp_path = os.path.join(directory, f".env.tmp-{os.getpid()}")
+fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(out) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+except BaseException:
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
+    raise
 os.chmod(path, 0o600)
 PY
 }
@@ -89,7 +100,12 @@ fill_env() {
     echo >&2
   fi
   if [ -z "$value" ]; then
-    log "Missing $key: add it to $ENV_FILE (chmod 600) and re-run, see hermes/README.md"
+    local hint=""
+    case "$key" in
+      PHARMALLM_API_TOKEN) hint=" — generate it with: scripts/switch-stack.sh token" ;;
+      PHARMALLM_MCP_TOKEN) hint=" — generate it with: scripts/switch-stack.sh mcp-token" ;;
+    esac
+    log "Missing $key: add it to $ENV_FILE (chmod 600) and re-run, see hermes/README.md$hint"
     return 1
   fi
   env_set "$key" "$value"
@@ -118,7 +134,8 @@ install_config() {
   fill_env PHARMALLM_MCP_TOKEN "" "$RUN_DIR/mcp-token"
   fill_env TELEGRAM_BOT_TOKEN ""
   fill_env TELEGRAM_ALLOWED_USERS ""
-  fill_env TELEGRAM_HOME_CHANNEL "$(env_get TELEGRAM_ALLOWED_USERS)"
+  # A single chat id, not the whole allow-list: scheduled jobs are delivered to one channel
+  fill_env TELEGRAM_HOME_CHANNEL "$(env_get TELEGRAM_ALLOWED_USERS | cut -d, -f1 | tr -d '[:space:]')"
   log "Config installed in $HERMES_HOME"
 }
 
@@ -136,7 +153,13 @@ install_services() {
       "$TEMPLATE_DIR/com.pharmallm.mcp.plist.template" >"$plist"
   domain="gui/$(id -u)"
   "$LAUNCHCTL_BIN" bootout "$domain/$MCP_LABEL" >/dev/null 2>&1 || true
-  "$LAUNCHCTL_BIN" bootstrap "$domain" "$plist"
+  # launchd can still be tearing the old job down and answers "Input/output error"; give it a few tries
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$LAUNCHCTL_BIN" bootstrap "$domain" "$plist"; then break; fi
+    if [ "$attempt" -eq 5 ]; then log "launchctl bootstrap failed 5 times for $MCP_LABEL"; exit 1; fi
+    sleep 1
+  done
   log "Installed and started $MCP_LABEL"
   "$HERMES_BIN" gateway install --force --start-now --start-on-login
   log "Installed the Hermes gateway service"
@@ -178,7 +201,7 @@ PY
 }
 
 check() {
-  local problems=0 key perms domain
+  local problems=0 key perms
   if command -v "$HERMES_BIN" >/dev/null 2>&1; then
     log "hermes: installed"
   else
@@ -196,9 +219,14 @@ check() {
   for key in "${ENV_KEYS[@]}"; do
     if [ -n "$(env_get "$key")" ]; then log "  $key: set"; else log "  $key: missing"; problems=1; fi
   done
-  domain="gui/$(id -u)"
+  # `hermes gateway install` loads its label in user/$UID while our agent lives in gui/$UID: probe both
   for key in "$MCP_LABEL" ai.hermes.gateway; do
-    if "$LAUNCHCTL_BIN" print "$domain/$key" >/dev/null 2>&1; then log "service $key: loaded"; else log "service $key: not loaded"; problems=1; fi
+    if "$LAUNCHCTL_BIN" print "gui/$(id -u)/$key" >/dev/null 2>&1 || "$LAUNCHCTL_BIN" print "user/$(id -u)/$key" >/dev/null 2>&1; then
+      log "service $key: loaded"
+    else
+      log "service $key: not loaded"
+      problems=1
+    fi
   done
   if curl -sf -m 3 "$MCP_HEALTH_URL" >/dev/null 2>&1; then log "pharmallm-mcp: healthy"; else log "pharmallm-mcp: not answering"; problems=1; fi
   return "$problems"
