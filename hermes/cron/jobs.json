@@ -9,7 +9,7 @@
     "name": "pharmallm-gap-resolution",
     "schedule": "0 7 * * *",
     "deliver": "telegram",
-    "prompt": "Scheduled job: knowledge gap resolution. Call list_knowledge_gaps with status detected. Pick at most 3 gaps, oldest first, and call resolve_knowledge_gap for each with its id and original query. Do not call add_knowledge. Reply with one line per gap: the question and whether it is now resolved. If there are no detected gaps, reply [SILENT]."
+    "prompt": "Scheduled job: knowledge gap resolution. Call list_knowledge_gaps with status triggered. Pick at most 3 gaps, oldest first, and call resolve_knowledge_gap for each with its id and original query. Do not call add_knowledge. Reply with one line per gap: the question and whether it is now resolved. If there are no detected gaps, reply [SILENT]."
   },
   {
     "name": "pharmallm-health-watch",

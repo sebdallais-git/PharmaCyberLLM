@@ -20,6 +20,12 @@ providers:
       pharmallm-local:
         context_length: 65536
 
+# Cron runs resolve the provider from cron.* first: the per-job creation snapshot stores a bare
+# "custom" (Hermes drops the ":pharmallm" suffix) and would otherwise fail with "resolved without credentials"
+cron:
+  model: pharmallm-local
+  model_provider: "custom:pharmallm"
+
 mcp_servers:
   pharmallm:
     url: "${PHARMALLM_MCP_URL}"
@@ -45,8 +51,9 @@ agent:
 
 terminal:
   backend: docker
-  container_cpu: 2
-  container_memory: 2048
+  # These must fit the Docker VM: colima on this Mac has 1.91 GB / 2 CPUs, shared with Neo4j and SearXNG
+  container_cpu: 1
+  container_memory: 512
   container_persistent: true
   docker_mount_cwd_to_workspace: false
   docker_network: false

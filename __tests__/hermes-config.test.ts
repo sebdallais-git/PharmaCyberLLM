@@ -46,6 +46,12 @@ describe("hermes/config.template.yaml", () => {
     expect(at("providers.pharmallm.models.pharmallm-local.context_length")).toBe(65536);
   });
 
+  it("pins the cron provider so scheduled runs resolve credentials", () => {
+    // Hermes stores a bare "custom" snapshot per job and resolves cron runs from cron.* first
+    expect(at("cron.model")).toBe("pharmallm-local");
+    expect(at("cron.model_provider")).toBe("custom:pharmallm");
+  });
+
   it("connects to pharmallm-mcp with a bearer token, long timeout and no start_reindex", () => {
     expect(at("mcp_servers.pharmallm.url")).toBe("${PHARMALLM_MCP_URL}");
     expect(at("mcp_servers.pharmallm.headers.Authorization")).toBe("Bearer ${PHARMALLM_MCP_TOKEN}");
@@ -59,6 +65,9 @@ describe("hermes/config.template.yaml", () => {
     expect(at("terminal.docker_network")).toBe(false);
     expect(at("terminal.docker_mount_cwd_to_workspace")).toBe(false);
     expect(at("terminal.docker_volumes")).toEqual([]);
+    // The sandbox must fit the Docker VM, which Neo4j and SearXNG already share
+    expect(at("terminal.container_cpu")).toBe(1);
+    expect(at("terminal.container_memory")).toBe(512);
     expect(at("approvals.cron_mode")).toBe("deny");
     expect(at("approvals.unattended_mode")).toBe("deny");
     expect(at("approvals.single_query_mode")).toBe("deny");
@@ -68,9 +77,16 @@ describe("hermes/config.template.yaml", () => {
     expect(at("web.keyless_rescue")).toBe(false);
     expect(at("security.allow_private_urls")).toBe(false);
     expect(at("unauthorized_dm_behavior")).toBe("ignore");
-    expect(at("agent.disabled_toolsets")).toEqual(
-      expect.arrayContaining(["browser", "computer_use", "code_execution", "image_gen", "tts", "delegation"])
-    );
+    expect(at("agent.disabled_toolsets")).toEqual([
+      "browser",
+      "computer_use",
+      "code_execution",
+      "image_gen",
+      "tts",
+      "delegation",
+      "kanban",
+      "vision",
+    ]);
     const telegram = at("platform_toolsets.telegram") as string[];
     const cron = at("platform_toolsets.cron") as string[];
     expect(telegram).toContain("pharmallm");
@@ -98,6 +114,18 @@ describe("hermes/cron/jobs.json", () => {
     }
     expect(jobs[2].prompt).toContain("[SILENT]");
     expect(jobs[1].prompt).toContain("at most 3");
+  });
+
+  it("asks for the gap status the detector actually writes and forbids adding knowledge", () => {
+    // gap_log rows start as 'triggered'/'skipped', never 'detected' (src/services/gap-detector.ts)
+    expect(jobs[1].prompt).toContain("status triggered");
+    expect(jobs[1].prompt).not.toContain("status detected");
+    expect(jobs[1].prompt).toContain("Do not call add_knowledge");
+  });
+
+  it("asks the feedback digest for both report kinds", () => {
+    expect(jobs[3].prompt).toContain("weekly_digest");
+    expect(jobs[3].prompt).toContain("low_rated");
   });
 });
 
