@@ -8,7 +8,7 @@ import { bearerToken, isLoopbackAddress, tokensMatch } from "./config.js";
 import type { McpConfig } from "./config.js";
 import { buildMcpServer } from "./mcp-server.js";
 import type { PharmaLLMClient } from "./pharmallm-client.js";
-import type { ToolLogger } from "./tools/result.js";
+import type { ToolLogger, ToolOptions } from "./tools/result.js";
 
 export interface McpAuthResult {
   ok: boolean;
@@ -35,7 +35,7 @@ function jsonRpcError(res: Response, status: number, code: number, message: stri
   res.status(status).json({ jsonrpc: "2.0", error: { code, message }, id: null });
 }
 
-export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: ToolLogger): Express {
+export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): Express {
   const app = express();
 
   app.get("/healthz", async (_req: Request, res: Response) => {
@@ -67,7 +67,7 @@ export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: T
 
   // Stateless: a fresh server and transport per request, no sessions to keep
   app.post("/mcp", express.json({ limit: "2mb" }), async (req: Request, res: Response) => {
-    const server = buildMcpServer(client, log);
+    const server = buildMcpServer(client, log, options);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();

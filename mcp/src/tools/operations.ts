@@ -2,13 +2,13 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
-import { runTool } from "./result.js";
-import type { ToolLogger } from "./result.js";
+import { runLongTool, runTool } from "./result.js";
+import type { ToolLogger, ToolOptions } from "./result.js";
 
 // 14 minutes: the tool reports its own timeout before Hermes gives up on the call at 900 s
 export const NEWS_AGENT_TIMEOUT_MS = 14 * 60 * 1000;
 
-export function registerOperationsTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+export function registerOperationsTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): void {
   server.registerTool(
     "system_health",
     { description: "PharmaLLM health: active LLM stack, chat/embedding/index checks, supporting services, benchmark mode." },
@@ -28,7 +28,8 @@ export function registerOperationsTools(server: McpServer, client: PharmaLLMClie
         "Run PharmaLLM's news agent now: pulls pharma and cyber news for about 190 topics into the knowledge base. " +
         "Takes several minutes and uses the GPU.",
     },
-    async () => runTool("run_news_agent", log, () => client.post("/api/agent/run", {}, NEWS_AGENT_TIMEOUT_MS))
+    async (extra) =>
+      runLongTool("run_news_agent", log, extra, options, () => client.post("/api/agent/run", {}, NEWS_AGENT_TIMEOUT_MS))
   );
 
   server.registerTool(

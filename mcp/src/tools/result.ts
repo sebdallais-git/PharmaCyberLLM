@@ -1,6 +1,6 @@
 // Shared helpers that turn tool outcomes into MCP results and log each call
 
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 
 export interface ToolLogger {
   (line: string): void;
@@ -30,5 +30,39 @@ export async function runTool(name: string, log: ToolLogger, fn: () => Promise<u
     const message = err instanceof Error ? err.message : String(err);
     log(`[mcp] ${name} error ${Date.now() - startedAt}ms`);
     return errorResult(message);
+  }
+}
+
+// Long PharmaLLM calls send nothing until they finish; HTTP clients with a read timeout (Hermes waits 300 s
+// between bytes) would give up, so long tools send a logging notification on the call's stream meanwhile
+export const KEEPALIVE_INTERVAL_MS = 60_000;
+
+export interface ToolOptions {
+  keepAliveMs?: number;
+}
+
+export interface NotificationSender {
+  sendNotification(notification: ServerNotification): Promise<void>;
+}
+
+export async function runLongTool(
+  name: string,
+  log: ToolLogger,
+  sender: NotificationSender,
+  options: ToolOptions,
+  fn: () => Promise<unknown>
+): Promise<CallToolResult> {
+  const timer = setInterval(() => {
+    sender
+      .sendNotification({
+        method: "notifications/message",
+        params: { level: "info", logger: "pharmallm-mcp", data: `${name} is still running` },
+      })
+      .catch(() => {});
+  }, options.keepAliveMs ?? KEEPALIVE_INTERVAL_MS);
+  try {
+    return await runTool(name, log, fn);
+  } finally {
+    clearInterval(timer);
   }
 }

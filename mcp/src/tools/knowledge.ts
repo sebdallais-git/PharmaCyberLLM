@@ -3,12 +3,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
-import { runTool } from "./result.js";
-import type { ToolLogger } from "./result.js";
+import { runLongTool, runTool } from "./result.js";
+import type { ToolLogger, ToolOptions } from "./result.js";
 
 export const ASK_TIMEOUT_MS = 5 * 60 * 1000;
 
-export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): void {
   server.registerTool(
     "search_knowledge",
     {
@@ -35,8 +35,8 @@ export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClien
         web_search: z.boolean().optional().describe("Also search recent news (default false)"),
       },
     },
-    async ({ question, web_search }) =>
-      runTool("ask_pharmallm", log, () => client.ask(question, web_search ?? false, ASK_TIMEOUT_MS))
+    async ({ question, web_search }, extra) =>
+      runLongTool("ask_pharmallm", log, extra, options, () => client.ask(question, web_search ?? false, ASK_TIMEOUT_MS))
   );
 
   server.registerTool(

@@ -3,15 +3,15 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
-import { runTool } from "./result.js";
-import type { ToolLogger } from "./result.js";
+import { runLongTool, runTool } from "./result.js";
+import type { ToolLogger, ToolOptions } from "./result.js";
 
 function gapsOf(payload: unknown): Array<Record<string, unknown>> {
   const gaps = typeof payload === "object" && payload !== null ? (payload as { gaps?: unknown }).gaps : undefined;
   return Array.isArray(gaps) ? gaps.filter((gap): gap is Record<string, unknown> => typeof gap === "object" && gap !== null) : [];
 }
 
-export function registerGapTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+export function registerGapTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): void {
   server.registerTool(
     "list_knowledge_gaps",
     {
@@ -42,8 +42,8 @@ export function registerGapTools(server: McpServer, client: PharmaLLMClient, log
         search_topic: z.string().min(1).optional(),
       },
     },
-    async ({ gap_id, original_query, search_topic }) =>
-      runTool("resolve_knowledge_gap", log, () =>
+    async ({ gap_id, original_query, search_topic }, extra) =>
+      runLongTool("resolve_knowledge_gap", log, extra, options, () =>
         client.post(
           "/api/knowledge/gaps/check-resolution",
           search_topic ? { gap_id, original_query, search_topic } : { gap_id, original_query },
