@@ -6,6 +6,7 @@
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
+#   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
 
 set -euo pipefail
 
@@ -15,7 +16,7 @@ LOG_PREFIX="switch-stack"
 # shellcheck source=lib/services.sh
 source "$SCRIPT_DIR/lib/services.sh"
 
-RUN_DIR="$PROJECT_DIR/data/run"
+RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
 TOKEN_FILE="$RUN_DIR/api-token"
 LOG_DIR="$PROJECT_DIR/data/logs"
 MLX_VENV="$PROJECT_DIR/python/mlx-venv"
@@ -34,6 +35,9 @@ OLLAMA_CHAT_MODEL="qwen3.8-pharma"
 OLLAMA_EMBED_MODEL="qwen3-embedding:0.6b-q8_0"
 MLX_CHAT_MODEL="mlx-community/Qwen3.8-27B-4bit"
 MLX_EMBED_MODEL="mlx-community/Qwen3-Embedding-0.6B-8bit"
+OLLAMA_MODELFILE="$PROJECT_DIR/ollama/qwen3.8-pharma.Modelfile"
+# Caps how much memory mlx_lm.server spends on cached prompts (several 64k agent prompts would otherwise pile up)
+MLX_PROMPT_CACHE_BYTES="${MLX_PROMPT_CACHE_BYTES:-8589934592}"
 
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
@@ -89,6 +93,27 @@ start_ollama() {
   wait_http "http://localhost:$OLLAMA_PORT/v1/models" 60 || { log "Ollama did not become ready"; return 1; }
 }
 
+modelfile_num_ctx() {
+  awk '$1 == "PARAMETER" && $2 == "num_ctx" { print $3 }' "$OLLAMA_MODELFILE"
+}
+
+ollama_model_num_ctx() {
+  ollama show "$OLLAMA_CHAT_MODEL" --parameters 2>/dev/null | awk '$1 == "num_ctx" { print $2 }'
+}
+
+# Recreate qwen3.8-pharma when its context differs from the Modelfile (reuses the pulled weights, no download)
+ensure_ollama_ctx() {
+  local wanted current
+  wanted="$(modelfile_num_ctx)"
+  current="$(ollama_model_num_ctx || true)"
+  if [ "$current" = "$wanted" ]; then
+    log "$OLLAMA_CHAT_MODEL context is $wanted"
+    return 0
+  fi
+  log "Recreating $OLLAMA_CHAT_MODEL with context $wanted (was ${current:-unknown})"
+  ollama create "$OLLAMA_CHAT_MODEL" -f "$OLLAMA_MODELFILE" >/dev/null
+}
+
 stop_pidfile() {
   local name="$1" port="$2" ignore_foreign="${3:-}"
   stop_pidfile_process "$RUN_DIR/$name.pid"
@@ -111,6 +136,7 @@ start_mlx() {
       || { log "Port $MLX_CHAT_PORT is used by another program — cannot start MLX"; return 1; }
   else
     nohup "$MLX_VENV/bin/mlx_lm.server" --model "$MLX_CHAT_MODEL" --host 127.0.0.1 --port "$MLX_CHAT_PORT" \
+      --prompt-cache-bytes "$MLX_PROMPT_CACHE_BYTES" \
       >"$LOG_DIR/mlx-chat.log" 2>&1 &
     echo $! >"$RUN_DIR/mlx-chat.pid"
   fi
@@ -128,7 +154,7 @@ start_mlx() {
 }
 
 start_stack() {
-  if [ "$1" = "mlx" ]; then start_mlx; else start_ollama; fi
+  if [ "$1" = "mlx" ]; then start_mlx; else start_ollama && ensure_ollama_ctx; fi
 }
 
 stop_stack() {
@@ -311,7 +337,7 @@ prepare() {
   start_ollama
   ollama pull "$OLLAMA_BASE_MODEL"
   ollama pull "$OLLAMA_EMBED_MODEL"
-  ollama create "$OLLAMA_CHAT_MODEL" -f "$PROJECT_DIR/ollama/qwen3.8-pharma.Modelfile"
+  ollama create "$OLLAMA_CHAT_MODEL" -f "$OLLAMA_MODELFILE"
 
   # MLX models: files only, no server is started here
   [ -x "$MLX_VENV/bin/python" ] || "$MLX_PYTHON" -m venv "$MLX_VENV"
@@ -330,6 +356,10 @@ status() {
     port="${entry#*:}"
     if port_open "$port"; then log "  $name (:$port) up"; else log "  $name (:$port) down"; fi
   done
+  local parallel
+  parallel="$(launchctl getenv OLLAMA_NUM_PARALLEL 2>/dev/null || true)"
+  log "  OLLAMA_NUM_PARALLEL: ${parallel:-not set in launchd (keep it at 1: each parallel slot allocates its own 64k context)}"
+  if port_open "$OLLAMA_PORT"; then ollama ps || true; fi
   if curl -sf "${CHROMA_URL}/api/v2/heartbeat" >/dev/null 2>&1; then
     for stack in ollama mlx; do
       (cd "$PROJECT_DIR" && LLM_PROVIDER="$stack" npx tsx scripts/reindex-stack.ts --status) || true
@@ -343,5 +373,6 @@ case "${1:-}" in
   prepare) prepare ;;
   status) status ;;
   token) ensure_token ;;
-  *) sed -n '2,8p' "$0"; exit 1 ;;
+  ollama-ctx) ensure_ollama_ctx ;;
+  *) sed -n '2,9p' "$0"; exit 1 ;;
 esac

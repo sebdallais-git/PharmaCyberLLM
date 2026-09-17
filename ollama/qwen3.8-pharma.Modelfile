@@ -1,3 +1,4 @@
-# Qwen3.8 27B (Q4_K_M) with the 16k context PharmaLLM uses; Ollama's OpenAI API can't set num_ctx per request
+# Qwen3.8 27B (Q4_K_M) with a 64k context shared by PharmaLLM chat and agents (Hermes needs at least 64k);
+# Ollama's OpenAI API can't set num_ctx per request, and one shared size keeps a single copy of the model loaded
 FROM qwen3.8:27b-q4_K_M
-PARAMETER num_ctx 16384
+PARAMETER num_ctx 65536

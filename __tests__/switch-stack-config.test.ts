@@ -1,5 +1,7 @@
-import { describe, expect, it } from "@jest/globals";
-import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "@jest/globals";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildStacks } from "../src/config/llm-stacks.js";
 
@@ -28,9 +30,9 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
     expect(mlx.embedBaseUrl).toBe(`http://localhost:${shellVar("MLX_EMBED_PORT")}`);
   });
 
-  it("builds qwen3.8-pharma from the pulled base model with a 16k context", () => {
+  it("builds qwen3.8-pharma from the pulled base model with a 64k context", () => {
     expect(modelfile).toContain(`FROM ${shellVar("OLLAMA_BASE_MODEL")}`);
-    expect(modelfile).toContain("PARAMETER num_ctx 16384");
+    expect(modelfile).toContain("PARAMETER num_ctx 65536");
   });
 
   it("warms up with the same thinking switch the client sends", () => {
@@ -38,5 +40,64 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
     expect(script).toContain(`'"chat_template_kwargs":{"enable_thinking":false}'`);
     expect(JSON.stringify(ollama.chatExtraBody)).toBe('{"reasoning_effort":"none"}');
     expect(JSON.stringify(mlx.chatExtraBody)).toBe('{"chat_template_kwargs":{"enable_thinking":false}}');
+  });
+});
+
+describe("switch-stack.sh long-context settings", () => {
+  it("caps the MLX prompt cache with an overridable byte limit", () => {
+    expect(script).toContain('MLX_PROMPT_CACHE_BYTES="${MLX_PROMPT_CACHE_BYTES:-8589934592}"');
+    expect(script).toContain('--prompt-cache-bytes "$MLX_PROMPT_CACHE_BYTES"');
+    expect(script).toContain("start_ollama && ensure_ollama_ctx");
+  });
+});
+
+describe("switch-stack.sh ollama-ctx", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Runs the command with a stub `ollama` first on a PATH that cannot reach the real one
+  function runWithStubOllama(currentCtx: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "ollama-ctx-"));
+    dirs.push(dir);
+    const log = join(dir, "ollama.log");
+    const stub = join(dir, "ollama");
+    writeFileSync(
+      stub,
+      [
+        "#!/bin/bash",
+        'echo "$*" >> "$STUB_LOG"',
+        'if [ "$1" = "show" ]; then',
+        "  printf 'min_p                          0\\nnum_ctx                        %s\\ntemperature                    1\\n' \"$STUB_CTX\"",
+        "fi",
+      ].join("\n")
+    );
+    chmodSync(stub, 0o755);
+    const result = spawnSync("bash", [join(process.cwd(), "scripts", "switch-stack.sh"), "ollama-ctx"], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${dir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: join(dir, "run"),
+        STUB_LOG: log,
+        STUB_CTX: currentCtx,
+      },
+    });
+    expect(result.status).toBe(0);
+    return readFileSync(log, "utf-8");
+  }
+
+  it("recreates qwen3.8-pharma when its context differs from the Modelfile", () => {
+    const calls = runWithStubOllama("16384");
+    expect(calls).toContain("show qwen3.8-pharma --parameters");
+    expect(calls).toContain(`create qwen3.8-pharma -f ${join(process.cwd(), "ollama", "qwen3.8-pharma.Modelfile")}`);
+  });
+
+  it("leaves qwen3.8-pharma alone when the context already matches", () => {
+    const calls = runWithStubOllama("65536");
+    expect(calls).toContain("show qwen3.8-pharma --parameters");
+    expect(calls).not.toContain("create");
   });
 });
