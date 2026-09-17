@@ -7,6 +7,8 @@
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
 #   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
+#   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmallm-mcp
+#   scripts/switch-stack.sh mcp start|stop|status    control the pharmallm-mcp launchd service
 
 set -euo pipefail
 
@@ -18,6 +20,10 @@ source "$SCRIPT_DIR/lib/services.sh"
 
 RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
 TOKEN_FILE="$RUN_DIR/api-token"
+MCP_TOKEN_FILE="$RUN_DIR/mcp-token"
+MCP_LABEL="com.pharmallm.mcp"
+MCP_PLIST="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$MCP_LABEL.plist"
+MCP_PORT="3200"
 LOG_DIR="$PROJECT_DIR/data/logs"
 MLX_VENV="$PROJECT_DIR/python/mlx-venv"
 MLX_PYTHON="${MLX_PYTHON:-python3}"
@@ -248,6 +254,44 @@ api_token() {
   fi
 }
 
+# Token agents send to pharmallm-mcp (readable only by you); run-mcp.sh passes it to the service
+ensure_mcp_token() {
+  if [ -s "$MCP_TOKEN_FILE" ]; then
+    log "MCP token already exists at $MCP_TOKEN_FILE"
+  else
+    (umask 077 && openssl rand -hex 32 >"$MCP_TOKEN_FILE")
+    log "Created MCP token at $MCP_TOKEN_FILE"
+  fi
+  chmod 600 "$MCP_TOKEN_FILE"
+}
+
+# pharmallm-mcp runs under launchd (installed by scripts/hermes-setup.sh install-services); stack switches leave it running
+mcp_service() {
+  local domain
+  domain="gui/$(id -u)"
+  case "${1:-}" in
+    start)
+      [ -f "$MCP_PLIST" ] || { log "No $MCP_PLIST — run: scripts/hermes-setup.sh install-services"; exit 1; }
+      launchctl bootstrap "$domain" "$MCP_PLIST" 2>/dev/null || launchctl kickstart -k "$domain/$MCP_LABEL"
+      wait_http "http://127.0.0.1:$MCP_PORT/healthz" 30 \
+        || { log "pharmallm-mcp did not answer on :$MCP_PORT (see $LOG_DIR/mcp.log)"; exit 1; }
+      log "pharmallm-mcp is up on :$MCP_PORT"
+      ;;
+    stop)
+      launchctl bootout "$domain/$MCP_LABEL" 2>/dev/null || true
+      log "pharmallm-mcp stopped"
+      ;;
+    status)
+      if launchctl print "$domain/$MCP_LABEL" >/dev/null 2>&1; then log "  mcp service loaded"; else log "  mcp service not loaded"; fi
+      if curl -sf -m 3 "http://127.0.0.1:$MCP_PORT/healthz"; then echo; else log "  mcp (:$MCP_PORT) down"; fi
+      ;;
+    *)
+      log "Usage: scripts/switch-stack.sh mcp start|stop|status"
+      exit 1
+      ;;
+  esac
+}
+
 start_app() {
   cd "$PROJECT_DIR"
   LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
@@ -374,5 +418,7 @@ case "${1:-}" in
   status) status ;;
   token) ensure_token ;;
   ollama-ctx) ensure_ollama_ctx ;;
-  *) sed -n '2,9p' "$0"; exit 1 ;;
+  mcp-token) ensure_mcp_token ;;
+  mcp) mcp_service "${2:-}" ;;
+  *) sed -n '2,11p' "$0"; exit 1 ;;
 esac
