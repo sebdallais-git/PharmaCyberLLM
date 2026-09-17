@@ -113,3 +113,21 @@ Defects found live (fixed in the final fix wave):
 ### Environment note
 
 `docker pull` hangs with no output for any image (including `alpine:3.20`) while the VM reaches `auth.docker.io` (200) and the registry (401) normally — the daemon appears wedged after an interrupted pull. A `colima restart` (which also restarts Neo4j and SearXNG) is the likely remedy, left to the user.
+
+## After the final-review fixes (2026-09-17)
+
+`scripts/hermes-setup.sh install-config` and `install-cron` re-applied the config and updated all four jobs. Live checks:
+
+- `hermes mcp test pharmallm_cron`: connected in 329 ms.
+- `hermes tools list --platform cron`: only `session_search` enabled — web, search, memory, skills, todo, terminal, file and cronjob all disabled.
+- A throwaway cron job asked to list its own `mcp__` tools (delivered locally, then removed) answered with exactly 14 names, all `mcp__pharmallm_cron__*`:
+
+```
+ask_pharmallm, dashboard_metrics, feedback_report, graph_search, graph_stats, knowledge_status,
+list_knowledge_gaps, news_agent_status, record_feedback, reindex_status, resolve_knowledge_gap,
+run_news_agent, search_knowledge, system_health
+```
+
+No `add_knowledge`, no `start_reindex`, and no `mcp__pharmallm__*` tool at all: scheduled runs never connect to the write-capable server. Telegram and CLI keep the full `pharmallm` server (15 tools, `start_reindex` excluded).
+
+Still open: sandbox isolation (spec Testing item 6) remains unproven because the Docker daemon is wedged — `docker pull` hangs for any image while the VM reaches the registry normally. After `colima restart` and `docker pull nikolaik/python-nodejs:python3.11-nodejs20`, one shell-tool call can close it.
