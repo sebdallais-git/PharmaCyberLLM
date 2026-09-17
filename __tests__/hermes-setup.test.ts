@@ -1,0 +1,179 @@
+import { afterEach, describe, expect, it } from "@jest/globals";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const projectDir = process.cwd();
+const dirs: string[] = [];
+const API_TOKEN = "api-token-value-1111";
+const MCP_TOKEN = "mcp-token-value-2222";
+const BOT_TOKEN = "123456:bot-token-value-3333";
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+interface Sandbox {
+  root: string;
+  home: string;
+  runDir: string;
+  agentsDir: string;
+  calls: string;
+}
+
+// Temp HERMES_HOME, run dir with both token files, and stub hermes/launchctl that log their arguments
+function sandbox(): Sandbox {
+  const root = mkdtempSync(join(tmpdir(), "hermes-setup-"));
+  dirs.push(root);
+  const home = join(root, "hermes-home");
+  const runDir = join(root, "run");
+  const agentsDir = join(root, "LaunchAgents");
+  const calls = join(root, "calls.log");
+  mkdirSync(runDir);
+  writeFileSync(join(runDir, "api-token"), `${API_TOKEN}\n`);
+  writeFileSync(join(runDir, "mcp-token"), `${MCP_TOKEN}\n`);
+  for (const name of ["hermes", "launchctl"]) {
+    const stub = join(root, name);
+    writeFileSync(stub, ["#!/bin/bash", `printf '${name}' >> "$STUB_CALLS"`, `printf ' [%s]' "$@" >> "$STUB_CALLS"`, 'echo >> "$STUB_CALLS"'].join("\n"));
+    chmodSync(stub, 0o755);
+  }
+  return { root, home, runDir, agentsDir, calls };
+}
+
+function setup(box: Sandbox, args: string[], extraEnv: Record<string, string> = {}) {
+  return spawnSync("bash", [join(projectDir, "scripts", "hermes-setup.sh"), ...args], {
+    encoding: "utf-8",
+    input: "",
+    env: {
+      PATH: "/usr/bin:/bin",
+      HOME: box.root,
+      HERMES_HOME: box.home,
+      PHARMALLM_RUN_DIR: box.runDir,
+      LAUNCH_AGENTS_DIR: box.agentsDir,
+      HERMES_BIN: join(box.root, "hermes"),
+      LAUNCHCTL_BIN: join(box.root, "launchctl"),
+      MCP_HEALTH_URL: "http://127.0.0.1:9/healthz",
+      STUB_CALLS: box.calls,
+      ...extraEnv,
+    },
+  });
+}
+
+function envFile(box: Sandbox): string {
+  return readFileSync(join(box.home, ".env"), "utf-8");
+}
+
+describe("hermes-setup.sh install-config", () => {
+  it("installs config and SOUL.md and fills a private .env without printing secrets", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(box.home, "config.yaml"), "utf-8")).toBe(
+      readFileSync(join(projectDir, "hermes", "config.template.yaml"), "utf-8")
+    );
+    expect(existsSync(join(box.home, "SOUL.md"))).toBe(true);
+    expect(statSync(join(box.home, ".env")).mode & 0o777).toBe(0o600);
+    const env = envFile(box);
+    expect(env).toContain(`PHARMALLM_API_TOKEN=${API_TOKEN}`);
+    expect(env).toContain(`PHARMALLM_MCP_TOKEN=${MCP_TOKEN}`);
+    expect(env).toContain("PHARMALLM_URL=http://localhost:3000");
+    expect(env).toContain("PHARMALLM_MCP_URL=http://127.0.0.1:3200/mcp");
+    expect(env).toContain("SEARXNG_URL=http://localhost:8888");
+    expect(env).toContain(`TELEGRAM_BOT_TOKEN=${BOT_TOKEN}`);
+    expect(env).toContain("TELEGRAM_ALLOWED_USERS=424242");
+    expect(env).toContain("TELEGRAM_HOME_CHANNEL=424242");
+    const output = result.stdout + result.stderr;
+    for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN]) expect(output).not.toContain(secret);
+  });
+
+  it("keeps existing values on re-run and backs up a changed config", () => {
+    const box = sandbox();
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+    writeFileSync(join(box.home, "config.yaml"), "edited: true\n");
+
+    const result = setup(box, ["install-config"]);
+
+    expect(result.status).toBe(0);
+    expect(envFile(box)).toContain(`TELEGRAM_BOT_TOKEN=${BOT_TOKEN}`);
+    expect(envFile(box).match(/^TELEGRAM_BOT_TOKEN=/gm)).toHaveLength(1);
+    const backups = readdirSync(box.home).filter((name) => name.startsWith("config.yaml.bak-"));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(box.home, backups[0]), "utf-8")).toBe("edited: true\n");
+  });
+
+  it("fails with instructions when Telegram values are missing and nobody can type them", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-config"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Missing TELEGRAM_BOT_TOKEN");
+  });
+});
+
+describe("hermes-setup.sh install-cron", () => {
+  it("creates all four jobs when none exist", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-cron"]);
+
+    expect(result.status).toBe(0);
+    const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toContain("hermes [cron] [create] [0 6 * * *] [Scheduled job: morning news digest.");
+    expect(calls[0]).toContain("[--name] [pharmallm-news-digest] [--deliver] [telegram]");
+    expect(calls[2]).toContain("[--name] [pharmallm-health-watch]");
+  });
+
+  it("edits jobs that already exist by name instead of duplicating them", () => {
+    const box = sandbox();
+    mkdirSync(join(box.home, "cron"), { recursive: true });
+    writeFileSync(
+      join(box.home, "cron", "jobs.json"),
+      JSON.stringify({ jobs: [{ id: "abc123", name: "pharmallm-health-watch", schedule: "0 9 * * *" }] })
+    );
+
+    const result = setup(box, ["install-cron"]);
+
+    expect(result.status).toBe(0);
+    const calls = readFileSync(box.calls, "utf-8");
+    expect(calls).toContain("hermes [cron] [edit] [abc123] [--schedule] [0 9,14,19 * * *] [--prompt]");
+    expect(calls.match(/\[create\]/g)).toHaveLength(3);
+  });
+});
+
+describe("hermes-setup.sh install-services", () => {
+  it("renders the MCP plist with node's path, loads it and installs the gateway", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
+
+    expect(result.status).toBe(0);
+    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    expect(plist).toContain("<key>NODE_BIN</key><string>/opt/fake/bin/node</string>");
+    expect(plist).toContain(`<string>${projectDir}/scripts/run-mcp.sh</string>`);
+    expect(plist).not.toContain("__");
+    expect(plist).not.toContain(MCP_TOKEN);
+    const calls = readFileSync(box.calls, "utf-8");
+    expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmallm\.mcp\.plist\]/);
+    expect(calls).toContain("hermes [gateway] [install] [--force] [--start-now] [--start-on-login]");
+  });
+});
+
+describe("hermes-setup.sh check", () => {
+  it("reports variable names without printing their values", () => {
+    const box = sandbox();
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    const result = setup(box, ["check"]);
+
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("TELEGRAM_BOT_TOKEN: set");
+    expect(output).toContain("PHARMALLM_MCP_TOKEN: set");
+    expect(output).toContain(".env permissions: 600");
+    for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN, "424242"]) expect(output).not.toContain(secret);
+  });
+});
