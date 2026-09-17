@@ -1,0 +1,75 @@
+# Hermes Agent configuration for PharmaLLM (Hermes 0.21.3, commit 228022ef).
+# Installed to ~/.hermes/config.yaml by scripts/hermes-setup.sh install-config.
+# Secrets and machine-specific URLs come from ~/.hermes/.env (environment references below and key_env).
+
+model:
+  provider: "custom:pharmallm"
+  default: pharmallm-local
+  context_length: 65536
+
+providers:
+  pharmallm:
+    # PharmaLLM's OpenAI-compatible gateway: always the active stack's model, whatever name is sent
+    api: "${PHARMALLM_URL}/v1"
+    key_env: PHARMALLM_API_TOKEN
+    discover_models: false
+    # Local 27B prefill of a 10-15k token agent prompt takes minutes
+    request_timeout_seconds: 1800
+    stale_timeout_seconds: 900
+    models:
+      pharmallm-local:
+        context_length: 65536
+
+mcp_servers:
+  pharmallm:
+    url: "${PHARMALLM_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${PHARMALLM_MCP_TOKEN}"
+    connect_timeout: 30
+    # run_news_agent can take 14 minutes; the service sends keepalives meanwhile
+    timeout: 900
+    tools:
+      # A 16-minute GPU job should not be triggerable from chat or injected content
+      exclude:
+        - start_reindex
+      resources: false
+      prompts: false
+
+platform_toolsets:
+  cli: [web, search, terminal, file, memory, skills, todo, session_search, clarify, cronjob, pharmallm]
+  telegram: [web, search, terminal, file, memory, skills, todo, session_search, pharmallm]
+  cron: [web, search, memory, session_search, pharmallm]
+
+agent:
+  disabled_toolsets: [browser, computer_use, code_execution, image_gen, tts, delegation, kanban, vision]
+
+terminal:
+  backend: docker
+  container_cpu: 2
+  container_memory: 2048
+  container_persistent: true
+  docker_mount_cwd_to_workspace: false
+  docker_network: false
+  docker_volumes: []
+
+approvals:
+  mode: smart
+  cron_mode: deny
+  single_query_mode: deny
+  unattended_mode: deny
+
+memory:
+  write_approval: false
+
+skills:
+  write_approval: true
+
+web:
+  search_backend: searxng
+  keyless_fallback: false
+  keyless_rescue: false
+
+security:
+  allow_private_urls: false
+
+unauthorized_dm_behavior: ignore
