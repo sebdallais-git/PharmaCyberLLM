@@ -22,13 +22,14 @@ export function registerGapTools(server: McpServer, client: PharmaLLMClient, log
           .enum(["triggered", "skipped", "resolved", "unresolved", "detected"])
           .optional()
           .describe("Only gaps with this status (new gaps are 'triggered')"),
+        limit: z.number().int().min(1).max(50).optional().describe("How many gaps to return, newest first (default 20)"),
       },
     },
-    async ({ status }) =>
+    async ({ status, limit }) =>
       runTool("list_knowledge_gaps", log, async () => {
         const gaps = gapsOf(await client.get("/api/knowledge/gaps"));
         return {
-          gaps: (status ? gaps.filter((gap) => gap.status === status) : gaps).map(compactGap),
+          gaps: (status ? gaps.filter((gap) => gap.status === status) : gaps).slice(0, limit ?? 20).map(compactGap),
           stats: await client.get("/api/knowledge/gaps/stats"),
         };
       })

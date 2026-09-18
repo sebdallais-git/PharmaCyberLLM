@@ -211,3 +211,17 @@ describe("payload size", () => {
   });
 });
 
+describe("list_knowledge_gaps limit", () => {
+  it("returns 20 gaps by default and honours a smaller limit", async () => {
+    const gaps = Array.from({ length: 50 }, (_, i) => ({ id: i, status: "triggered", original_query: `q${i}` }));
+    harness.pharma.on("GET", "/api/knowledge/gaps", (_req, res) => sendJson(res, 200, { gaps }));
+    harness.pharma.on("GET", "/api/knowledge/gaps/stats", (_req, res) => sendJson(res, 200, { total_triggered: 50 }));
+
+    const all = JSON.parse(toolText(await call("list_knowledge_gaps"))) as { gaps: unknown[] };
+    const three = JSON.parse(toolText(await call("list_knowledge_gaps", { limit: 3 }))) as { gaps: unknown[] };
+
+    expect(all.gaps).toHaveLength(20);
+    expect(three.gaps).toHaveLength(3);
+  });
+});
+
