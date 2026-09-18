@@ -131,3 +131,35 @@ run_news_agent, search_knowledge, system_health
 No `add_knowledge`, no `start_reindex`, and no `mcp__pharmallm__*` tool at all: scheduled runs never connect to the write-capable server. Telegram and CLI keep the full `pharmallm` server (15 tools, `start_reindex` excluded).
 
 Still open: sandbox isolation (spec Testing item 6) remains unproven because the Docker daemon is wedged — `docker pull` hangs for any image while the VM reaches the registry normally. After `colima restart` and `docker pull nikolaik/python-nodejs:python3.11-nodejs20`, one shell-tool call can close it.
+
+## Sandbox isolation (closed 2026-09-18)
+
+The sandbox image was missing because `~/.docker/config.json` sets `credsStore: desktop` while Docker Desktop is not running: `docker pull` hangs in `docker-credential-desktop` before it ever reaches the daemon (the colima daemon log recorded no pull attempts at all). Pulling with a credential-helper-free config against the colima socket succeeded in under a minute:
+
+```bash
+DOCKER_CONFIG=<empty dir> DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" \
+  docker pull nikolaik/python-nodejs:python3.11-nodejs20      # 2.21 GB
+```
+
+With the image present, a Hermes shell call ran and the sandbox behaved as designed:
+
+```
+sandbox-ok
+ls: cannot access '/Users': No such file or directory
+/root/.hermes: . .. attachments cache images
+host.docker.internal: no DNS answer
+wget http://host.docker.internal:3000/api/health -> WGET_FAILED
+```
+
+`docker inspect` of the live container:
+
+```
+network=none  memory=536870912 (512 MB)  cpus=1000000000 (1)
+/Users/seb/.hermes/sandboxes/docker/default/home      -> /root       (rw)
+/Users/seb/.hermes/sandboxes/docker/default/workspace -> /workspace  (rw)
+… 11 read-only mounts, all under ~/.hermes (skills, images, attachments, cache/*)
+```
+
+No host project directory, no home directory, no `.env`, and no network. Spec Testing item 6 is met. The configured 512 MB / 1 CPU limits are applied.
+
+Operational note: pre-pulling the sandbox image needs the credential-helper workaround above (or a running Docker Desktop) until `credsStore` is removed from `~/.docker/config.json`.
