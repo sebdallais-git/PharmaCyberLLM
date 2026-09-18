@@ -36,9 +36,20 @@ wait_port_closed() {
 
 # True when PID is a live process whose command line contains this project's path.
 # Other projects run dev servers with the same commands and ports, so this is the only safe kill check.
+# True when PID is one of ours. The command line is the usual evidence, but a process that
+# renames itself has none: oMLX pulls in setproctitle and appears as plain "omlx-server", so
+# the path test below fails for our own server and the script then refuses both to reuse it
+# and to stop it. A pid we recorded in a pid file is ours by construction, so check that too.
 is_project_pid() {
-  local pid="${1:-}" cmd
+  local pid="${1:-}" cmd pidfile
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  # RUN_DIR is set by switch-stack.sh but not by every sourcer, so tolerate it being unset.
+  if [ -n "${RUN_DIR:-}" ]; then
+    for pidfile in "$RUN_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      [ "$(cat "$pidfile" 2>/dev/null)" = "$pid" ] && return 0
+    done
+  fi
   cmd="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || return 1
   [[ "$cmd" == *"$PROJECT_DIR/"* ]]
 }

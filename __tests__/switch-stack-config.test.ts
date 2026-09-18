@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -882,5 +882,57 @@ describe("switch-stack.sh switch_to: a failed index step says so", () => {
     const { progress, status } = runIndexStub(0);
     expect(status).toBe(0);
     expect(progress.phase).toBe("ready");
+  });
+});
+
+describe("services.sh is_project_pid", () => {
+  // A process that renames itself has no project path in its command line. oMLX pulls in
+  // setproctitle and shows up as plain "omlx-server", which made the script treat its own
+  // server as a foreign program: it refused to reuse the running one AND refused to stop it,
+  // so the stack became a one-way trap and the app stayed down.
+  function ask(pid: string, runDir: string): string {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -u; PROJECT_DIR="$1"; RUN_DIR="$2"; source "$1/scripts/lib/services.sh"; ` +
+          `if is_project_pid "$3"; then echo ours; else echo foreign; fi`,
+        "bash",
+        process.cwd(),
+        runDir,
+        pid,
+      ],
+      { encoding: "utf-8" }
+    );
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  }
+
+  it("claims a pid recorded in a pid file even when the command line hides the project path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidcheck-"));
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    // `sleep` carries no project path, standing in for a renamed server process.
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const pid = String(child.pid);
+      expect(ask(pid, runDir)).toBe("foreign");
+      writeFileSync(join(runDir, "omlx.pid"), `${pid}\n`);
+      expect(ask(pid, runDir)).toBe("ours");
+    } finally {
+      child.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim a pid that is neither recorded nor running from the project", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidcheck-"));
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    try {
+      expect(ask("1", runDir)).toBe("foreign");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
