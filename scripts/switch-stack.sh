@@ -326,8 +326,22 @@ if os.environ["PHASE"] in ("ready", "failed"):
     record["finishedAt"] = int(time.time() * 1000)
 if os.environ.get("ERROR"):
     record["error"] = os.environ["ERROR"]
-with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump(record, handle)
+# Write to a temp file in the same directory and atomically replace the target, so a UI poll can
+# never observe a half-written file (open()+write() in place is not atomic).
+path = sys.argv[1]
+directory = os.path.dirname(path) or "."
+tmp_path = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record, handle)
+    os.replace(tmp_path, path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
 PY
 }
 
@@ -368,7 +382,7 @@ ensure_telegram() {
 
 # Tell the user how the switch ended: the app is mid-restart and cannot send this itself
 notify_switch_result() {
-  local phase="$1" token chat text elapsed
+  local phase="$1" token chat text elapsed payload
   token="$(telegram_value bot-token)"; chat="$(telegram_value chat-id)"
   [ -n "$token" ] && [ -n "$chat" ] || return 0
   elapsed=$(( ($(date +%s) * 1000 - ${SWITCH_STARTED:-0}) / 1000 ))
@@ -377,9 +391,11 @@ notify_switch_result() {
   else
     text="PharmaLLM: switch to ${SWITCH_TARGET} failed after ${elapsed}s; ${SWITCH_PREVIOUS} is being restored."
   fi
-  curl -sS -m 10 -o /dev/null -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-    -H 'Content-Type: application/json' \
-    --data-binary "$(TEXT="$text" CHAT="$chat" python3 -c 'import json,os;print(json.dumps({"chat_id":os.environ["CHAT"],"text":os.environ["TEXT"]}))')" \
+  payload="$(TEXT="$text" CHAT="$chat" python3 -c 'import json,os;print(json.dumps({"chat_id":os.environ["CHAT"],"text":os.environ["TEXT"]}))')"
+  # The URL carries the bot token; put it in curl's stdin config instead of argv, or `ps` would
+  # show it to every process on the machine for as long as the request is in flight.
+  printf 'url = "%s"\n' "https://api.telegram.org/bot${token}/sendMessage" \
+    | curl -K - -sS -m 10 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary "$payload" \
     || log "Could not send the Telegram completion message"
 }
 
@@ -480,8 +496,19 @@ switch_to() {
   SWITCH_TARGET="$target"; SWITCH_PREVIOUS="$previous"; SWITCH_STARTED="$(($(date +%s) * 1000))"
   log "Switching: $previous -> $target"
   write_switch_phase stopping
-  stop_app
-  stop_other_stacks "$target"
+  # Tolerant like the rollback path below (stop_app || true): under set -e a bare failing stop here
+  # would exit before the failed phase/notification are ever written, and the UI would poll
+  # "stopping" forever. Record the specific failure and tell the user instead of going silent.
+  if ! stop_app; then
+    write_switch_phase failed "could not stop the current app"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! stop_other_stacks "$target"; then
+    write_switch_phase failed "could not stop the other stacks"
+    notify_switch_result failed
+    exit 1
+  fi
 
   write_switch_phase starting
   if start_stack "$target"; then

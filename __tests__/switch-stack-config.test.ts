@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildStacks } from "../src/config/llm-stacks.js";
+import { parseProgress } from "../src/services/stack-switch.js";
 
 const script = readFileSync(join(process.cwd(), "scripts", "switch-stack.sh"), "utf-8");
 const modelfile = readFileSync(join(process.cwd(), "ollama", "qwen3.8-pharma.Modelfile"), "utf-8");
@@ -12,6 +13,20 @@ function shellVar(name: string): string {
   const match = script.match(new RegExp(`^${name}="([^"]+)"$`, "m"));
   if (!match) throw new Error(`${name} not found in switch-stack.sh`);
   return match[1];
+}
+
+// Extracts only the function definitions (everything before the CLI dispatch at the bottom of the
+// file) so a harness can source them and stub out I/O-performing functions before calling into
+// switch_to/write_switch_phase/notify_switch_result directly, without ever running the real
+// service-control logic. SCRIPT_DIR/PROJECT_DIR are supplied via env instead of being recomputed
+// from $0, since sourcing a copy would otherwise get $0 wrong.
+function extractFuncs(): string {
+  const dispatchIndex = script.split("\n").findIndex((line) => line.startsWith('case "${1:-}" in'));
+  return script
+    .split("\n")
+    .slice(0, dispatchIndex)
+    .filter((line) => !line.startsWith('SCRIPT_DIR="') && !line.startsWith('PROJECT_DIR="'))
+    .join("\n");
 }
 
 describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
@@ -368,5 +383,226 @@ describe("switch-stack.sh public_url", () => {
     expect(result.status).toBe(0);
     const hostname = spawnSync("hostname", ["-s"], { encoding: "utf-8" }).stdout.trim();
     expect(readFileSync(outFile, "utf-8").trim()).toBe(`https://${hostname}.local:3443`);
+  });
+});
+
+describe("switch-stack.sh switch_to: a failed stop must not strand the UI", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Sources only the function definitions, stubs models_ready/ensure_chromadb (no filesystem/network
+  // dependency) and stop_app/stop_other_stacks per scenario, stubs curl so no real Telegram call is
+  // ever made, then calls switch_to directly and inspects the progress file it leaves behind.
+  function runWithStoppedStub(stopAppRc: number, stopOtherRc: number): { progress: unknown; curlLog: string; status: number | null } {
+    const dir = mkdtempSync(join(tmpdir(), "switch-to-stop-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "telegram-bot-token"), "FAKE_TOKEN_XYZ\n");
+    writeFileSync(join(runDir, "telegram-chat-id"), "424242\n");
+
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const curlLog = join(dir, "curl.log");
+    writeFileSync(join(binDir, "curl"), ["#!/bin/bash", 'echo "curl_called: $*" >> "$STUB_CURL_LOG"', "exit 0"].join("\n"));
+    chmodSync(join(binDir, "curl"), 0o755);
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "# Stubs: no real model check, no real ChromaDB, no real stop logic.",
+      "models_ready() { return 0; }",
+      "ensure_chromadb() { return 0; }",
+      `stop_app() { return ${stopAppRc}; }`,
+      `stop_other_stacks() { return ${stopOtherRc}; }`,
+      "switch_to omlx",
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        STUB_CURL_LOG: curlLog,
+      },
+    });
+
+    const progress = JSON.parse(readFileSync(join(runDir, "stack-switch.json"), "utf-8")) as unknown;
+    let curlLogContent = "";
+    try {
+      curlLogContent = readFileSync(curlLog, "utf-8");
+    } catch {
+      // no curl call recorded
+    }
+    return { progress, curlLog: curlLogContent, status: result.status };
+  }
+
+  it("writes the failed phase with a specific error and still notifies when stop_app fails", () => {
+    const { progress, curlLog, status } = runWithStoppedStub(1, 0);
+    expect(status).not.toBe(0);
+    expect((progress as { phase: string }).phase).toBe("failed");
+    expect((progress as { error: string }).error).toBe("could not stop the current app");
+    expect(curlLog).toContain("curl_called");
+  });
+
+  it("writes the failed phase with a specific error and still notifies when stop_other_stacks fails", () => {
+    const { progress, curlLog, status } = runWithStoppedStub(0, 1);
+    expect(status).not.toBe(0);
+    expect((progress as { phase: string }).phase).toBe("failed");
+    expect((progress as { error: string }).error).toBe("could not stop the other stacks");
+    expect(curlLog).toContain("curl_called");
+  });
+});
+
+describe("switch-stack.sh notify_switch_result keeps the bot token out of argv", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("never places ${token} directly on a curl invocation line", () => {
+    const curlLines = script.split("\n").filter((line) => line.includes("curl"));
+    for (const line of curlLines) {
+      expect(line).not.toContain("${token}");
+    }
+    expect(script).toContain('printf \'url = "%s"\\n\' "https://api.telegram.org/bot${token}/sendMessage"');
+    expect(script).toContain("curl -K -");
+  });
+
+  it("the stub curl receives no token in its arguments at runtime", () => {
+    const dir = mkdtempSync(join(tmpdir(), "notify-token-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    const secretToken = "123456:AA-super-secret";
+    writeFileSync(join(runDir, "telegram-bot-token"), `${secretToken}\n`);
+    writeFileSync(join(runDir, "telegram-chat-id"), "424242\n");
+
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const curlLog = join(dir, "curl.log");
+    // Logs argv only (never stdin, which is where the URL/token now travel) so a leak into argv
+    // would show up here.
+    writeFileSync(join(binDir, "curl"), ["#!/bin/bash", 'printf \'%s\\n\' "$@" >> "$STUB_CURL_LOG"', "exit 0"].join("\n"));
+    chmodSync(join(binDir, "curl"), 0o755);
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "SWITCH_TARGET=omlx",
+      "SWITCH_PREVIOUS=ollama",
+      "SWITCH_STARTED=1700000000000",
+      "notify_switch_result ready",
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        STUB_CURL_LOG: curlLog,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const curlArgs = readFileSync(curlLog, "utf-8");
+    expect(curlArgs).not.toContain(secretToken);
+    expect(result.stdout + result.stderr).not.toContain(secretToken);
+  });
+});
+
+describe("switch-stack.sh write_switch_phase", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Round-trips write_switch_phase's output through parseProgress (the same function
+  // src/api/stack.ts uses to read the file back), for an in-flight phase and a terminal one.
+  it("writes a progress file that parseProgress accepts, in flight and at a terminal phase", () => {
+    const dir = mkdtempSync(join(tmpdir(), "write-phase-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    const outDir = join(dir, "out");
+    mkdirSync(outDir, { recursive: true });
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "SWITCH_TARGET=omlx",
+      "SWITCH_PREVIOUS=ollama",
+      "SWITCH_STARTED=1700000000000",
+      "write_switch_phase starting",
+      'cp "$SWITCH_FILE" "$OUT_DIR/starting.json"',
+      'write_switch_phase failed "boom"',
+      'cp "$SWITCH_FILE" "$OUT_DIR/failed.json"',
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        OUT_DIR: outDir,
+      },
+    });
+
+    expect(result.status).toBe(0);
+
+    const starting = parseProgress(JSON.parse(readFileSync(join(outDir, "starting.json"), "utf-8")));
+    expect(starting).not.toBeNull();
+    expect(starting?.phase).toBe("starting");
+    expect(starting?.target).toBe("omlx");
+    expect(starting?.previous).toBe("ollama");
+    expect(typeof starting?.startedAt).toBe("number");
+    expect(starting?.finishedAt).toBeUndefined();
+    expect(starting?.error).toBeUndefined();
+
+    const failed = parseProgress(JSON.parse(readFileSync(join(outDir, "failed.json"), "utf-8")));
+    expect(failed).not.toBeNull();
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.target).toBe("omlx");
+    expect(failed?.previous).toBe("ollama");
+    expect(typeof failed?.finishedAt).toBe("number");
+    expect(failed?.error).toBe("boom");
   });
 });
