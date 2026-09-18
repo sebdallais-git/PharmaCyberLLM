@@ -72,6 +72,7 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | Scheduled jobs | `hermes cron list`, `hermes cron run <id>` (runs on the next scheduler tick) |
 | One-shot question | `hermes chat -q "…" --format stream-json` (shows each tool call) |
 | Update jobs or config after editing this folder | `scripts/hermes-setup.sh install-config` or `install-cron` |
+| Switch the LLM stack | `scripts/switch-stack.sh omlx` (or `ollama`/`mlx`) — Hermes follows the active stack, so this also moves the agent, no Hermes change needed |
 
 **After a reboot.** `com.pharmallm.mcp` and the Hermes gateway come back on their own; the PharmaLLM app and the model stack do not (they have no launch agent). Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before the first job fires — until then `/healthz` reports `pharmallm:false`, `scripts/hermes-setup.sh check` says `pharmallm-mcp: up, PharmaLLM not reachable`, and the scheduled jobs deliver failure messages.
 
