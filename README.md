@@ -6,6 +6,8 @@
 
 A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, grounds every answer in a hybrid vector + graph knowledge base, detects and fills its own knowledge gaps, and serves the same knowledge to AI agents over MCP.
 
+**It also answers on Telegram.** [Hermes Agent](https://hermes-agent.nousresearch.com/) runs on the same local model, searches the knowledge base with 16 MCP tools, and replies in about 90 seconds. Four scheduled jobs pull the news, close knowledge gaps, watch health and report on feedback, without sending a token to anyone's cloud.
+
 [![Node.js](https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Express](https://img.shields.io/badge/Express-4.21-000000?style=for-the-badge&logo=express&logoColor=white)](https://expressjs.com)
@@ -16,16 +18,39 @@ A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, 
 <br/>
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-vector_store-FF6446?style=for-the-badge)](https://www.trychroma.com)
 [![Neo4j](https://img.shields.io/badge/Neo4j-Graph_RAG-4581C3?style=for-the-badge&logo=neo4j&logoColor=white)](https://neo4j.com)
-[![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#agents-mcp-and-the-model-gateway)
 [![n8n](https://img.shields.io/badge/n8n-self--healing_loop-EA4B71?style=for-the-badge&logo=n8n&logoColor=white)](https://n8n.io)
+<br/>
+[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-0.21.3-8B5CF6?style=for-the-badge)](#hermes-agent-on-telegram)
+[![Telegram](https://img.shields.io/badge/Telegram-answers_in_~90s-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](#hermes-agent-on-telegram)
+[![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#agents-mcp-and-the-model-gateway)
 
 [![Tests](https://img.shields.io/badge/Jest-237_tests_%C2%B7_29_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
 [![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%E2%87%84_MLX-6E56CF?style=flat-square)](#choose-your-stack)
 [![Context](https://img.shields.io/badge/context-64K_both_stacks-064e3b?style=flat-square)](#choose-your-stack)
+[![Cloud calls](https://img.shields.io/badge/cloud_LLM_calls-0-064e3b?style=flat-square)](#why-pharmacyberllm)
 
-[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks-ollama-vs-mlx) · [How It Works](#how-it-works) · [Agents](#agents-mcp-and-the-model-gateway) · [API](#api-reference)
+[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks-ollama-vs-mlx) · [How It Works](#how-it-works) · [Telegram agent](#hermes-agent-on-telegram) · [API](#api-reference)
 
 </div>
+
+---
+
+## In your pocket
+
+A real exchange with the Telegram bot, answered by the 27B model on the Mac mini in **1 min 15 s**, start to delivery:
+
+> **You** · Any known threat actors targeting pharmaceutical manufacturing?
+>
+> **PharmaCyberLLM** · Nation-state actors targeting pharma manufacturing:
+> • **China** — APT10, APT41, Winnti; APT10 "Cloud Hopper" via MSPs
+> • **North Korea** — Lazarus, Kimsuky (vaccine IP)
+> • **Russia** — APT28, APT29 (vaccine/therapeutic research)
+> • **Iran** — APT33, APT35 (sanctions IP theft)
+> • Ransomware groups: LockBit, ALPHV, Black Basta, Snake/EKANS (ICS)
+>
+> Sources: `cyber-attack-types-pharma.md`, `vendor-dell-cyber-recovery.md`
+
+Behind that reply: two knowledge-base searches over MCP, a 64K-context prompt on the local model, and nothing leaving the machine except the Telegram message itself. The same assistant runs four unattended jobs a day and cannot add knowledge or rebuild indexes while it does, because scheduled runs get a write-limited copy of the tool set.
 
 ---
 
