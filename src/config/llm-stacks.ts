@@ -1,6 +1,6 @@
 // Stack definitions for the Ollama / MLX switch. Exactly one stack is active per process.
 
-export type StackName = "ollama" | "mlx";
+export type StackName = "ollama" | "mlx" | "omlx";
 
 export interface StackConfig {
   name: StackName;
@@ -43,13 +43,26 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.mlx.json",
       chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
+    // oMLX serves chat and embeddings from one process; its embeddings are identical to the MLX
+    // server's (cosine 1.000000, see the verification doc), so it shares the MLX index
+    omlx: {
+      name: "omlx",
+      chatBaseUrl: env.OMLX_URL ?? "http://localhost:8090",
+      embedBaseUrl: env.OMLX_URL ?? "http://localhost:8090",
+      chatModel: "mlx-community--Qwen3.8-27B-4bit",
+      embeddingModel: "mlx-community--Qwen3-Embedding-0.6B-8bit",
+      embeddingDim: EMBEDDING_DIM,
+      chromaCollection: "knowledge_base_mlx",
+      indexFile: ".index.mlx.json",
+      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
+    },
   };
 }
 
 export function getActiveStack(env: NodeJS.ProcessEnv = process.env): StackConfig {
   const name = env.LLM_PROVIDER ?? "ollama";
-  if (name !== "ollama" && name !== "mlx") {
-    throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama" or "mlx")`);
+  if (name !== "ollama" && name !== "mlx" && name !== "omlx") {
+    throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama", "mlx" or "omlx")`);
   }
   return buildStacks(env)[name];
 }

@@ -45,3 +45,30 @@ describe("buildStacks", () => {
     expect(mlx.chatExtraBody).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   });
 });
+
+describe("omlx stack", () => {
+  it("serves chat and embeddings from one server and shares the MLX index", () => {
+    const { mlx, omlx } = buildStacks({});
+
+    expect(omlx.name).toBe("omlx");
+    expect(omlx.chatBaseUrl).toBe("http://localhost:8090");
+    expect(omlx.embedBaseUrl).toBe(omlx.chatBaseUrl);
+    expect(omlx.chatModel).toBe("mlx-community--Qwen3.8-27B-4bit");
+    expect(omlx.embeddingModel).toBe("mlx-community--Qwen3-Embedding-0.6B-8bit");
+    expect(omlx.embeddingDim).toBe(mlx.embeddingDim);
+    expect(omlx.chromaCollection).toBe(mlx.chromaCollection);
+    expect(omlx.indexFile).toBe(mlx.indexFile);
+  });
+
+  it("takes its URL from the environment", () => {
+    expect(buildStacks({ OMLX_URL: "http://127.0.0.1:9100" }).omlx.chatBaseUrl).toBe("http://127.0.0.1:9100");
+  });
+
+  it("is selectable through LLM_PROVIDER", () => {
+    expect(getActiveStack({ LLM_PROVIDER: "omlx" }).name).toBe("omlx");
+  });
+
+  it("rejects an unknown stack name and names all three", () => {
+    expect(() => getActiveStack({ LLM_PROVIDER: "vllm" })).toThrow(/ollama.*mlx.*omlx/);
+  });
+});
