@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getActiveStack } from "../config/llm-stacks.js";
+import { getActiveStack, isStackName, STACK_NAMES } from "../config/llm-stacks.js";
 import type { StackName } from "../config/llm-stacks.js";
 import { getRunningJobs, isBenchmarkActive } from "../services/bench-mode.js";
 import { createStackSwitch, parseProgress } from "../services/stack-switch.js";
@@ -15,7 +15,6 @@ import type { StackSwitch, SwitchProgress } from "../services/stack-switch.js";
 import { createTelegramSender, isTelegramConfigured, readTelegramConfig } from "../services/telegram-notify.js";
 import type { TelegramSender } from "../services/telegram-notify.js";
 
-const STACKS: readonly StackName[] = ["ollama", "mlx", "omlx"];
 const PROGRESS_FILE = join(process.cwd(), "data", "run", "stack-switch.json");
 
 export interface StackRouterDeps {
@@ -26,10 +25,6 @@ export interface StackRouterDeps {
   readProgress(): SwitchProgress | null;
   confirmBaseUrl(): string;
   telegramConfigured(): boolean;
-}
-
-function isStackName(value: unknown): value is StackName {
-  return typeof value === "string" && (STACKS as readonly string[]).includes(value);
 }
 
 export function createStackRouter(deps: StackRouterDeps): Router {
@@ -63,7 +58,10 @@ export function createStackRouter(deps: StackRouterDeps): Router {
     } catch (err) {
       // Drop the pending switch: nobody was asked, so nobody can confirm
       deps.switcher.confirm(outcome.pending.token);
-      res.status(502).json({ error: `Could not send the Telegram confirmation: ${err instanceof Error ? err.message : "unknown error"}` });
+      // Log the detail server-side only: the underlying error can carry the bot token (e.g. in a
+      // fetch failure's URL), and this response reaches the browser
+      console.error(`stack switch: Telegram send failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      res.status(502).json({ error: "Could not send the Telegram confirmation. Check the Telegram bot configuration and try again." });
       return;
     }
     res.status(202).json({
@@ -91,7 +89,7 @@ export function createStackRouter(deps: StackRouterDeps): Router {
     const pending = deps.switcher.pending();
     res.json({
       active: deps.activeStack(),
-      stacks: STACKS,
+      stacks: STACK_NAMES,
       telegram_configured: deps.telegramConfigured(),
       pending: pending ? { target: pending.target, expires_at: pending.expiresAt } : null,
       progress: deps.readProgress(),
@@ -128,6 +126,9 @@ export default createStackRouter({
       detached: true,
       stdio: "ignore",
     });
+    // Without this, a missing script or a lost executable bit throws an unhandled 'error' event
+    // after the confirm page already told the owner it worked
+    child.on("error", (err) => console.error(`stack switch spawn failed: ${err.message}`));
     child.unref();
   },
   activeStack: () => getActiveStack().name,

@@ -2,6 +2,15 @@
 
 export type StackName = "ollama" | "mlx" | "omlx";
 
+// Single source of truth for the set of stack names: everything that needs to enumerate or
+// validate stacks (the router, the state machine, progress parsing) imports this rather than
+// keeping its own copy, so a fourth stack needs one edit instead of several.
+export const STACK_NAMES: readonly StackName[] = ["ollama", "mlx", "omlx"];
+
+export function isStackName(value: unknown): value is StackName {
+  return typeof value === "string" && (STACK_NAMES as readonly string[]).includes(value);
+}
+
 export interface StackConfig {
   name: StackName;
   chatBaseUrl: string;

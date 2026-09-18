@@ -1,14 +1,13 @@
 // Pending stack switches: a UI request becomes a one-time token, confirmed out of band through Telegram.
 // Pure state plus pure parsing; the HTTP layer owns I/O and process spawning.
 
+import { isStackName } from "../config/llm-stacks.js";
 import type { StackName } from "../config/llm-stacks.js";
 
 export const CONFIRM_WINDOW_MS = 5 * 60 * 1000;
 
 const PHASES = ["confirmed", "stopping", "starting", "warming", "indexing", "ready", "failed"] as const;
 export type SwitchPhase = (typeof PHASES)[number];
-
-const STACKS: readonly StackName[] = ["ollama", "mlx", "omlx"];
 
 export interface PendingSwitch {
   id: string;
@@ -46,10 +45,6 @@ export interface StackSwitch {
   request(target: StackName): SwitchOutcome;
   confirm(token: string): PendingSwitch | null;
   pending(): PendingSwitch | null;
-}
-
-function isStackName(value: unknown): value is StackName {
-  return typeof value === "string" && (STACKS as readonly string[]).includes(value);
 }
 
 function isPhase(value: unknown): value is SwitchPhase {

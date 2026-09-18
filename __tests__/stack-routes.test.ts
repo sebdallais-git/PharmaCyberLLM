@@ -18,7 +18,15 @@ interface Fixture {
   url: string;
   messages: string[];
   spawned: StackName[];
-  state: { active: StackName; benchmark: boolean; jobs: string[]; progress: SwitchProgress | null; configured: boolean; sendFails: boolean };
+  state: {
+    active: StackName;
+    benchmark: boolean;
+    jobs: string[];
+    progress: SwitchProgress | null;
+    configured: boolean;
+    sendFails: boolean;
+    sendFailMessage: string;
+  };
 }
 
 async function startApp(): Promise<Fixture> {
@@ -29,6 +37,7 @@ async function startApp(): Promise<Fixture> {
     progress: null as SwitchProgress | null,
     configured: true,
     sendFails: false,
+    sendFailMessage: "telegram sendMessage failed (401)",
   };
   const messages: string[] = [];
   const spawned: StackName[] = [];
@@ -48,7 +57,7 @@ async function startApp(): Promise<Fixture> {
     createStackRouter({
       switcher,
       sendTelegram: async (text: string) => {
-        if (state.sendFails) throw new Error("telegram sendMessage failed (401)");
+        if (state.sendFails) throw new Error(state.sendFailMessage);
         messages.push(text);
       },
       spawnSwitch: (target: StackName) => {
@@ -72,6 +81,15 @@ async function post(url: string, stack: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stack }),
+  });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+async function postRaw(url: string, body: unknown) {
+  const res = await fetch(`${url}/api/stack/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
@@ -103,6 +121,18 @@ describe("POST /api/stack/switch", () => {
     expect(fixture.messages).toEqual([]);
   });
 
+  it("refuses a non-string stack value and spawns nothing", async () => {
+    const fixture = await startApp();
+
+    const arrayBody = await postRaw(fixture.url, { stack: ["omlx"] });
+    const missingBody = await postRaw(fixture.url, {});
+
+    expect(arrayBody.status).toBe(400);
+    expect(missingBody.status).toBe(400);
+    expect(fixture.messages).toEqual([]);
+    expect(fixture.spawned).toEqual([]);
+  });
+
   it("passes the state machine's refusal through as 409", async () => {
     const fixture = await startApp();
     fixture.state.jobs = ["reindex"];
@@ -112,6 +142,44 @@ describe("POST /api/stack/switch", () => {
     expect(status).toBe(409);
     expect(body.reason).toBe("reindex");
     expect(fixture.messages).toEqual([]);
+  });
+
+  it("refuses a switch to the already-active stack", async () => {
+    const fixture = await startApp();
+    fixture.state.active = "omlx";
+
+    const { status, body } = await post(fixture.url, "omlx");
+
+    expect(status).toBe(409);
+    expect(body.reason).toBe("already_active");
+    expect(fixture.messages).toEqual([]);
+  });
+
+  it("refuses a switch while a benchmark is running", async () => {
+    const fixture = await startApp();
+    fixture.state.benchmark = true;
+
+    const { status, body } = await post(fixture.url, "omlx");
+
+    expect(status).toBe(409);
+    expect(body.reason).toBe("benchmark");
+    expect(fixture.messages).toEqual([]);
+  });
+
+  it("never leaks the bot token in a failed-send response", async () => {
+    const fixture = await startApp();
+    const fakeToken = "bot123456789:ABCdefGHIjkLMNOpqrSTUvwxYZ01234567890";
+    fixture.state.sendFails = true;
+    // Simulate an underlying error message that happens to carry a token-shaped string
+    // (e.g. embedded in a leaked request URL) to prove the route never echoes it back.
+    fixture.state.sendFailMessage = `telegram sendMessage failed: fetch https://api.telegram.org/${fakeToken}/sendMessage`;
+
+    const refused = await postRaw(fixture.url, { stack: "omlx" });
+
+    expect(refused.status).toBe(502);
+    const raw = JSON.stringify(refused.body);
+    expect(raw).not.toContain(fakeToken);
+    expect(raw).not.toMatch(/https:\/\/api\.telegram\.org/);
   });
 
   it("refuses when Telegram is not configured", async () => {

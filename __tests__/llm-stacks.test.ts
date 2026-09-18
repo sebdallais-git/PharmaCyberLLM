@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import { buildStacks, getActiveStack } from "../src/config/llm-stacks.js";
+import { buildStacks, getActiveStack, isStackName, STACK_NAMES } from "../src/config/llm-stacks.js";
 
 describe("getActiveStack", () => {
   it("defaults to the ollama stack", () => {
@@ -70,5 +70,31 @@ describe("omlx stack", () => {
 
   it("rejects an unknown stack name and names all three", () => {
     expect(() => getActiveStack({ LLM_PROVIDER: "vllm" })).toThrow(/ollama.*mlx.*omlx/);
+  });
+});
+
+describe("STACK_NAMES", () => {
+  it("matches the keys of the stack map, so the list cannot drift from it", () => {
+    expect([...STACK_NAMES].sort()).toEqual(Object.keys(buildStacks({})).sort());
+  });
+});
+
+describe("isStackName", () => {
+  it("accepts each known stack name", () => {
+    for (const name of STACK_NAMES) expect(isStackName(name)).toBe(true);
+  });
+
+  it("rejects a non-string", () => {
+    expect(isStackName(42)).toBe(false);
+    expect(isStackName(undefined)).toBe(false);
+    expect(isStackName(null)).toBe(false);
+  });
+
+  it("rejects an array", () => {
+    expect(isStackName(["omlx"])).toBe(false);
+  });
+
+  it("rejects an unknown name", () => {
+    expect(isStackName("vllm")).toBe(false);
   });
 });
