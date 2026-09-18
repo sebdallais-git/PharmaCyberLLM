@@ -32,6 +32,9 @@ MCP_PORT="3200"
 LOG_DIR="$PROJECT_DIR/data/logs"
 MLX_VENV="$PROJECT_DIR/python/mlx-venv"
 MLX_PYTHON="${MLX_PYTHON:-python3}"
+# oMLX pins itself to >=3.11,<3.14, so it cannot share MLX's interpreter on a machine
+# whose python3 is newer. MLX itself is happy on 3.14.
+OMLX_PYTHON="${OMLX_PYTHON:-python3.11}"
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
 OLLAMA_MANIFESTS="${OLLAMA_MODELS:-$HOME/.ollama/models}/manifests/registry.ollama.ai/library"
 
@@ -613,7 +616,12 @@ prepare() {
     rm -rf "$PROJECT_DIR/python/omlx-src"
     git clone "$OMLX_REPO" "$PROJECT_DIR/python/omlx-src"
     (cd "$PROJECT_DIR/python/omlx-src" && git checkout -q "$OMLX_VERSION")
-    "$MLX_PYTHON" -m venv "$OMLX_VENV"
+    if ! command -v "$OMLX_PYTHON" >/dev/null 2>&1; then
+      log "oMLX needs Python >=3.11,<3.14 and '$OMLX_PYTHON' was not found."
+      log "Install one, or point OMLX_PYTHON at an interpreter in that range."
+      return 1
+    fi
+    "$OMLX_PYTHON" -m venv "$OMLX_VENV"
     "$OMLX_VENV/bin/pip" install -q -e "$PROJECT_DIR/python/omlx-src"
   fi
 

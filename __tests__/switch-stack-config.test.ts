@@ -132,6 +132,15 @@ describe("switch-stack.sh omlx stack", () => {
     expect(script).toMatch(/OMLX_VERSION="[0-9a-f]{7,40}"/);
   });
 
+  it("builds the oMLX venv with its own interpreter, not MLX's", () => {
+    // oMLX pins >=3.11,<3.14; this machine's python3 is 3.14, so sharing MLX_PYTHON
+    // made `prepare` fail with "requires a different Python" after a 213 MB clone.
+    expect(script).toContain('OMLX_PYTHON="${OMLX_PYTHON:-python3.11}"');
+    expect(script).toContain('"$OMLX_PYTHON" -m venv "$OMLX_VENV"');
+    expect(script).not.toContain('"$MLX_PYTHON" -m venv "$OMLX_VENV"');
+    expect(script).toMatch(/command -v "\$OMLX_PYTHON"/);
+  });
+
   it("starts oMLX with one server for chat and embeddings", () => {
     expect(script).toContain('"$OMLX_VENV/bin/omlx" serve --host 127.0.0.1 --port "$OMLX_PORT"');
     expect(script).toContain('--model-dir "$HF_CACHE"');
