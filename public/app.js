@@ -729,6 +729,12 @@ function formatCountdown(msRemaining) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+// Same wording as src/services/switch-labels.ts. The browser cannot import TypeScript, so this is a
+// deliberate second copy; __tests__/switch-labels.test.ts pins the wording both must produce
+function isStackSelectDisabled(status, busy) {
+  return busy || Boolean(status.pending) || !status.telegram_configured;
+}
+
 function describeStackStatus(status) {
   if (status.pending) return `Confirm the switch to ${status.pending.target.toUpperCase()} in Telegram`;
   const p = status.progress;
@@ -752,7 +758,6 @@ function renderStackStatus(status) {
     })
     .join("");
   if (stackSelect.innerHTML !== options) stackSelect.innerHTML = options;
-  stackSelect.disabled = Boolean(status.pending) || !status.telegram_configured;
   stackSelect.title = status.telegram_configured
     ? "LLM stack (deployment environment)"
     : "Telegram confirmation not configured - run scripts/switch-stack.sh telegram";
@@ -793,6 +798,11 @@ function renderStackStatus(status) {
     cls = phase === "failed" ? "error" : phase === "ready" ? "ready" : busy ? "busy" : "";
   }
 
+  // F1: computed from `busy`, not just `status.pending` — `pending` clears the instant the
+  // Telegram link is tapped, so a gate keyed on it alone went live again while the switch script
+  // was still stopping/starting model servers, letting a second switch be requested mid-run.
+  stackSelect.disabled = isStackSelectDisabled(status, busy);
+
   stackStatusEl.textContent = label;
   stackStatusEl.className = cls ? `stack-status ${cls}` : "stack-status";
 
@@ -809,7 +819,10 @@ async function pollStackStatus() {
     if (!res.ok) return true;
     return renderStackStatus(await res.json());
   } catch {
-    // The app restarts mid-switch: keep polling rather than reporting an error
+    // F3 (deliberate deviation from amendment A): written to #stack-status, not setStatus.
+    // setStatus erases itself after 5s, but the app can be down for a minute or more while it
+    // restarts on the new stack — a toast would vanish long before the app comes back, leaving
+    // no indication anything is still happening. Keep polling rather than reporting an error.
     stackStatusEl.textContent = "Switching stack: waiting for PharmaLLM to come back";
     stackStatusEl.className = "stack-status busy";
     return true;

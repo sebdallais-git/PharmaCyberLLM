@@ -5,6 +5,9 @@ import { isStackName } from "../config/llm-stacks.js";
 import type { StackName } from "../config/llm-stacks.js";
 
 export const CONFIRM_WINDOW_MS = 5 * 60 * 1000;
+// A switch takes two to three minutes; 15 gives generous headroom while still letting a killed
+// script's stale "in progress" state age out, instead of locking switching out forever.
+export const SWITCHING_WINDOW_MS = 15 * 60 * 1000;
 
 const PHASES = ["confirmed", "stopping", "starting", "warming", "indexing", "ready", "failed"] as const;
 export type SwitchPhase = (typeof PHASES)[number];
@@ -26,7 +29,7 @@ export interface SwitchProgress {
   error?: string;
 }
 
-export type SwitchRefusalReason = "already_active" | "pending" | "benchmark" | "reindex";
+export type SwitchRefusalReason = "already_active" | "pending" | "benchmark" | "reindex" | "switching";
 
 export type SwitchOutcome =
   | { ok: true; pending: PendingSwitch }
@@ -39,6 +42,10 @@ export interface StackSwitchDeps {
   activeStack(): StackName;
   isBenchmarkActive(): boolean;
   runningJobs(): string[];
+  // The state machine stays pure: the HTTP layer injects the progress read (same file
+  // GET /api/stack/status reads), so request() can see a switch that is actively running even
+  // after `pending` has already been cleared by the Telegram confirmation.
+  currentProgress(): SwitchProgress | null;
 }
 
 export interface StackSwitch {
@@ -82,6 +89,15 @@ export function createStackSwitch(deps: StackSwitchDeps): StackSwitch {
       }
       if (live()) {
         return { ok: false, reason: "pending", message: "another switch is waiting for confirmation" };
+      }
+      const progress = deps.currentProgress();
+      if (
+        progress &&
+        progress.phase !== "ready" &&
+        progress.phase !== "failed" &&
+        deps.now() - progress.startedAt < SWITCHING_WINDOW_MS
+      ) {
+        return { ok: false, reason: "switching", message: "a switch is already in progress" };
       }
       if (deps.isBenchmarkActive()) {
         return { ok: false, reason: "benchmark", message: "a benchmark is running; try again when it finishes" };

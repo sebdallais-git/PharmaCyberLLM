@@ -117,6 +117,7 @@ export default createStackRouter({
     activeStack: () => getActiveStack().name,
     isBenchmarkActive: () => isBenchmarkActive(),
     runningJobs: () => getRunningJobs(),
+    currentProgress: readProgressFile,
   }),
   sendTelegram: createTelegramSender(telegramConfig),
   spawnSwitch: (target) => {

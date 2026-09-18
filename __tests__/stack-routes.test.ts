@@ -49,6 +49,9 @@ async function startApp(): Promise<Fixture> {
     activeStack: () => state.active,
     isBenchmarkActive: () => state.benchmark,
     runningJobs: () => state.jobs,
+    // Same underlying state readProgress() below reads, matching the production wiring in
+    // src/api/stack.ts (both the route and the state machine read the one progress file).
+    currentProgress: () => state.progress,
   });
   const app = express();
   app.use(express.json());
@@ -164,6 +167,22 @@ describe("POST /api/stack/switch", () => {
     expect(status).toBe(409);
     expect(body.reason).toBe("benchmark");
     expect(fixture.messages).toEqual([]);
+  });
+
+  // F1: the same 409 shape as the other three refusal reasons, for a switch that is actively
+  // running (a non-terminal phase, e.g. because a second browser or a page reload posted again
+  // after the Telegram link was tapped but before the switch finished).
+  it("refuses a switch while a previous switch is actively running, with the same 409 shape as the other reasons", async () => {
+    const fixture = await startApp();
+    fixture.state.progress = { phase: "warming", target: "mlx", previous: "ollama", startedAt: Date.now() };
+
+    const { status, body } = await post(fixture.url, "omlx");
+
+    expect(status).toBe(409);
+    expect(body.reason).toBe("switching");
+    expect(typeof body.error).toBe("string");
+    expect(fixture.messages).toEqual([]);
+    expect(fixture.spawned).toEqual([]);
   });
 
   it("never leaks the bot token in a failed-send response", async () => {

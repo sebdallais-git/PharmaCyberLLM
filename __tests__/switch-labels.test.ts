@@ -1,13 +1,19 @@
 import { describe, expect, it } from "@jest/globals";
 import { readFileSync } from "node:fs";
-import { describeSwitch, formatCountdown } from "../src/services/switch-labels.js";
+import { describeSwitch, formatCountdown, isStackSelectDisabled } from "../src/services/switch-labels.js";
 import type { SwitchStatus } from "../src/services/switch-labels.js";
 
-// The exact status objects exercised by the tests below, reused by the browser-copy drift test.
+// F2: one case per branch of describeSwitch — confirmed, stopping, starting, warming, indexing,
+// ready, failed, pending, and the no-progress default — so the module and the extracted browser
+// copy are driven from the exact same list and can never quietly disagree about which cases exist.
+// (Before this fix, "confirmed" and "starting" were branches of both PHASE_TEXT/text but neither
+// was ever exercised by the drift test.)
 const cases: SwitchStatus[] = [
   { active: "mlx", pending: null, progress: null },
   { active: "ollama", pending: { target: "omlx", expires_at: 0 }, progress: null },
+  { active: "ollama", pending: null, progress: { phase: "confirmed", target: "omlx", previous: "ollama", startedAt: 0 } },
   { active: "ollama", pending: null, progress: { phase: "stopping", target: "omlx", previous: "ollama", startedAt: 0 } },
+  { active: "ollama", pending: null, progress: { phase: "starting", target: "omlx", previous: "ollama", startedAt: 0 } },
   { active: "ollama", pending: null, progress: { phase: "warming", target: "omlx", previous: "ollama", startedAt: 0 } },
   { active: "ollama", pending: null, progress: { phase: "indexing", target: "omlx", previous: "ollama", startedAt: 0 } },
   {
@@ -35,8 +41,12 @@ describe("describeSwitch", () => {
 
   it("describes each phase of a running switch", () => {
     const base = { active: "ollama" as const, pending: null };
+    expect(describeSwitch({ ...base, progress: { phase: "confirmed", target: "omlx", previous: "ollama", startedAt: 0 } }))
+      .toBe("Switching to OMLX: starting");
     expect(describeSwitch({ ...base, progress: { phase: "stopping", target: "omlx", previous: "ollama", startedAt: 0 } }))
       .toBe("Switching to OMLX: stopping the current stack");
+    expect(describeSwitch({ ...base, progress: { phase: "starting", target: "omlx", previous: "ollama", startedAt: 0 } }))
+      .toBe("Switching to OMLX: starting the server");
     expect(describeSwitch({ ...base, progress: { phase: "warming", target: "omlx", previous: "ollama", startedAt: 0 } }))
       .toBe("Switching to OMLX: warming up the model");
     expect(describeSwitch({ ...base, progress: { phase: "indexing", target: "omlx", previous: "ollama", startedAt: 0 } }))
@@ -83,11 +93,61 @@ describe("formatCountdown", () => {
     expect(formatCountdown(-5_000)).toBe("0:00");
   });
 
+  // F4: exactly one minute, and past an hour. Minutes do NOT roll over into an hours component —
+  // pinned here so that stays a deliberate choice rather than an untested accident.
+  it("formats exactly one minute as 1:00", () => {
+    expect(formatCountdown(60_000)).toBe("1:00");
+  });
+
+  it("does not roll minutes over into hours past 60 minutes", () => {
+    expect(formatCountdown(3_600_000)).toBe("60:00");
+  });
+
   // Amendment C: the browser keeps a literal copy of this helper too, guarded the same way as B.
   it("keeps the browser copy of the countdown formatter identical to the module", () => {
     const browserFormatCountdown = loadBrowserFunction("formatCountdown") as (msRemaining: number) => string;
-    for (const ms of [277_000, 65_000, -5_000, 0, 599_000]) {
+    for (const ms of [277_000, 65_000, -5_000, 0, 599_000, 60_000, 3_600_000]) {
       expect(browserFormatCountdown(ms)).toBe(formatCountdown(ms));
+    }
+  });
+});
+
+describe("isStackSelectDisabled", () => {
+  // F1: the selector must stay disabled for the whole switch, not just while a Telegram
+  // confirmation is pending. `confirm()` clears `pending` the instant the link is tapped, so a
+  // client-side gate keyed on `pending` alone went live again while the script was still
+  // stopping/starting model servers — this is the one place that combines "is this browser busy
+  // following its own switch" with the server-reported state to decide the disabled attribute.
+  it("disables while busy even when nothing is pending", () => {
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: true }, true)).toBe(true);
+  });
+
+  it("stays enabled when idle, nothing pending, and Telegram is configured", () => {
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: true }, false)).toBe(false);
+  });
+
+  it("disables while a confirmation is pending, even if the caller thinks it is not busy", () => {
+    expect(isStackSelectDisabled({ pending: { target: "omlx", expires_at: 0 }, telegram_configured: true }, false)).toBe(true);
+  });
+
+  it("disables when Telegram is not configured", () => {
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: false }, false)).toBe(true);
+  });
+
+  it("keeps the browser copy identical to the module", () => {
+    const browserIsStackSelectDisabled = loadBrowserFunction("isStackSelectDisabled") as (
+      status: unknown,
+      busy: boolean
+    ) => boolean;
+    const statuses = [
+      { pending: null, telegram_configured: true },
+      { pending: null, telegram_configured: false },
+      { pending: { target: "omlx" as const, expires_at: 0 }, telegram_configured: true },
+    ];
+    for (const status of statuses) {
+      for (const busy of [true, false]) {
+        expect(browserIsStackSelectDisabled(status, busy)).toBe(isStackSelectDisabled(status, busy));
+      }
     }
   });
 });

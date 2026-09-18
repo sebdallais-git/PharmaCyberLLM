@@ -1,16 +1,21 @@
 import { describe, expect, it } from "@jest/globals";
-import { CONFIRM_WINDOW_MS, createStackSwitch, parseProgress } from "../src/services/stack-switch.js";
-import type { StackSwitchDeps } from "../src/services/stack-switch.js";
+import { CONFIRM_WINDOW_MS, SWITCHING_WINDOW_MS, createStackSwitch, parseProgress } from "../src/services/stack-switch.js";
+import type { StackSwitchDeps, SwitchProgress } from "../src/services/stack-switch.js";
 
 interface Harness {
   clock: { value: number };
   switcher: ReturnType<typeof createStackSwitch>;
-  state: { active: "ollama" | "mlx" | "omlx"; benchmark: boolean; jobs: string[] };
+  state: {
+    active: "ollama" | "mlx" | "omlx";
+    benchmark: boolean;
+    jobs: string[];
+    progress: SwitchProgress | null;
+  };
 }
 
 function harness(): Harness {
   const clock = { value: 1_000 };
-  const state = { active: "ollama" as const, benchmark: false, jobs: [] as string[] };
+  const state = { active: "ollama" as const, benchmark: false, jobs: [] as string[], progress: null as SwitchProgress | null };
   let counter = 0;
   const deps: StackSwitchDeps = {
     now: () => clock.value,
@@ -19,6 +24,7 @@ function harness(): Harness {
     activeStack: () => state.active,
     isBenchmarkActive: () => state.benchmark,
     runningJobs: () => state.jobs,
+    currentProgress: () => state.progress,
   };
   return { clock, switcher: createStackSwitch(deps), state: state as Harness["state"] };
 }
@@ -81,6 +87,41 @@ describe("request", () => {
     const h = harness();
     h.switcher.request("mlx");
     h.clock.value += CONFIRM_WINDOW_MS + 1;
+
+    expect(h.switcher.request("omlx").ok).toBe(true);
+  });
+
+  // F1: request() only ever refused a second UI-issued token (the `pending` reason). Once the
+  // Telegram link is tapped, `pending` clears immediately and activeStack() keeps reporting the
+  // PREVIOUS stack until the switch finishes, so a second POST for a third stack was accepted and
+  // a second switch-stack.sh ran concurrently against the same processes.
+  it("refuses while a previous switch is actively running (non-terminal phase, started recently)", () => {
+    const h = harness();
+    h.state.progress = { phase: "warming", target: "mlx", previous: "ollama", startedAt: h.clock.value - 60_000 };
+
+    const outcome = h.switcher.request("omlx");
+
+    expect(outcome).toEqual({ ok: false, reason: "switching", message: "a switch is already in progress" });
+  });
+
+  it("does not refuse once the running switch reached ready", () => {
+    const h = harness();
+    h.state.progress = { phase: "ready", target: "mlx", previous: "ollama", startedAt: h.clock.value - 60_000, finishedAt: h.clock.value };
+    h.state.active = "mlx";
+
+    expect(h.switcher.request("omlx").ok).toBe(true);
+  });
+
+  it("does not refuse once the running switch reached failed", () => {
+    const h = harness();
+    h.state.progress = { phase: "failed", target: "mlx", previous: "ollama", startedAt: h.clock.value - 60_000, finishedAt: h.clock.value, error: "boom" };
+
+    expect(h.switcher.request("omlx").ok).toBe(true);
+  });
+
+  it("does not refuse a non-terminal phase older than 15 minutes (a killed script must not lock switching out forever)", () => {
+    const h = harness();
+    h.state.progress = { phase: "warming", target: "mlx", previous: "ollama", startedAt: h.clock.value - (SWITCHING_WINDOW_MS + 1) };
 
     expect(h.switcher.request("omlx").ok).toBe(true);
   });

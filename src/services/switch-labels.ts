@@ -42,3 +42,17 @@ export function formatCountdown(msRemaining: number): string {
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
+
+export interface StackSelectState {
+  pending: { target: StackName; expires_at: number } | null;
+  telegram_configured: boolean;
+}
+
+// F1: the selector must stay disabled for the whole switch, not just while a Telegram
+// confirmation is pending. `confirm()` clears `pending` the instant the link is tapped, so a
+// client-side gate keyed on `pending` alone went live again while the script was still
+// stopping/starting model servers. `busy` — whether this browser considers a switch in flight,
+// including one it is merely watching — must be computed by the caller and passed in here.
+export function isStackSelectDisabled(status: StackSelectState, busy: boolean): boolean {
+  return busy || Boolean(status.pending) || !status.telegram_configured;
+}
