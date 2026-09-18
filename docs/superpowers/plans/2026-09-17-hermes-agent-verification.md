@@ -163,3 +163,29 @@ network=none  memory=536870912 (512 MB)  cpus=1000000000 (1)
 No host project directory, no home directory, no `.env`, and no network. Spec Testing item 6 is met. The configured 512 MB / 1 CPU limits are applied.
 
 Operational note: pre-pulling the sandbox image needs the credential-helper workaround above (or a running Docker Desktop) until `credsStore` is removed from `~/.docker/config.json`.
+
+## Correction: where the time actually went (2026-09-18)
+
+The Task 8 section above concluded that "each tool step costs roughly a full prefill … Hermes' prompt prefix changes per request, so Ollama's cache rarely hits". **That was wrong.** Measured afterwards:
+
+- Appending to a conversation keeps the cache: a 14.6K-token prompt cost 140.6 s cold, 0.3 s when resent identically, and 10.9 s / 11.1 s when a ~1K-token tool result was appended (`cached` 14,610 of 15,651).
+- An embedding call between two chat calls does not evict it either (0.4 s afterwards).
+- Ollama's own log for the live Telegram window (21:10–21:50) shows the cache working: one request evaluated 9,083 prompt tokens (79.8 s); the other 29 evaluated 159–2,339 tokens (0.6–24 s each).
+- That window totalled 743 s of model time across 30 requests: **364 s prefill** (37,912 tokens at ~104 tok/s) and **379 s generation** (4,504 tokens at 11.9 tok/s) — roughly half and half.
+
+So the cost was not cache misses. It was the sheer size of what each tool returned, re-read as it entered the context, plus generation at 11.9 tok/s.
+
+### Root cause: tool payloads
+
+| Tool result | Before | After |
+|---|---|---|
+| `search_knowledge` (5 chunks) | 194,518 chars ≈ 48,600 tokens | 4,431 chars ≈ 1,100 tokens |
+| `knowledge_status` | ~40,000 chars ≈ 10,000 tokens | 2,106 chars ≈ 527 tokens |
+| `news_agent_status` | 8,855 chars ≈ 2,200 tokens | 1,047 chars ≈ 262 tokens |
+| `list_knowledge_gaps` | 123,927 chars ≈ 31,000 tokens | 10,804 chars ≈ 2,700 tokens |
+
+Each search chunk carried a ~30 KB `embedding` object next to ~440 characters of text — 98% of the payload was a vector no agent can use. `knowledge_status` shipped all 1,080 source names, `news_agent_status` all 188 scrape topics, and the gap list shipped every stored model answer for 50 rows.
+
+This also explains Hermes spilling tool output to a file (its 50,000-character cap) and then needing the shell tool to read it back, which is what the wedged Docker sandbox blocked.
+
+Fixed in `mcp/src/tools/compact.ts`: embeddings dropped, long lists replaced by `{count, sample, truncated}`, stored answers truncated to 300 characters, and `list_knowledge_gaps` capped at 20 rows by default (`limit` up to 50). PharmaLLM's REST API and the web UI are unchanged; this only shapes what the agent receives.
