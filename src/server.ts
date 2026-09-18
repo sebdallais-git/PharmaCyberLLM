@@ -21,6 +21,7 @@ import { initFeedbackDB } from "./services/feedback-store.js";
 import { initRequestLog } from "./services/request-log.js";
 import graphRouter from "./api/graph.js";
 import benchRouter from "./api/bench.js";
+import stackRouter from "./api/stack.js";
 import llmRouter from "./api/llm.js";
 import { createAuthMiddleware } from "./api/auth.js";
 import v1Router from "./api/v1.js";
@@ -53,6 +54,7 @@ app.use("/api/feedback", feedbackRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/graph", graphRouter);
 app.use("/api/bench", benchRouter);
+app.use("/api/stack", stackRouter);
 app.use("/api/llm", llmRouter);
 app.use("/v1", v1Router);
 app.use("/api", dashboardRouter); // /api/health

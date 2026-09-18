@@ -18,6 +18,9 @@ export const BROWSER_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["GET", "/api/dashboard/chromadb-misses"],
   ["GET", "/api/graph/stats"],
   ["GET", "/api/health"],
+  ["POST", "/api/stack/switch"],
+  ["GET", "/api/stack/confirm"],
+  ["GET", "/api/stack/status"],
 ];
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
