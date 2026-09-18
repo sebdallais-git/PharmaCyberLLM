@@ -101,3 +101,53 @@ describe("switch-stack.sh ollama-ctx", () => {
     expect(calls).not.toContain("create");
   });
 });
+
+describe("switch-stack.sh omlx stack", () => {
+  it("defines the venv, port and pinned version", () => {
+    expect(script).toContain('OMLX_VENV="$PROJECT_DIR/python/omlx-venv"');
+    expect(script).toContain('OMLX_PORT="8090"');
+    expect(script).toMatch(/OMLX_VERSION="[0-9a-f]{7,40}"/);
+  });
+
+  it("starts oMLX with one server for chat and embeddings", () => {
+    expect(script).toContain('"$OMLX_VENV/bin/omlx" serve --host 127.0.0.1 --port "$OMLX_PORT"');
+    expect(script).toContain('--model-dir "$HF_CACHE"');
+    expect(script).toContain('echo $! >"$RUN_DIR/omlx.pid"');
+    expect(script).toContain('wait_http "http://localhost:$OMLX_PORT/v1/models" 180');
+  });
+
+  it("bounds the oMLX SSD cache with an overridable size", () => {
+    expect(script).toContain('OMLX_CACHE_MAX_GB="${OMLX_CACHE_MAX_GB:-20}"');
+    expect(script).toContain('--paged-ssd-cache-max-size "${OMLX_CACHE_MAX_GB}GB"');
+  });
+
+  it("stops every stack except the target instead of assuming two", () => {
+    expect(script).toContain("stop_other_stacks()");
+    expect(script).not.toContain("other_stack()");
+    expect(script).toContain('for other in ollama mlx omlx; do');
+  });
+
+  it("accepts omlx everywhere a stack name is taken", () => {
+    expect(script).toContain("ollama|mlx|omlx) ;;");
+    expect(script).toContain("ollama|mlx|omlx) switch_to");
+  });
+});
+
+describe("switch-stack.sh omlx processes", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Runs `omlx-ports` with a stub `omlx` and stub `lsof`/`nc` absent, so only the echo path is exercised
+  it("reports the omlx port in status output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omlx-status-"));
+    dirs.push(dir);
+    const result = spawnSync("bash", ["-c", `grep -c 'omlx:\\$OMLX_PORT' ${JSON.stringify(join(process.cwd(), "scripts", "switch-stack.sh"))}`], {
+      encoding: "utf-8",
+      env: { PATH: "/usr/bin:/bin", HOME: dir },
+    });
+    expect(Number(result.stdout.trim())).toBeGreaterThan(0);
+  });
+});

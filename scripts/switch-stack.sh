@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Switch PharmaLLM between the Ollama and MLX stacks. Only one stack runs at a time.
 # Usage:
-#   scripts/switch-stack.sh ollama|mlx               stop the other stack, start this one, restart the app
+#   scripts/switch-stack.sh ollama|mlx|omlx          stop the other stacks, start this one, restart the app
 #   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
@@ -45,6 +45,14 @@ OLLAMA_MODELFILE="$PROJECT_DIR/ollama/qwen3.8-pharma.Modelfile"
 # Caps how much memory mlx_lm.server spends on cached prompts (several 64k agent prompts would otherwise pile up)
 MLX_PROMPT_CACHE_BYTES="${MLX_PROMPT_CACHE_BYTES:-8589934592}"
 
+OMLX_VENV="$PROJECT_DIR/python/omlx-venv"
+OMLX_PORT="8090"
+# Pinned to the commit verified in docs/superpowers/plans/2026-09-18-omlx-stack-verification.md
+OMLX_VERSION="cbc1a80"
+OMLX_REPO="https://github.com/jundot/omlx"
+# Caps the oMLX paged SSD prefix cache (unbounded, it reached 4.3 GB in two short sessions)
+OMLX_CACHE_MAX_GB="${OMLX_CACHE_MAX_GB:-20}"
+
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
 active_stack() {
@@ -53,13 +61,9 @@ active_stack() {
 
 validate_stack() {
   case "$1" in
-    ollama|mlx) ;;
-    *) log "Unknown stack '$1' (expected ollama or mlx)"; exit 1 ;;
+    ollama|mlx|omlx) ;;
+    *) log "Unknown stack '$1' (expected ollama, mlx or omlx)"; exit 1 ;;
   esac
-}
-
-other_stack() {
-  if [ "$1" = "mlx" ]; then echo "ollama"; else echo "mlx"; fi
 }
 
 # --- Model availability (checked on disk, so no server needs to run) ---------
@@ -82,6 +86,9 @@ models_ready() {
       ;;
     mlx)
       [ -x "$MLX_VENV/bin/mlx_lm.server" ] && hf_snapshot_present "$MLX_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
+      ;;
+    omlx)
+      [ -x "$OMLX_VENV/bin/omlx" ] && hf_snapshot_present "$MLX_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
       ;;
   esac
 }
@@ -159,12 +166,37 @@ start_mlx() {
   wait_http "http://localhost:$MLX_EMBED_PORT/v1/models" 180 || { log "MLX embedding server did not become ready"; return 1; }
 }
 
+stop_omlx() {
+  stop_pidfile omlx "$OMLX_PORT" ignore-foreign
+}
+
+start_omlx() {
+  if port_open "$OMLX_PORT"; then
+    project_listener_open "$OMLX_PORT" \
+      || { log "Port $OMLX_PORT is used by another program — cannot start oMLX"; return 1; }
+  else
+    nohup "$OMLX_VENV/bin/omlx" serve --host 127.0.0.1 --port "$OMLX_PORT" \
+      --model-dir "$HF_CACHE" --paged-ssd-cache-max-size "${OMLX_CACHE_MAX_GB}GB" \
+      >"$LOG_DIR/omlx.log" 2>&1 &
+    echo $! >"$RUN_DIR/omlx.pid"
+  fi
+  wait_http "http://localhost:$OMLX_PORT/v1/models" 180 || { log "oMLX did not become ready"; return 1; }
+}
+
 start_stack() {
-  if [ "$1" = "mlx" ]; then start_mlx; else start_ollama && ensure_ollama_ctx; fi
+  case "$1" in
+    mlx) start_mlx ;;
+    omlx) start_omlx ;;
+    *) start_ollama && ensure_ollama_ctx ;;
+  esac
 }
 
 stop_stack() {
-  if [ "$1" = "mlx" ]; then stop_mlx; else stop_ollama; fi
+  case "$1" in
+    mlx) stop_mlx ;;
+    omlx) stop_omlx ;;
+    *) stop_ollama ;;
+  esac
 }
 
 # Load both models into memory so the first real request doesn't pay for it
@@ -175,6 +207,12 @@ warm_up() {
     embed_url="http://localhost:$MLX_EMBED_PORT"
     chat_model="$MLX_CHAT_MODEL"
     embed_model="$MLX_EMBED_MODEL"
+    extra='"chat_template_kwargs":{"enable_thinking":false}'
+  elif [ "$1" = "omlx" ]; then
+    chat_url="http://localhost:$OMLX_PORT"
+    embed_url="$chat_url"
+    chat_model="mlx-community--Qwen3.8-27B-4bit"
+    embed_model="mlx-community--Qwen3-Embedding-0.6B-8bit"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
   else
     chat_url="http://localhost:$OLLAMA_PORT"
@@ -322,6 +360,20 @@ show_logs() {
   done
 }
 
+# Stop every stack except the target: with three stacks "the other one" is no longer a single value
+stop_other_stacks() {
+  local target="$1" other rc=0
+  for other in ollama mlx omlx; do
+    [ "$other" = "$target" ] && continue
+    case "$other" in
+      ollama) stop_ollama || rc=$? ;;
+      mlx) stop_mlx || rc=$? ;;
+      omlx) stop_omlx || rc=$? ;;
+    esac
+  done
+  return "$rc"
+}
+
 # --- Commands ---------------------------------------------------------------------
 
 switch_to() {
@@ -333,7 +385,7 @@ switch_to() {
 
   log "Switching: $previous -> $target"
   stop_app
-  stop_stack "$(other_stack "$target")"
+  stop_other_stacks "$target"
 
   if start_stack "$target" && warm_up "$target" && ensure_index "$target" && start_app "$target"; then
     echo "$target" >"$RUN_DIR/active-stack"
@@ -362,7 +414,7 @@ ensure_stack() {
   local target="$1"
   validate_stack "$target"
   models_ready "$target" || { log "Models for $target are missing. Run: scripts/switch-stack.sh prepare"; exit 1; }
-  stop_stack "$(other_stack "$target")"
+  stop_other_stacks "$target"
   if ! { start_stack "$target" && warm_up "$target" && ensure_index "$target"; }; then
     show_logs
     exit 1
@@ -388,6 +440,16 @@ prepare() {
   "$MLX_VENV/bin/pip" install -q -r "$PROJECT_DIR/python/mlx-requirements.txt"
   "$MLX_VENV/bin/python" -c "from huggingface_hub import snapshot_download as d; d('$MLX_CHAT_MODEL'); d('$MLX_EMBED_MODEL')"
 
+  # oMLX venv: pinned, models come from the same Hugging Face cache
+  if [ ! -x "$OMLX_VENV/bin/omlx" ]; then
+    log "Installing oMLX $OMLX_VERSION into $OMLX_VENV"
+    rm -rf "$PROJECT_DIR/python/omlx-src"
+    git clone "$OMLX_REPO" "$PROJECT_DIR/python/omlx-src"
+    (cd "$PROJECT_DIR/python/omlx-src" && git checkout -q "$OMLX_VERSION")
+    "$MLX_PYTHON" -m venv "$OMLX_VENV"
+    "$OMLX_VENV/bin/pip" install -q -e "$PROJECT_DIR/python/omlx-src"
+  fi
+
   log "Models ready. Restoring the $previous stack..."
   switch_to "$previous"
 }
@@ -395,11 +457,12 @@ prepare() {
 status() {
   log "Active stack: $(active_stack)"
   local entry name port stack
-  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "chromadb:$CHROMA_PORT"; do
+  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "omlx:$OMLX_PORT" "chromadb:$CHROMA_PORT"; do
     name="${entry%%:*}"
     port="${entry#*:}"
     if port_open "$port"; then log "  $name (:$port) up"; else log "  $name (:$port) down"; fi
   done
+  [ -d "$HOME/.omlx" ] && log "  omlx SSD cache: $(du -sh "$HOME/.omlx" 2>/dev/null | cut -f1)"
   local parallel
   parallel="$(launchctl getenv OLLAMA_NUM_PARALLEL 2>/dev/null || true)"
   log "  OLLAMA_NUM_PARALLEL: ${parallel:-not set in launchd (keep it at 1: each parallel slot allocates its own 64k context)}"
@@ -412,7 +475,7 @@ status() {
 }
 
 case "${1:-}" in
-  ollama|mlx) switch_to "$1" ;;
+  ollama|mlx|omlx) switch_to "$1" ;;
   ensure-stack) ensure_stack "${2:-}" ;;
   prepare) prepare ;;
   status) status ;;
