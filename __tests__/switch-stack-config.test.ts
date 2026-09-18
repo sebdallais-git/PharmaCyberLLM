@@ -605,4 +605,168 @@ describe("switch-stack.sh write_switch_phase", () => {
     expect(typeof failed?.finishedAt).toBe("number");
     expect(failed?.error).toBe("boom");
   });
+
+  // Amendment D: "confirmed" is the phase written before any pre-flight check runs.
+  it("also round-trips a confirmed write (written before any pre-flight check runs)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "write-phase-confirmed-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    const outDir = join(dir, "out");
+    mkdirSync(outDir, { recursive: true });
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "SWITCH_TARGET=omlx",
+      "SWITCH_PREVIOUS=ollama",
+      "SWITCH_STARTED=1700000000000",
+      "write_switch_phase confirmed",
+      'cp "$SWITCH_FILE" "$OUT_DIR/confirmed.json"',
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        OUT_DIR: outDir,
+      },
+    });
+
+    expect(result.status).toBe(0);
+
+    const confirmed = parseProgress(JSON.parse(readFileSync(join(outDir, "confirmed.json"), "utf-8")));
+    expect(confirmed).not.toBeNull();
+    expect(confirmed?.phase).toBe("confirmed");
+    expect(confirmed?.target).toBe("omlx");
+    expect(confirmed?.previous).toBe("ollama");
+    expect(typeof confirmed?.startedAt).toBe("number");
+    expect(confirmed?.finishedAt).toBeUndefined();
+    expect(confirmed?.error).toBeUndefined();
+  });
+});
+
+describe("switch-stack.sh switch_to: pre-flight checks are guarded and recorded", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Sources only the function definitions, stubs models_ready/ensure_chromadb per scenario (and
+  // stop_app/stop_other_stacks, which must never be reached when a pre-flight check fails), stubs
+  // curl so no real Telegram call is ever made, then calls switch_to directly and inspects the
+  // progress file and stub call log it leaves behind. Before amendment D, a pre-flight failure
+  // (bad stack name, missing models, or ChromaDB not starting) exited with no progress file
+  // written at all and no Telegram notification sent, since SWITCH_TARGET was only set — and
+  // write_switch_phase only usable — after these checks had already run.
+  function runPreflight(target: string, modelsReadyRc: number, ensureChromadbRc: number): {
+    progress: unknown;
+    curlLog: string;
+    status: number | null;
+    stubLog: string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "switch-to-preflight-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "telegram-bot-token"), "FAKE_TOKEN_XYZ\n");
+    writeFileSync(join(runDir, "telegram-chat-id"), "424242\n");
+
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const curlLog = join(dir, "curl.log");
+    writeFileSync(join(binDir, "curl"), ["#!/bin/bash", 'echo "curl_called: $*" >> "$STUB_CURL_LOG"', "exit 0"].join("\n"));
+    chmodSync(join(binDir, "curl"), 0o755);
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const stubLog = join(dir, "stub.log");
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "# Stubs: no real model check, no real ChromaDB, and these must never run when a pre-flight check fails.",
+      `models_ready() { return ${modelsReadyRc}; }`,
+      `ensure_chromadb() { return ${ensureChromadbRc}; }`,
+      'stop_app() { echo "stop_app_called" >>"$STUB_LOG"; return 0; }',
+      'stop_other_stacks() { echo "stop_other_stacks_called" >>"$STUB_LOG"; return 0; }',
+      `switch_to ${target}`,
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        STUB_CURL_LOG: curlLog,
+        STUB_LOG: stubLog,
+      },
+    });
+
+    const progress = JSON.parse(readFileSync(join(runDir, "stack-switch.json"), "utf-8")) as unknown;
+    let curlLogContent = "";
+    try {
+      curlLogContent = readFileSync(curlLog, "utf-8");
+    } catch {
+      // no curl call recorded
+    }
+    let stubLogContent = "";
+    try {
+      stubLogContent = readFileSync(stubLog, "utf-8");
+    } catch {
+      // no stub call recorded
+    }
+    return { progress, curlLog: curlLogContent, status: result.status, stubLog: stubLogContent };
+  }
+
+  it("writes failed with a specific reason and notifies, never reaching stop_app, when the target is unknown", () => {
+    const { progress, curlLog, status, stubLog } = runPreflight("bogus", 0, 0);
+    expect(status).not.toBe(0);
+    expect((progress as { phase: string }).phase).toBe("failed");
+    expect((progress as { error: string }).error).toBe("unknown stack 'bogus'");
+    expect(curlLog).toContain("curl_called");
+    expect(stubLog).not.toContain("stop_app_called");
+    expect(stubLog).not.toContain("stop_other_stacks_called");
+  });
+
+  it("writes failed with a specific reason and notifies, never reaching stop_app, when models are missing", () => {
+    const { progress, curlLog, status, stubLog } = runPreflight("omlx", 1, 0);
+    expect(status).not.toBe(0);
+    expect((progress as { phase: string }).phase).toBe("failed");
+    expect((progress as { error: string }).error).toBe(
+      "models for omlx are missing (run scripts/switch-stack.sh prepare)"
+    );
+    expect(curlLog).toContain("curl_called");
+    expect(stubLog).not.toContain("stop_app_called");
+  });
+
+  it("writes failed with a specific reason and notifies, never reaching stop_app, when ChromaDB cannot start", () => {
+    const { progress, curlLog, status, stubLog } = runPreflight("omlx", 0, 1);
+    expect(status).not.toBe(0);
+    expect((progress as { phase: string }).phase).toBe("failed");
+    expect((progress as { error: string }).error).toBe("could not start ChromaDB");
+    expect(curlLog).toContain("curl_called");
+    expect(stubLog).not.toContain("stop_app_called");
+  });
 });

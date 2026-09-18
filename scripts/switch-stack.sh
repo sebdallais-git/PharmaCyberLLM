@@ -69,7 +69,7 @@ active_stack() {
 validate_stack() {
   case "$1" in
     ollama|mlx|omlx) ;;
-    *) log "Unknown stack '$1' (expected ollama, mlx or omlx)"; exit 1 ;;
+    *) log "Unknown stack '$1' (expected ollama, mlx or omlx)"; return 1 ;;
   esac
 }
 
@@ -489,11 +489,31 @@ stop_other_stacks() {
 switch_to() {
   local target="$1" previous
   previous="$(active_stack)"
-  validate_stack "$target"
-  models_ready "$target" || { log "Models for $target are missing. Run: scripts/switch-stack.sh prepare"; exit 1; }
-  ensure_chromadb
-
+  # Set before any pre-flight check so a failure in one of them can still be recorded and
+  # notified: without this, a bad stack name or missing models/ChromaDB left the previous
+  # switch's terminal state on disk with no "failed" entry, and the UI polled it forever.
   SWITCH_TARGET="$target"; SWITCH_PREVIOUS="$previous"; SWITCH_STARTED="$(($(date +%s) * 1000))"
+  write_switch_phase confirmed
+
+  # Tolerant like the rollback path below (stop_app || true): under set -e a bare failing check
+  # here would exit before the failed phase/notification are ever written, and the UI would poll
+  # "confirmed" forever. Record the specific failure and tell the user instead of going silent.
+  if ! validate_stack "$target"; then
+    write_switch_phase failed "unknown stack '$target'"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! models_ready "$target"; then
+    write_switch_phase failed "models for $target are missing (run scripts/switch-stack.sh prepare)"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! ensure_chromadb; then
+    write_switch_phase failed "could not start ChromaDB"
+    notify_switch_result failed
+    exit 1
+  fi
+
   log "Switching: $previous -> $target"
   write_switch_phase stopping
   # Tolerant like the rollback path below (stop_app || true): under set -e a bare failing stop here

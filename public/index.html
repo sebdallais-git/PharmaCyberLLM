@@ -12,6 +12,10 @@
       <h1>CyberPharma</h1>
       <p class="subtitle">Cyber Threat Expert Assistant</p>
       <div class="header-controls">
+        <select id="stack-select" title="LLM stack (deployment environment)">
+          <option value="ollama">Ollama</option>
+        </select>
+        <span id="stack-status" class="stack-status"></span>
         <select id="model-select" title="LLM Model">
           <option value="mistral-small:24b">mistral-small:24b</option>
         </select>
