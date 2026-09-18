@@ -6,6 +6,7 @@
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
+#   scripts/switch-stack.sh telegram                 store the Telegram credentials used to confirm UI switches
 #   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
 #   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmallm-mcp
 #   scripts/switch-stack.sh mcp start|stop|status    control the pharmallm-mcp launchd service
@@ -21,6 +22,10 @@ source "$SCRIPT_DIR/lib/services.sh"
 RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
 TOKEN_FILE="$RUN_DIR/api-token"
 MCP_TOKEN_FILE="$RUN_DIR/mcp-token"
+SWITCH_FILE="$RUN_DIR/stack-switch.json"
+TELEGRAM_BOT_TOKEN_FILE="$RUN_DIR/telegram-bot-token"
+TELEGRAM_CHAT_ID_FILE="$RUN_DIR/telegram-chat-id"
+PUBLIC_URL_FILE="$RUN_DIR/public-url"
 MCP_LABEL="com.pharmallm.mcp"
 MCP_PLIST="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$MCP_LABEL.plist"
 MCP_PORT="3200"
@@ -307,6 +312,77 @@ api_token() {
   fi
 }
 
+# The UI polls this file while the app is down mid-switch
+write_switch_phase() {
+  local phase="$1" error="${2:-}" target="${SWITCH_TARGET:-}" previous="${SWITCH_PREVIOUS:-}"
+  [ -n "$target" ] || return 0
+  PHASE="$phase" TARGET="$target" PREVIOUS="$previous" STARTED="${SWITCH_STARTED:-0}" ERROR="$error" \
+    python3 - "$SWITCH_FILE" <<'PY'
+import json, os, sys
+record = {"phase": os.environ["PHASE"], "target": os.environ["TARGET"],
+          "previous": os.environ["PREVIOUS"], "startedAt": int(os.environ["STARTED"])}
+if os.environ["PHASE"] in ("ready", "failed"):
+    import time
+    record["finishedAt"] = int(time.time() * 1000)
+if os.environ.get("ERROR"):
+    record["error"] = os.environ["ERROR"]
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(record, handle)
+PY
+}
+
+telegram_value() {
+  local file="$RUN_DIR/telegram-$1"
+  if [ -s "$file" ]; then tr -d '[:space:]' <"$file"; fi
+}
+
+# Public URL used for the Telegram confirmation link; falls back to this Mac's hostname rather
+# than localhost, since the owner taps the link on an iPad over Tailscale, where localhost is the iPad.
+public_url() {
+  local url=""
+  [ -s "$PUBLIC_URL_FILE" ] && url="$(tr -d '[:space:]' <"$PUBLIC_URL_FILE")"
+  if [ -z "$url" ]; then
+    url="https://$(hostname -s).local:$APP_HTTPS_PORT"
+  fi
+  echo "$url"
+}
+
+# Credentials the app uses to ask for confirmation of a UI-triggered switch
+ensure_telegram() {
+  local token="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}" url="${PHARMALLM_PUBLIC_URL:-}"
+  if [ -z "$token" ] && [ -t 0 ]; then read -rs -p "Telegram bot token: " token; echo >&2; fi
+  if [ -z "$chat" ] && [ -t 0 ]; then read -r -p "Telegram chat id: " chat; fi
+  if [ -z "$url" ] && [ -t 0 ]; then
+    read -r -p "Public URL for confirmation links (e.g. https://mac-mini.example.ts.net:3443): " url
+  fi
+  [ -n "$token" ] && [ -n "$chat" ] || { log "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or run this on a terminal"; exit 1; }
+  (umask 077 && printf '%s\n' "$token" >"$TELEGRAM_BOT_TOKEN_FILE")
+  (umask 077 && printf '%s\n' "$chat" >"$TELEGRAM_CHAT_ID_FILE")
+  (umask 077 && printf '%s\n' "$url" >"$PUBLIC_URL_FILE")
+  chmod 600 "$TELEGRAM_BOT_TOKEN_FILE" "$TELEGRAM_CHAT_ID_FILE" "$PUBLIC_URL_FILE"
+  if [ -z "$url" ]; then
+    log "No public URL set; confirmation links will fall back to this Mac's hostname"
+  fi
+  log "Stored Telegram credentials in $RUN_DIR (mode 600)"
+}
+
+# Tell the user how the switch ended: the app is mid-restart and cannot send this itself
+notify_switch_result() {
+  local phase="$1" token chat text elapsed
+  token="$(telegram_value bot-token)"; chat="$(telegram_value chat-id)"
+  [ -n "$token" ] && [ -n "$chat" ] || return 0
+  elapsed=$(( ($(date +%s) * 1000 - ${SWITCH_STARTED:-0}) / 1000 ))
+  if [ "$phase" = "ready" ]; then
+    text="PharmaLLM: ${SWITCH_TARGET} stack is ready (${elapsed}s)."
+  else
+    text="PharmaLLM: switch to ${SWITCH_TARGET} failed after ${elapsed}s; ${SWITCH_PREVIOUS} is being restored."
+  fi
+  curl -sS -m 10 -o /dev/null -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+    -H 'Content-Type: application/json' \
+    --data-binary "$(TEXT="$text" CHAT="$chat" python3 -c 'import json,os;print(json.dumps({"chat_id":os.environ["CHAT"],"text":os.environ["TEXT"]}))')" \
+    || log "Could not send the Telegram completion message"
+}
+
 # Token agents send to pharmallm-mcp (readable only by you); run-mcp.sh passes it to the service
 ensure_mcp_token() {
   if [ -s "$MCP_TOKEN_FILE" ]; then
@@ -347,7 +423,14 @@ mcp_service() {
 
 start_app() {
   cd "$PROJECT_DIR"
+  local public_url_value
+  public_url_value="$(public_url)"
+  case "$public_url_value" in
+    *localhost*|*127.0.0.1*) log "Confirmation links will only work on this Mac ($public_url_value)" ;;
+  esac
   LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
+    TELEGRAM_BOT_TOKEN="$(telegram_value bot-token)" TELEGRAM_CHAT_ID="$(telegram_value chat-id)" \
+    PHARMALLM_PUBLIC_URL="$(public_url)" \
     nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
   echo $! >"$RUN_DIR/app.pid"
 
@@ -394,15 +477,28 @@ switch_to() {
   models_ready "$target" || { log "Models for $target are missing. Run: scripts/switch-stack.sh prepare"; exit 1; }
   ensure_chromadb
 
+  SWITCH_TARGET="$target"; SWITCH_PREVIOUS="$previous"; SWITCH_STARTED="$(($(date +%s) * 1000))"
   log "Switching: $previous -> $target"
+  write_switch_phase stopping
   stop_app
   stop_other_stacks "$target"
 
-  if start_stack "$target" && warm_up "$target" && ensure_index "$target" && start_app "$target"; then
-    echo "$target" >"$RUN_DIR/active-stack"
-    log "Active stack: $target"
-    return 0
+  write_switch_phase starting
+  if start_stack "$target"; then
+    write_switch_phase warming
+    if warm_up "$target"; then
+      write_switch_phase indexing
+      if ensure_index "$target" && start_app "$target"; then
+        echo "$target" >"$RUN_DIR/active-stack"
+        write_switch_phase ready
+        notify_switch_result ready
+        log "Active stack: $target"
+        return 0
+      fi
+    fi
   fi
+  write_switch_phase failed "$target did not come up"
+  notify_switch_result failed
 
   show_logs
   if [ "$previous" != "$target" ]; then
@@ -491,8 +587,9 @@ case "${1:-}" in
   prepare) prepare ;;
   status) status ;;
   token) ensure_token ;;
+  telegram) ensure_telegram ;;
   ollama-ctx) ensure_ollama_ctx ;;
   mcp-token) ensure_mcp_token ;;
   mcp) mcp_service "${2:-}" ;;
-  *) sed -n '2,11p' "$0"; exit 1 ;;
+  *) sed -n '2,12p' "$0"; exit 1 ;;
 esac
