@@ -371,7 +371,11 @@ public_url() {
 # Credentials the app uses to ask for confirmation of a UI-triggered switch
 ensure_telegram() {
   local token="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}" url="${PHARMALLM_PUBLIC_URL:-}"
-  if [ -z "$token" ] && [ -t 0 ]; then read -rs -p "Telegram bot token: " token; echo >&2; fi
+  # read -s shows nothing as you type, which reads as a hung terminal unless we say so.
+  if [ -z "$token" ] && [ -t 0 ]; then
+    read -rs -p "Telegram bot token (input is hidden — paste, then press Enter): " token
+    echo >&2
+  fi
   if [ -z "$chat" ] && [ -t 0 ]; then read -r -p "Telegram chat id: " chat; fi
   if [ -z "$url" ] && [ -t 0 ]; then
     read -r -p "Public URL for confirmation links (e.g. https://mac-mini.example.ts.net:3443): " url
