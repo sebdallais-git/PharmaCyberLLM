@@ -185,10 +185,23 @@ start_omlx() {
   wait_http "http://localhost:$OMLX_PORT/v1/models" 180 || { log "oMLX did not become ready"; return 1; }
 }
 
+# The omlx stack shares the MLX index: serving it with drifted embeddings would silently poison retrieval
+check_embedding_parity() {
+  local out
+  if out="$("$MLX_PYTHON" "$PROJECT_DIR/scripts/lib/embedding-parity.py" \
+      "http://localhost:$OMLX_PORT" "$OMLX_EMBED_MODEL" \
+      "$PROJECT_DIR/__tests__/fixtures/embedding-reference.json" 2>&1)"; then
+    log "Embedding parity ok (${out})"
+    return 0
+  fi
+  log "Embedding parity check failed: $out"
+  return 1
+}
+
 start_stack() {
   case "$1" in
     mlx) start_mlx ;;
-    omlx) start_omlx ;;
+    omlx) start_omlx && check_embedding_parity ;;
     *) start_ollama && ensure_ollama_ctx ;;
   esac
 }
