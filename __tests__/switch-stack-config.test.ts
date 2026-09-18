@@ -15,7 +15,7 @@ function shellVar(name: string): string {
 }
 
 describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
-  const { ollama, mlx } = buildStacks({});
+  const { ollama, mlx, omlx } = buildStacks({});
 
   it("uses the same model names", () => {
     expect(shellVar("OLLAMA_CHAT_MODEL")).toBe(ollama.chatModel);
@@ -24,10 +24,18 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
     expect(shellVar("MLX_EMBED_MODEL")).toBe(mlx.embeddingModel);
   });
 
+  it("uses the same model names for omlx (warm_up must not hardcode ids that can drift)", () => {
+    expect(shellVar("OMLX_CHAT_MODEL")).toBe(omlx.chatModel);
+    expect(shellVar("OMLX_EMBED_MODEL")).toBe(omlx.embeddingModel);
+    expect(script).toContain('chat_model="$OMLX_CHAT_MODEL"');
+    expect(script).toContain('embed_model="$OMLX_EMBED_MODEL"');
+  });
+
   it("uses the same ports", () => {
     expect(ollama.chatBaseUrl).toBe(`http://localhost:${shellVar("OLLAMA_PORT")}`);
     expect(mlx.chatBaseUrl).toBe(`http://localhost:${shellVar("MLX_CHAT_PORT")}`);
     expect(mlx.embedBaseUrl).toBe(`http://localhost:${shellVar("MLX_EMBED_PORT")}`);
+    expect(omlx.chatBaseUrl).toBe(`http://localhost:${shellVar("OMLX_PORT")}`);
   });
 
   it("builds qwen3.8-pharma from the pulled base model with a 64k context", () => {
@@ -130,6 +138,88 @@ describe("switch-stack.sh omlx stack", () => {
   it("accepts omlx everywhere a stack name is taken", () => {
     expect(script).toContain("ollama|mlx|omlx) ;;");
     expect(script).toContain("ollama|mlx|omlx) switch_to");
+  });
+
+  it("prepares by stopping every other stack, not just MLX", () => {
+    // Previously: a bare `stop_mlx` before the Ollama pulls, so an active omlx server kept
+    // serving a 27B model on :8090 throughout `prepare` (breaking "exactly one active stack").
+    expect(script).toContain("stop_other_stacks ollama\n  start_ollama");
+    expect(script).not.toContain("\n  stop_mlx\n  start_ollama");
+  });
+
+  it("shows the omlx log when a switch to omlx fails", () => {
+    expect(script).toContain(
+      'for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do'
+    );
+  });
+});
+
+describe("switch-stack.sh stop_other_stacks", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Sources only the function definitions (everything before the CLI dispatch at the bottom of the
+  // file), then overrides stop_ollama/stop_mlx/stop_omlx with stubs before calling stop_other_stacks,
+  // so no real port/process/service logic ever runs. SCRIPT_DIR/PROJECT_DIR are supplied via env
+  // instead of being recomputed from $0, since sourcing a copy would otherwise get $0 wrong.
+  it("keeps stopping the remaining stacks after one stop fails, and aggregates the failure", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stop-other-stacks-"));
+    dirs.push(dir);
+    const log = join(dir, "calls.log");
+
+    const dispatchIndex = script.split("\n").findIndex((line) => line.startsWith('case "${1:-}" in'));
+    const funcs = script
+      .split("\n")
+      .slice(0, dispatchIndex)
+      .filter((line) => !line.startsWith('SCRIPT_DIR="') && !line.startsWith('PROJECT_DIR="'))
+      .join("\n");
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, funcs);
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "",
+      "# Stubs: replace the real stop_* implementations so no port/process/service logic runs.",
+      'stop_ollama() { echo "stop_ollama" >>"$STUB_LOG"; return 1; }',
+      'stop_mlx() { echo "stop_mlx" >>"$STUB_LOG"; return 0; }',
+      'stop_omlx() { echo "stop_omlx" >>"$STUB_LOG"; return 0; }',
+      "",
+      "# funcs.sh carries `set -euo pipefail`; capture the return code via || so a nonzero",
+      "# result doesn't make the whole harness exit before it's recorded.",
+      "rc=0",
+      "stop_other_stacks omlx || rc=$?",
+      'echo "rc=$rc" >>"$STUB_LOG"',
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${dir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: join(dir, "run"),
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+        STUB_LOG: log,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const calls = readFileSync(log, "utf-8");
+    // ollama's stop fails, but the loop must still reach mlx (the bug this replaces would not,
+    // if a duplicated case body were mis-ordered) — and must never touch the target, omlx.
+    expect(calls).toContain("stop_ollama");
+    expect(calls).toContain("stop_mlx");
+    expect(calls).not.toContain("stop_omlx");
+    expect(calls).toContain("rc=1");
   });
 });
 

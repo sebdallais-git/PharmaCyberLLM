@@ -41,6 +41,8 @@ OLLAMA_CHAT_MODEL="qwen3.8-pharma"
 OLLAMA_EMBED_MODEL="qwen3-embedding:0.6b-q8_0"
 MLX_CHAT_MODEL="mlx-community/Qwen3.8-27B-4bit"
 MLX_EMBED_MODEL="mlx-community/Qwen3-Embedding-0.6B-8bit"
+OMLX_CHAT_MODEL="mlx-community--Qwen3.8-27B-4bit"
+OMLX_EMBED_MODEL="mlx-community--Qwen3-Embedding-0.6B-8bit"
 OLLAMA_MODELFILE="$PROJECT_DIR/ollama/qwen3.8-pharma.Modelfile"
 # Caps how much memory mlx_lm.server spends on cached prompts (several 64k agent prompts would otherwise pile up)
 MLX_PROMPT_CACHE_BYTES="${MLX_PROMPT_CACHE_BYTES:-8589934592}"
@@ -211,8 +213,8 @@ warm_up() {
   elif [ "$1" = "omlx" ]; then
     chat_url="http://localhost:$OMLX_PORT"
     embed_url="$chat_url"
-    chat_model="mlx-community--Qwen3.8-27B-4bit"
-    embed_model="mlx-community--Qwen3-Embedding-0.6B-8bit"
+    chat_model="$OMLX_CHAT_MODEL"
+    embed_model="$OMLX_EMBED_MODEL"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
   else
     chat_url="http://localhost:$OLLAMA_PORT"
@@ -353,7 +355,7 @@ start_app() {
 
 show_logs() {
   local file
-  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/app.log"; do
+  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do
     [ -f "$file" ] || continue
     log "--- last lines of $(basename "$file") ---"
     tail -n 15 "$file"
@@ -365,11 +367,7 @@ stop_other_stacks() {
   local target="$1" other rc=0
   for other in ollama mlx omlx; do
     [ "$other" = "$target" ] && continue
-    case "$other" in
-      ollama) stop_ollama || rc=$? ;;
-      mlx) stop_mlx || rc=$? ;;
-      omlx) stop_omlx || rc=$? ;;
-    esac
+    stop_stack "$other" || rc=$?
   done
   return "$rc"
 }
@@ -428,8 +426,8 @@ prepare() {
   log "Preparing both stacks (about 33 GB of downloads on the first run)"
   stop_app
 
-  # Ollama models: pulling needs the Ollama service, so MLX must be down first
-  stop_mlx
+  # Ollama models: pulling needs the Ollama service, so every other stack must be down first
+  stop_other_stacks ollama
   start_ollama
   ollama pull "$OLLAMA_BASE_MODEL"
   ollama pull "$OLLAMA_EMBED_MODEL"

@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { parseSseLines } from "../src/services/llm-client.js";
 import type { ChatTimings } from "../src/services/bench-mode.js";
@@ -76,13 +77,23 @@ export function stackPatterns(stack: string): string[] {
   }
 }
 
+// Collect PIDs across all of a stack's process patterns, deduplicated: one process can match more
+// than one pattern (e.g. omlx's "omlx-server" and "omlx serve" for the same server), and summing
+// `ps rss` per pattern without deduplicating would double-count it.
+export function collectPids(patterns: string[], pgrep: (pattern: string) => string = (pattern) => run("pgrep", ["-f", pattern])): Set<string> {
+  const pids = new Set<string>();
+  for (const pattern of patterns) {
+    for (const pid of pgrep(pattern).split("\n").filter((pid) => /^\d+$/.test(pid))) {
+      pids.add(pid);
+    }
+  }
+  return pids;
+}
+
 function sampleMemory(stack: string): MemoryPeak {
   let processKb = 0;
-  for (const pattern of stackPatterns(stack)) {
-    const pids = run("pgrep", ["-f", pattern]).split("\n").filter((pid) => /^\d+$/.test(pid));
-    for (const pid of pids) {
-      processKb += Number(run("ps", ["-o", "rss=", "-p", pid])) || 0;
-    }
+  for (const pid of collectPids(stackPatterns(stack))) {
+    processKb += Number(run("ps", ["-o", "rss=", "-p", pid])) || 0;
   }
 
   const vm = run("vm_stat", []);
@@ -259,8 +270,9 @@ async function main(): Promise<void> {
 
 // Only run when executed as a script (npx tsx scripts/benchmark-stack.ts), not when imported
 // (e.g. by a test importing stackPatterns) — otherwise importing this module would fire real
-// requests against a running app.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// requests against a running app. pathToFileURL (rather than a manual `file://` template) also
+// works correctly behind a symlinked path.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error("Fatal:", err instanceof Error ? err.message : err);
     process.exit(1);
