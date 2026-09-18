@@ -189,3 +189,18 @@ Each search chunk carried a ~30 KB `embedding` object next to ~440 characters of
 This also explains Hermes spilling tool output to a file (its 50,000-character cap) and then needing the shell tool to read it back, which is what the wedged Docker sandbox blocked.
 
 Fixed in `mcp/src/tools/compact.ts`: embeddings dropped, long lists replaced by `{count, sample, truncated}`, stored answers truncated to 300 characters, and `list_knowledge_gaps` capped at 20 rows by default (`limit` up to 50). PharmaLLM's REST API and the web UI are unchanged; this only shapes what the agent receives.
+
+### Telegram round trip after the payload fix (2026-09-18)
+
+Measured from `~/.hermes/logs/gateway.log`, gateway already warm:
+
+```
+05:31:26  inbound message: platform=telegram … msg='Any known cyber events ag…'
+05:33:13  response ready: … time=107.7s
+05:33:13  [Telegram] Sending response (1145 chars)
+```
+
+Round trip 1 min 47 s, against 15–20 min for a comparable question before the fix. A CLI one-shot with six tool calls ran in 179 s (652 s before). Two caveats the same session showed:
+
+- Restarting `pharmallm-mcp` while the gateway runs costs the next message about 3 minutes: Hermes rebuilds its tool list, so the cached prompt is gone (measured: 05:23:37 inbound → 05:29:03 answer, with the first model call only at 05:26:35).
+- Questions that reach `ask_pharmallm` pay for a full RAG answer on the 27B (47 s in that run) on top of Hermes' own turns.

@@ -4,7 +4,7 @@
 
 ### Local-first cyber threat intelligence for the pharmaceutical industry
 
-A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, grounds every answer in a hybrid vector + graph knowledge base, and detects and fills its own knowledge gaps.
+A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, grounds every answer in a hybrid vector + graph knowledge base, detects and fills its own knowledge gaps, and serves the same knowledge to AI agents over MCP.
 
 [![Node.js](https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -16,12 +16,14 @@ A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, 
 <br/>
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-vector_store-FF6446?style=for-the-badge)](https://www.trychroma.com)
 [![Neo4j](https://img.shields.io/badge/Neo4j-Graph_RAG-4581C3?style=for-the-badge&logo=neo4j&logoColor=white)](https://neo4j.com)
+[![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#agents-mcp-and-the-model-gateway)
 [![n8n](https://img.shields.io/badge/n8n-self--healing_loop-EA4B71?style=for-the-badge&logo=n8n&logoColor=white)](https://n8n.io)
 
-[![Tests](https://img.shields.io/badge/Jest-16_suites_%C2%B7_101_tests-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
+[![Tests](https://img.shields.io/badge/Jest-237_tests_%C2%B7_29_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
 [![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%E2%87%84_MLX-6E56CF?style=flat-square)](#choose-your-stack)
+[![Context](https://img.shields.io/badge/context-64K_both_stacks-064e3b?style=flat-square)](#choose-your-stack)
 
-[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks-ollama-vs-mlx) · [How It Works](#how-it-works) · [API](#api-reference)
+[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks-ollama-vs-mlx) · [How It Works](#how-it-works) · [Agents](#agents-mcp-and-the-model-gateway) · [API](#api-reference)
 
 </div>
 
@@ -33,7 +35,7 @@ Security teams in pharma need fast answers about attack histories, threat actors
 
 > PharmaCyberLLM keeps the model, the embeddings and the knowledge base on your machine. No API keys, no cloud LLM, no `.env` file required.
 
-At runtime, network access is limited to live news lookups (Google News RSS for web search and the news agent), URLs you explicitly add to the knowledge base, and, if you enable it, the n8n research loop through your own SearXNG instance. Web search can be switched off in the chat UI.
+At runtime, network access is limited to live news lookups (Google News RSS for web search and the news agent), URLs you explicitly add to the knowledge base, your own SearXNG instance if you enable the n8n research loop, and, if you run the optional Telegram assistant, the messages it exchanges with Telegram. Web search can be switched off in the chat UI.
 
 ---
 
@@ -41,15 +43,17 @@ At runtime, network access is limited to live news lookups (Google News RSS for 
 
 | | Feature | What it does |
 |---|---|---|
-| 🧠 | **Local 27B LLM** | Qwen3.8 27B (4-bit) for chat and Qwen3-Embedding 0.6B (8-bit), on Ollama or MLX |
+| 🧠 | **Local 27B LLM** | Qwen3.8 27B (4-bit) for chat and Qwen3-Embedding 0.6B (8-bit), on Ollama or MLX, with a 64K context |
 | 🔀 | **Two interchangeable stacks** | One script switches Ollama ⇄ MLX, with per-stack indexes and automatic rollback |
 | 🔎 | **Hybrid retrieval** | ChromaDB, an in-memory vector + keyword index, Neo4j Graph RAG and live news, in parallel |
 | 💭 | **Visible reasoning** | Each retrieval step streams to the UI over SSE, with sources, TTFT and tok/s per answer |
+| 🧰 | **MCP service** | `pharmallm-mcp` exposes 16 tools over Streamable HTTP, token-protected, run by launchd |
+| 🔌 | **Model gateway** | OpenAI-compatible `/v1` on whichever stack is active, so any agent can use the local model |
+| 🤖 | **Telegram assistant** | Optional Hermes Agent with four scheduled jobs, a network-less Docker sandbox and read-only tools when unattended |
 | 🩹 | **Self-healing knowledge** | Low-confidence answers trigger an n8n workflow that researches, ingests and re-checks the gap |
 | 🎙️ | **Voice input** | Local speech-to-text with whisper.cpp; HTTPS mode for iPad and mobile microphones |
 | 📰 | **News agent** | 188 search topics pulled from Google News every 24 hours into the knowledge base |
 | 📊 | **Monitoring dashboard** | Chart.js dashboard for questions, confidence, ratings, gaps, KB health and service status |
-| ⭐ | **Feedback loop** | 1–5 ratings tied to the chunks used, RAG vs non-RAG comparison, weekly digest |
 | ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX comparison with retrieval overlap and a blind A/B review page |
 
 ---
@@ -81,11 +85,14 @@ When `prepare` finishes, PharmaLLM is running on the Ollama stack (the default):
 Later sessions start everything (ChromaDB, the last active stack and a hot-reload dev server) with:
 
 ```bash
-npm run dev
+npm run dev          # runs scripts/start-services.sh
 ```
 
 > [!NOTE]
 > The first index build re-embeds the whole knowledge base (about 7,000 raw documents) and took 12–16 minutes on an M4 Pro. Ollama 0.17.6 could not pull Qwen3.8; the setup was verified with Ollama 0.34.0.
+
+> [!IMPORTANT]
+> Nothing starts the app or the model stack after a reboot. Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before you expect answers. Only the MCP service and the Hermes gateway come back on their own, and until the app is up they report PharmaLLM as unreachable.
 
 <details>
 <summary><b>Optional: self-healing loop (n8n + SearXNG)</b></summary>
@@ -100,6 +107,8 @@ npm run dev
 export N8N_WEBHOOK_URL="http://localhost:5678/webhook/knowledge-gap"
 npm run dev
 ```
+
+The workflows call protected routes, so once an API token is set they need `Authorization: Bearer {{ $env.PHARMALLM_API_TOKEN }}`. See [`n8n/README.md`](n8n/README.md).
 
 </details>
 
@@ -124,6 +133,23 @@ python python/graph_builder.py
 
 </details>
 
+<details>
+<summary><b>Optional: agents (MCP service and Telegram assistant)</b></summary>
+
+<br/>
+
+```bash
+scripts/switch-stack.sh token          # create data/run/api-token
+scripts/switch-stack.sh mcp-token      # create data/run/mcp-token
+npm --prefix mcp install
+scripts/switch-stack.sh mcp start      # pharmallm-mcp under launchd (com.pharmallm.mcp)
+scripts/switch-stack.sh mcp status
+```
+
+Creating the API token does not enable it: restart the app (`scripts/switch-stack.sh ollama` or `mlx`) so it is exported. The Telegram assistant is a separate install, see [Agents, MCP and the model gateway](#agents-mcp-and-the-model-gateway).
+
+</details>
+
 ---
 
 ## Choose Your Stack
@@ -132,19 +158,23 @@ Every local model call, chat and embeddings alike, runs on **exactly one** stack
 
 | | 🦙 Ollama stack | 🍎 MLX stack |
 |---|---|---|
-| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 16k context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` |
+| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 64K context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` |
 | **Embedding model** | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` |
 | **Ports** | `:11434` | `:8080` chat, `:8081` embeddings |
 | **ChromaDB collection** | `knowledge_base_ollama` | `knowledge_base_mlx` |
 | **In-memory index** | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` |
+| **Prompt cache** | one shared cache, evicted by the next caller | several caches, capped by `--prompt-cache-bytes` (8 GB) |
 | **Graph rebuild** | ✅ supported | ❌ switch to Ollama first (`409`) |
 
 ```bash
-scripts/switch-stack.sh mlx      # stop Ollama, start MLX, restart PharmaLLM (rolls back on failure)
-scripts/switch-stack.sh ollama   # and back
-scripts/switch-stack.sh status   # active stack, ports and index counts for both stacks
-scripts/switch-stack.sh prepare  # one-time model downloads (Ollama pulls + Hugging Face snapshots)
+scripts/switch-stack.sh mlx        # stop Ollama, start MLX, restart PharmaLLM (rolls back on failure)
+scripts/switch-stack.sh ollama     # and back
+scripts/switch-stack.sh status     # active stack, ports, OLLAMA_NUM_PARALLEL and index counts
+scripts/switch-stack.sh prepare    # one-time model downloads (Ollama pulls + Hugging Face snapshots)
+scripts/switch-stack.sh ollama-ctx # recreate qwen3.8-pharma if its context differs from the Modelfile
 ```
+
+**64K context.** `ollama/qwen3.8-pharma.Modelfile` sets `num_ctx 65536` and MLX is started with `--prompt-cache-bytes`. The model is a hybrid architecture: only 16 of its 64 layers keep a KV cache, so 64K costs about 4 GB instead of the 1 GB a 16K context used. Ollama's OpenAI API cannot set the context per request, so one shared size keeps a single copy of the model loaded. Keep `OLLAMA_NUM_PARALLEL` at 1, because each parallel slot allocates its own 64K context.
 
 ```mermaid
 flowchart LR
@@ -170,12 +200,14 @@ flowchart LR
 
 - **One client:** `src/services/llm-client.ts` talks to both stacks through the OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` APIs; `src/config/llm-stacks.ts` only swaps base URLs and model names. Thinking mode is disabled on both.
 - **Guarded indexes:** each index records its stack, embedding model and dimension (1024), plus a completeness marker written only when a rebuild ran to the end. Search on a mismatched, incomplete or rebuilding index is refused instead of returning meaningless matches.
-- **Rebuildable from source:** indexes are rebuilt from `knowledge/` and `data/raw_documents/`, where uploads, ingested text and news articles are saved first. Rebuild with `LLM_PROVIDER=<stack> npx tsx scripts/reindex-stack.ts` (app stopped) or `POST /api/knowledge/reindex` (app running).
-- **n8n follows the stack:** workflows call `POST /api/llm/complete`, which runs on whichever stack is active.
+- **Rebuildable from source:** indexes are rebuilt from `knowledge/` and `data/raw_documents/`, where uploads, ingested text and news articles are saved first. Rebuild with `LLM_PROVIDER=<stack> npx tsx scripts/reindex-stack.ts` (app stopped) or `POST /api/knowledge/reindex` (app running, asynchronous).
+- **Everything follows the stack:** n8n calls `POST /api/llm/complete`, agents call `/v1/chat/completions`, and both run on whichever stack is active.
 
 ---
 
 ## Benchmarks: Ollama vs MLX
+
+### RAG answers (the web chat workload)
 
 First head-to-head run on a **Mac mini M4 Pro, 48 GB** (macOS 26.4), 2026-09-16. Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024 on both stacks, background LLM jobs paused.
 
@@ -193,12 +225,25 @@ First head-to-head run on a **Mac mini M4 Pro, 48 GB** (macOS 26.4), 2026-09-16.
 
 **Quality checks:** cross-stack embedding parity has a mean cosine of **0.9986** (min 0.9875 over 20 texts, threshold 0.98), and retrieved chunks overlap at **0.91** (mean Jaccard), so both stacks answered from nearly the same evidence.
 
+### Long prompts (the agent workload)
+
+Measured 2026-09-17 on the same machine, through `/v1` with a 16.7K-token prompt, streamed, sent cold and then again with the same prefix.
+
+| Metric | 🦙 Ollama | 🍎 MLX |
+|---|---:|---:|
+| Cold time to first token | 156.3 s | 141.2 s |
+| Warm time to first token, same prefix | 5.8 s | 0.8 s |
+| Decode | 11.3–11.6 tok/s | 11.5–12.4 tok/s |
+| Memory pressure | normal, 41% free | normal, 40% free |
+
+Prefill is the cost, at roughly 104–118 tok/s. Caching works on both stacks: appending a tool result to a conversation keeps the cached prefix, and a 14.6K-token prompt that cost 140.6 s cold came back in 10.9 s once about 1K tokens were appended. On Ollama the cache is shared, so a web chat between two agent steps evicts it.
+
 **Reading it honestly**
 
-- 🟰 MLX is modestly faster end to end (~6%). Generation dominates: embedding and retrieval gains are milliseconds against ~95 s answers.
+- 🟰 MLX is modestly faster end to end on RAG answers (~6%). Generation dominates: embedding and retrieval gains are milliseconds against ~95 s answers.
 - ✂️ Most answers hit the 1024-token cap (15/23 on Ollama, 13/23 on MLX). The cap is identical, so the comparison is fair, but totals reflect truncated answers and the blind review compares truncated text.
-- 🧮 The benchmark's own Ollama *process* memory reading (59 MB) was invalid: Ollama 0.34 runs models in `llama-server` child processes the sampler missed. The ~20.4 GB figure was measured directly afterwards (17,576 MB chat + 2,780 MB embeddings), and the sampler has since been fixed. The system-wide peak was unaffected.
-- 🔁 This is a single cold run per question on one machine, so treat the percentages as a first signal rather than a verdict.
+- 🧮 The benchmark's own Ollama *process* memory reading (59 MB) was invalid: Ollama 0.34 runs models in `llama-server` child processes the sampler missed. The ~20.4 GB figure was measured directly afterwards (17,576 MB chat + 2,780 MB embeddings), and the sampler has since been fixed.
+- 🔁 These are single cold runs on one machine, so treat the percentages as a first signal rather than a verdict.
 
 <details>
 <summary><b>Reproduce the benchmark</b></summary>
@@ -211,7 +256,7 @@ scripts/switch-stack.sh mlx    && npx tsx scripts/benchmark-stack.ts
 npx tsx scripts/compare-benchmarks.ts data/benchmarks/ollama-<time>.json data/benchmarks/mlx-<time>.json
 ```
 
-`benchmark-stack.ts` accepts `--runs`, `--app` and `--questions`. Benchmark mode (`/api/bench/start`, a 15-minute lease) pauses the news agent and other background LLM jobs; chat requests with `benchmark: true` use temperature 0, skip web search and cap answers at 1024 tokens. The comparison reports TTFT, decode speed, embedding and retrieval time, peak memory, retrieval overlap, and writes a blind A/B review page with stack labels hidden.
+`benchmark-stack.ts` accepts `--runs`, `--app` and `--questions`. Benchmark mode (`/api/bench/start`, a 15-minute lease) pauses the news agent and other background LLM jobs; chat requests with `benchmark: true` use temperature 0, skip web search and cap answers at 1024 tokens. `/v1` and `/api/llm/complete` return `503` while it runs. The comparison reports TTFT, decode speed, embedding and retrieval time, peak memory, retrieval overlap, and writes a blind A/B review page with stack labels hidden.
 
 Embedding parity check (stacks run one after the other):
 
@@ -228,6 +273,50 @@ The question set has 23 questions: 11 vendor, 5 threat, 2 regulation, 2 pharma, 
 ---
 
 ## How It Works
+
+### System map
+
+```mermaid
+flowchart TB
+    subgraph CL["Clients"]
+        direction LR
+        B["Browser<br/>chat + dashboard"]
+        N["n8n workflows"]
+        AG["AI agents<br/>Hermes, Claude Desktop"]
+    end
+
+    MCP["pharmallm-mcp :3200<br/>16 tools, Streamable HTTP<br/>MCP_TOKEN + payload compaction"]
+
+    subgraph APP["PharmaLLM :3000 / :3443"]
+        direction TB
+        AUTH["auth middleware<br/>UI routes open, everything else needs a token"]
+        V1["/v1<br/>OpenAI-compatible gateway"]
+        API["/api/*<br/>chat, knowledge, gaps, graph, feedback"]
+        RJ["reindex job<br/>202 + job id, poll status"]
+    end
+
+    STACK["Active stack<br/>Ollama :11434 or MLX :8080"]
+    DATA["ChromaDB · in-memory index<br/>Neo4j · SQLite"]
+
+    B --> AUTH
+    N --> AUTH
+    AG --> MCP
+    AG --> AUTH
+    MCP -- "REST + API token" --> AUTH
+    AUTH --> V1
+    AUTH --> API
+    API --> RJ
+    V1 --> STACK
+    API --> STACK
+    API --> DATA
+    RJ --> DATA
+
+    style AUTH fill:#7c2d12,stroke:#fb923c,color:#e5e7eb
+    style MCP fill:#4a1d6b,stroke:#d946ef,color:#e5e7eb
+    style STACK fill:#064e3b,stroke:#22d3ee,color:#e5e7eb
+```
+
+Static files and the browser routes listed in `src/api/auth.ts` are always open. Everything else (`/v1/*` and the rest of `/api/*`) needs `Authorization: Bearer <token>` once `PHARMALLM_API_TOKEN` is set. Without a token, those routes accept only same-machine requests that also carry a `localhost`, `127.0.0.1` or `[::1]` Host header, which blocks DNS rebinding.
 
 ### Request pipeline
 
@@ -283,106 +372,89 @@ Neo4j stores **14 entity types** (Company, Subsidiary, Drug, TherapeuticArea, Ma
 
 ---
 
-## Voice Input and HTTPS
+## Agents, MCP and the Model Gateway
 
-The mic button records audio in the browser (MediaRecorder), uploads it to `POST /api/chat/transcribe` (max 25 MB), converts it to 16 kHz WAV with `ffmpeg`, and transcribes it locally with whisper.cpp (`ggml-base.en`, bundled with `whisper-node`).
-
-Browsers only allow microphone access on secure origins, so an **iPad or phone needs HTTPS**. Put a key and certificate in `certs/`:
-
-```
-certs/key.pem
-certs/cert.pem
-```
-
-When both files exist, the server also listens on **https://&lt;your-mac&gt;:3443** (`HTTPS_PORT`). The device must trust the certificate.
-
----
-
-## Monitoring and Feedback
-
-**Dashboard** (`/dashboard`, refreshes every 60 s, metrics cached 30 s):
-
-| Panel | Shows |
-|---|---|
-| Metric cards | Questions today, confidence rate, average rating, knowledge base size |
-| Time series | 30-day questions and confidence, user ratings |
-| Gap intelligence | Recent gaps with status, top gap topics |
-| System health | Knowledge sources, active stack, ChromaDB, SearXNG, Neo4j and SQLite checks with latency |
-
-**Health** (`/api/health`) is `healthy`, `degraded` when only ChromaDB, SearXNG or Neo4j is down, or `unhealthy` when the active stack's chat or embedding endpoint or the search index is unusable. The inactive stack is never probed.
-
-**Feedback:** ratings (1–5) are linked to the chunks used, compared across RAG and non-RAG answers, and answers rated 2 or lower are surfaced as improvement candidates. ChromaDB misses are logged to show coverage gaps.
-
----
-
-## n8n Workflows
-
-| File | Nodes | Purpose |
-|---|---:|---|
-| `n8n/knowledge_gap_workflow_v2.json` | 15 | Gap auto-fill with resolution check (recommended) |
-| `n8n/knowledge_gap_workflow.json` | 13 | Gap auto-fill, v1 |
-| `n8n/knowledge_qa_workflow.json` | 12 | KB health monitor, every 6 hours |
-
-All LLM steps call `POST /api/llm/complete`, so they run on the active stack. The endpoint accepts an Ollama `/api/generate`-shaped body; the `model` field is ignored, and `temperature` or `options.temperature` is honored. It returns `503` while a benchmark runs. See `n8n/README.md` for setup details.
-
----
-
-## Knowledge Base
-
-`knowledge/` ships **40 curated documents** (36 Markdown, 2 DOCX, 2 PDF), grown by the news agent, uploads and the n8n loop. At the last verified rebuild, each stack's index held about **7,600 chunks**.
-
-| Area | Examples |
-|---|---|
-| 🛡️ Cyber threats | Major pharma attacks, attacks by year, attack types, systems compromised, costs and remediation, IT/OT threats 2025 |
-| 💊 Pharma industry | Business and science basics, regulation, Phase 3 pipeline 2025–26, top 20 by revenue / market cap / reputation, manufacturing plants, Basel biotech hub |
-| 🏢 Vendor intelligence | Dell, Pure Storage, NetApp, HPE, VAST Data, WEKA, NVIDIA, SAP, ServiceNow, Snowflake, Databricks, Splunk / Sentinel / CrowdStrike, endpoint and identity security, Bug Bounty Switzerland |
-
-Uploads accept `.txt`, `.md`, `.pdf`, `.csv`, `.json`, `.docx`, `.pptx` and `.ppt`.
-
----
-
-## Agents and MCP
-
-PharmaLLM can serve AI agents such as [Hermes Agent](https://hermes-agent.nousresearch.com/) in two ways:
+PharmaLLM serves AI agents in two ways: as a set of tools, and as a model provider.
 
 | | Endpoint | Purpose |
 |---|---|---|
-| 🧰 **MCP tools** | `pharmallm-mcp` at `http://<host>:3200/mcp` | 16 tools: search, full RAG answers, add knowledge, graph, gaps, health, news agent, background reindex, feedback |
-| 🧠 **Model gateway** | `http://<host>:3000/v1` or `https://<host>:3443/v1` | OpenAI-compatible chat completions on the active stack (tools and streaming supported) |
+| 🧰 **MCP tools** | `pharmallm-mcp` at `http://<host>:3200/mcp` | 16 tools over Streamable HTTP: search, full RAG answers, add knowledge, graph, gaps, health, metrics, news agent, background reindex, feedback |
+| 🧠 **Model gateway** | `http://<host>:3000/v1` or `https://<host>:3443/v1` | OpenAI-compatible chat completions on the active stack, tools and streaming supported |
+
+### The MCP service
+
+`mcp/` is a separate package and process with no RAG logic: every tool maps to one or two PharmaLLM REST calls. It speaks stateless Streamable HTTP at `POST /mcp` and answers `GET /healthz` without auth.
 
 ```bash
-scripts/switch-stack.sh token             # create data/run/api-token, then restart the app
+scripts/switch-stack.sh mcp-token       # create data/run/mcp-token
 npm --prefix mcp install
-PHARMALLM_API_TOKEN="$(cat data/run/api-token)" npm --prefix mcp start
+scripts/switch-stack.sh mcp start       # launchd service com.pharmallm.mcp, logs in data/logs/mcp.log
+scripts/switch-stack.sh mcp status
+scripts/switch-stack.sh mcp stop
 ```
 
-- **Security:** without a token, the gateway and operations routes only accept requests from the same machine addressed as `localhost`, `127.0.0.1` or `[::1]` (other Host names are refused, which blocks DNS rebinding). With a token, every protected route requires `Authorization: Bearer <token>` on both ports (3000 and HTTPS 3443).
-- **Browser routes stay open:** chat, search, upload, ingest-text, news agent run and the dashboard reads (see [API Reference](#api-reference)) are open by design to anyone who can reach the app.
-- **Reverse proxies:** a local reverse proxy in front of the app (e.g. `tailscale serve`, caddy) makes every request look like it comes from the same machine; enable the token in that setup.
-- **Gateway fields:** only `messages`, `tools`, `tool_choice`, `stream`, `stream_options`, `temperature` and `max_tokens` (capped at 4096) are forwarded; the stack's model is always used and other fields such as `stop`, `top_p` or `response_format` are dropped.
-- **Two machines:** run the agent on one Mac and PharmaLLM plus the model on another by pointing the agent at the model Mac's LAN or Tailscale address. Start the MCP service with `MCP_HOST` and `MCP_TOKEN` there (see [`mcp/README.md`](mcp/README.md)); under launchd, `MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services` bakes the host into the launch agent so it survives a reboot.
-- **One stack at a time still holds:** gateway requests go to the active stack and are refused (503) during benchmarks.
+Without `MCP_TOKEN` the service accepts only same-machine requests with a local Host header. With a token it requires `Authorization: Bearer` and accepts any Host. `scripts/run-mcp.sh` refuses to listen on a non-loopback host without a token. See [`mcp/README.md`](mcp/README.md) for the full tool list and configuration.
+
+**Tool payloads are compacted** before they reach an agent (`mcp/src/tools/compact.ts`): embeddings are dropped, long lists become `{count, sample, truncated}`, stored answers are cut to 300 characters, and `list_knowledge_gaps` returns 20 rows by default (`limit` up to 50). The REST API and the web UI are unchanged.
+
+| Tool result | Before | After |
+|---|---:|---:|
+| `search_knowledge` (5 chunks) | ≈48,600 tokens | ≈1,100 tokens |
+| `list_knowledge_gaps` | ≈31,000 tokens | ≈2,700 tokens |
+| `knowledge_status` | ≈10,000 tokens | ≈530 tokens |
+| `news_agent_status` | ≈2,200 tokens | ≈260 tokens |
+
+Each search chunk used to carry a ~30 KB embedding object next to ~440 characters of text, so 98% of the payload was a vector no agent can use. That size, re-read on every step, was the real cost of agent runs, not cache misses.
+
+### The model gateway
+
+`/v1/chat/completions` forwards to the active stack and pipes the response through byte for byte, so streaming and tool calls work unchanged. It forces the stack's own chat model (the `model` field is ignored), forwards only `messages`, `tools`, `tool_choice`, `stream`, `stream_options`, `temperature` and `max_tokens` (capped at 4096), and drops the rest. It returns `503` during a benchmark or when the stack is down, with no fallback.
 
 ### Hermes Agent on Telegram
 
-[`hermes/`](hermes/README.md) runs Hermes Agent as a Telegram assistant on the local 27B model, with four scheduled jobs: a morning news digest, knowledge gap resolution, a health watch that stays silent while healthy, and a weekly feedback digest.
+[`hermes/`](hermes/README.md) runs [Hermes Agent](https://hermes-agent.nousresearch.com/) as a Telegram assistant on the local 27B model. Everything needed to rebuild it lives in the repo; secrets stay in `~/.hermes/.env` and `data/run/*-token` at mode 600.
 
 ```bash
-scripts/switch-stack.sh mcp-token      # token Hermes uses for pharmallm-mcp
-scripts/hermes-setup.sh all            # after installing Hermes and adding the Telegram bot to ~/.hermes/.env
-scripts/switch-stack.sh mcp status     # pharmallm-mcp runs under launchd (com.pharmallm.mcp)
+scripts/switch-stack.sh token           # PharmaLLM API token
+scripts/switch-stack.sh mcp-token       # token Hermes uses for pharmallm-mcp
+scripts/hermes-setup.sh all             # config, .env, launchd services, cron jobs
+scripts/hermes-setup.sh check           # read-only status; prints variable names, never values
 ```
 
-- **Context:** the chat model runs with a 64k context on both stacks (Hermes needs at least 64k). The KV cache grows from about 1 GB to about 4 GB; MLX caps its prompt cache at 8 GB (`MLX_PROMPT_CACHE_BYTES`). Keep `OLLAMA_NUM_PARALLEL` at 1 so Ollama allocates one 64k context.
-- **Speed:** every Hermes step is a full cold prefill of about 160 s (the prompt prefix changes per request), so a Telegram answer with 3–4 tool calls takes about 10–20 minutes and the four scheduled jobs cost about 45–55 minutes of GPU per day. A web chat between two Hermes steps evicts the shared Ollama prompt cache.
-- **Safety:** Hermes gets 15 of the 16 MCP tools (no `start_reindex`), runs shell commands only in a Docker container without network, answers only your Telegram user ID, and denies risky commands in scheduled runs. Scheduled runs go through a separate `pharmallm_cron` MCP server without `add_knowledge` and get no web, memory or shell toolset — MCP calls are never approval-gated, so the tool list is the control. Web search uses the local SearXNG with cloud fallbacks disabled.
-- **After a reboot:** run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before Hermes' jobs fire. The MCP service and the gateway restart on their own, the app and the model stack do not; until then `/healthz` reports `pharmallm:false` and the jobs report failures.
+| Job | Schedule | What it does |
+|---|---|---|
+| `pharmallm-news-digest` | 06:00 daily | Runs the news agent, then reports what was added in at most 10 lines |
+| `pharmallm-gap-resolution` | 07:00 daily | Re-checks at most 3 triggered gaps, oldest first |
+| `pharmallm-health-watch` | 09:00 and 19:00 | Reports failing checks; replies `[SILENT]` and delivers nothing while healthy |
+| `pharmallm-feedback-digest` | Monday 08:00 | Weekly rating trends and the worst-rated answers |
+
+- **Tool scope:** Telegram and CLI runs get 15 of the 16 MCP tools (no `start_reindex`). Scheduled runs connect to a separate, write-limited `pharmallm_cron` server with 14 tools: no `start_reindex` and no `add_knowledge`. MCP calls are never approval-gated, so the tool list is the control. Scheduled runs also get no web, memory, terminal or file toolsets.
+- **Sandbox:** shell commands run in a Docker container with `--network=none`, 512 MB and 1 CPU, no host project or home directory mounted. Verified live: `/Users` is not visible, `host.docker.internal` does not resolve and the app is unreachable from inside.
+- **Web search:** the local SearXNG instance, with the keyless cloud fallbacks turned off. Private and loopback URLs stay blocked for Hermes' web tools, so ChromaDB and Neo4j cannot be reached that way.
+- **Speed:** a warm Telegram round trip takes about 1 min 47 s end to end (Hermes' own timer reports 107.7 s). The first step of a cold session pays the full prefill, about 140–156 s.
+- **Restarting the MCP service** costs the next Hermes message about 3 minutes, because the model has to prefill the tool list again.
+- **After a reboot:** `com.pharmallm.mcp` and the Hermes gateway come back on their own, the app and the model stack do not. Run `scripts/start-services.sh` before the first job fires.
+
+<details>
+<summary><b>Running Hermes on a second Mac</b></summary>
+
+<br/>
+
+Point the agent at the model Mac's LAN or VPN address. On the PharmaLLM Mac, bake the bind address into the launch agent so it survives a reboot:
+
+```bash
+MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services
+```
+
+An MCP token is then required. On the Hermes Mac, set `PHARMALLM_URL`, `PHARMALLM_MCP_URL` and `SEARXNG_URL` to the model Mac and copy the two token values into `~/.hermes/.env` by hand. Full instructions in [`hermes/README.md`](hermes/README.md).
+
+</details>
 
 ---
 
 ## API Reference
 
-The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_API_TOKEN>` once a token is set (without a token, `token` routes accept only same-machine requests addressed as localhost). `open` routes are the browser UI routes in `src/api/auth.ts` and never need the token.
+The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_API_TOKEN>` once a token is set. Without a token, `token` routes accept only same-machine requests addressed as localhost. `open` routes are the browser UI routes listed in `src/api/auth.ts` and never need the token.
 
 <details>
 <summary><b>Model gateway (OpenAI-compatible)</b></summary>
@@ -414,7 +486,7 @@ The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_AP
 </details>
 
 <details>
-<summary><b>Knowledge and gaps</b></summary>
+<summary><b>Knowledge, reindex and gaps</b></summary>
 
 <br/>
 
@@ -431,6 +503,8 @@ The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_AP
 | `/api/knowledge/gaps` | GET | token | Recent gap detections |
 | `/api/knowledge/gaps/stats` | GET | token | Gap analytics |
 | `/api/knowledge/gaps/check-resolution` | POST | token | Re-ask a gap through the full RAG pipeline |
+
+Job state lives in memory, so a server restart forgets it. The index completeness markers remain the source of truth.
 
 </details>
 
@@ -460,9 +534,67 @@ The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_AP
 
 ---
 
+## Voice Input and HTTPS
+
+The mic button records audio in the browser (MediaRecorder), uploads it to `POST /api/chat/transcribe` (max 25 MB), converts it to 16 kHz WAV with `ffmpeg`, and transcribes it locally with whisper.cpp (`ggml-base.en`, bundled with `whisper-node`).
+
+Browsers only allow microphone access on secure origins, so an **iPad or phone needs HTTPS**. Put a key and certificate in `certs/`:
+
+```
+certs/key.pem
+certs/cert.pem
+```
+
+When both files exist, the server also listens on **https://&lt;your-mac&gt;:3443** (`HTTPS_PORT`). The device must trust the certificate. A token, once set, is required on both ports.
+
+---
+
+## Monitoring and Feedback
+
+**Dashboard** (`/dashboard`, refreshes every 60 s, metrics cached 30 s):
+
+| Panel | Shows |
+|---|---|
+| Metric cards | Questions today, confidence rate, average rating, knowledge base size |
+| Time series | 30-day questions and confidence, user ratings |
+| Gap intelligence | Recent gaps with status, top gap topics |
+| System health | Knowledge sources, active stack, ChromaDB, SearXNG, Neo4j and SQLite checks with latency |
+
+**Health** (`/api/health`) is `healthy`, `degraded` when only ChromaDB, SearXNG or Neo4j is down, or `unhealthy` when the active stack's chat or embedding endpoint or the search index is unusable. The inactive stack is never probed.
+
+**Feedback:** ratings (1–5) are linked to the chunks used, compared across RAG and non-RAG answers, and answers rated 2 or lower are surfaced as improvement candidates. ChromaDB misses are logged to show coverage gaps.
+
+---
+
+## n8n Workflows
+
+| File | Nodes | Purpose |
+|---|---:|---|
+| `n8n/knowledge_gap_workflow_v2.json` | 15 | Gap auto-fill with resolution check (recommended) |
+| `n8n/knowledge_gap_workflow.json` | 13 | Gap auto-fill, v1 |
+| `n8n/knowledge_qa_workflow.json` | 12 | KB health monitor, every 6 hours |
+
+All LLM steps call `POST /api/llm/complete`, so they run on the active stack. The endpoint accepts an Ollama `/api/generate`-shaped body; the `model` field is ignored, and `temperature` or `options.temperature` is honored. It returns `503` while a benchmark runs. Protected routes need the API token header. See [`n8n/README.md`](n8n/README.md) for setup details.
+
+---
+
+## Knowledge Base
+
+`knowledge/` ships **40 curated documents** (36 Markdown, 2 DOCX, 2 PDF), grown by the news agent, uploads and the n8n loop. At the last verified rebuild, the Ollama index held **7,779 chunks** and the MLX index **7,623**.
+
+| Area | Examples |
+|---|---|
+| 🛡️ Cyber threats | Major pharma attacks, attacks by year, attack types, systems compromised, costs and remediation, IT/OT threats 2025 |
+| 💊 Pharma industry | Business and science basics, regulation, Phase 3 pipeline 2025–26, top 20 by revenue / market cap / reputation, manufacturing plants, Basel biotech hub |
+| 🏢 Vendor intelligence | Dell, Pure Storage, NetApp, HPE, VAST Data, WEKA, NVIDIA, SAP, ServiceNow, Snowflake, Databricks, Splunk / Sentinel / CrowdStrike, endpoint and identity security, Bug Bounty Switzerland |
+
+Uploads accept `.txt`, `.md`, `.pdf`, `.csv`, `.json`, `.docx`, `.pptx` and `.ppt`.
+
+---
+
 ## Configuration
 
-Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set `LLM_PROVIDER` for you.
+Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set `LLM_PROVIDER` and export `PHARMALLM_API_TOKEN` from `data/run/api-token` when it exists.
 
 <details>
 <summary><b>Environment variables</b></summary>
@@ -488,6 +620,9 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 | `PHARMALLM_API_TOKEN` | *(none)* | Token for `/v1` and operations routes; without it they accept only same-machine requests addressed as localhost |
 | `MLX_PROMPT_CACHE_BYTES` | `8589934592` | Memory cap for `mlx_lm.server`'s prompt cache (set by `switch-stack.sh`) |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `3200` | Where `pharmallm-mcp` listens (`scripts/run-mcp.sh`); a non-loopback host requires `data/run/mcp-token` |
+| `MCP_TOKEN` | *(none)* | Bearer token agents send to `pharmallm-mcp`; read from `data/run/mcp-token` by `run-mcp.sh` |
+
+Tokens live in `data/run/` at mode 600 and are passed through the environment only, never as command arguments. No `.env` file is used.
 
 </details>
 
@@ -503,13 +638,15 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 ```
 PharmaCyberLLM/
 ├── src/
-│   ├── server.ts               # Express + HTTPS, index checks, news agent schedule
+│   ├── server.ts               # Express + HTTPS, auth middleware, index checks, news agent schedule
 │   ├── config/llm-stacks.ts    # Ollama and MLX stack definitions
-│   ├── api/                    # chat, knowledge, agent, feedback, dashboard, graph, bench, llm routes
+│   ├── api/                    # auth, chat, knowledge, agent, feedback, dashboard, graph, bench, llm, v1
 │   ├── services/
 │   │   ├── llm-client.ts       # One OpenAI-compatible client for both stacks
+│   │   ├── model-gateway.ts    # /v1 body building and forwarding
 │   │   ├── index-guard.ts      # Refuses search on mismatched indexes
 │   │   ├── reindex.ts          # Rebuilds the active stack's indexes
+│   │   ├── reindex-jobs.ts     # Background reindex job state
 │   │   ├── raw-documents.ts    # Source documents that indexes are rebuilt from
 │   │   ├── bench-mode.ts       # Benchmark lease and background job tracking
 │   │   ├── health.ts           # Health probes and aggregation
@@ -520,9 +657,16 @@ PharmaCyberLLM/
 │   │   ├── news-agent.ts       # 188-topic Google News agent
 │   │   └── ...                 # feedback, request log, response cache, web search, file parser
 │   └── utils/
+├── mcp/                        # pharmallm-mcp: 16 MCP tools over Streamable HTTP
+│   ├── src/tools/              # knowledge, graph, gaps, operations, feedback, compact.ts
+│   ├── src/http.ts             # auth middleware, /mcp, /healthz
+│   └── __tests__/              # against a fake PharmaLLM server
+├── hermes/                     # Telegram assistant: config template, SOUL.md, cron jobs, plist template
 ├── scripts/
-│   ├── switch-stack.sh         # prepare | ollama | mlx | status (with rollback)
+│   ├── switch-stack.sh         # prepare | ollama | mlx | status | token | mcp-token | mcp | ollama-ctx
 │   ├── start-services.sh       # npm run dev: ChromaDB + active stack + dev server
+│   ├── run-mcp.sh              # launchd entry point for pharmallm-mcp
+│   ├── hermes-setup.sh         # check | install-config | install-services | install-cron | all
 │   ├── reindex-stack.ts        # Rebuild, --check or --status for the active stack
 │   ├── benchmark-stack.ts      # Benchmark the active stack through the app
 │   ├── compare-benchmarks.ts   # Comparison report + blind A/B page
@@ -532,14 +676,15 @@ PharmaCyberLLM/
 │   ├── mlx-embed-server.py     # OpenAI-compatible embedding server for MLX
 │   ├── graph_builder.py        # Bulk entity extraction into Neo4j (calls Ollama)
 │   └── utils/, tests/          # Standalone Python RAG utilities (chunking, LLM re-ranking)
-├── ollama/qwen3.8-pharma.Modelfile   # Qwen3.8 27B Q4_K_M with 16k context
+├── ollama/qwen3.8-pharma.Modelfile   # Qwen3.8 27B Q4_K_M with a 64K context
 ├── bench/questions.json        # 23 benchmark questions
 ├── knowledge/                  # Curated documents + per-stack index files
 ├── n8n/                        # Importable workflows + setup guide
+├── docs/superpowers/           # Specs, plans and verification records
 ├── public/                     # Chat UI (voice, reasoning panel)
 ├── dashboard/                  # Monitoring dashboard
 ├── __tests__/                  # Jest suites (+ fake OpenAI-compatible server)
-└── data/                       # Raw documents, benchmarks, logs, SQLite (gitignored)
+└── data/                       # Raw documents, benchmarks, logs, tokens, SQLite (gitignored)
 ```
 
 </details>
@@ -548,10 +693,14 @@ PharmaCyberLLM/
 
 ## Testing
 
+Tests run against fakes. None of them reaches a real model server, ChromaDB, the live app, Docker, launchd or Telegram.
+
 ```bash
-npm run test              # Jest: 16 suites, 101 tests, against a fake OpenAI-compatible server (no real models)
-npm run typecheck         # tsc --noEmit (strict mode)
-npm run typecheck:tests   # type-check the test suites
+npm run test                 # Jest: 22 suites, 173 tests
+npm --prefix mcp test        # Jest: 7 suites, 64 tests
+npm run typecheck            # tsc --noEmit (strict mode)
+npm run typecheck:tests      # type-check the test suites
+npm --prefix mcp run typecheck
 ```
 
 ---
@@ -559,33 +708,46 @@ npm run typecheck:tests   # type-check the test suites
 ## Troubleshooting
 
 <details>
-<summary><b>Common issues</b></summary>
+<summary><b>App, stacks and indexes</b></summary>
 
 <br/>
 
 | Symptom | Fix |
 |---|---|
+| Nothing answers after a reboot | The app and the model stack have no launch agent. Run `scripts/start-services.sh` or `scripts/switch-stack.sh ollama` |
 | `Models for mlx are missing` | Run `scripts/switch-stack.sh prepare` once |
-| Search refused / `search_index` error in `/api/health` | The index belongs to another stack, is incomplete or is rebuilding. Wait for the rebuild, or run `POST /api/knowledge/reindex` |
+| Search refused / `search_index` error in `/api/health` | The index belongs to another stack, is incomplete or is rebuilding. Wait for the rebuild, or `POST /api/knowledge/reindex` and poll `/api/knowledge/reindex/status` |
 | `Port 8080 is used by another program` | Free the MLX ports (`:8080`, `:8081`); the switch leaves foreign processes alone and rolls back |
 | `/api/graph/rebuild` returns `409` | Graph rebuild only works on the Ollama stack: `scripts/switch-stack.sh ollama` |
-| Reindex or `/api/llm/complete` rejected during a benchmark | Wait for it to finish, or `POST /api/bench/stop` |
+| Reindex, `/v1` or `/api/llm/complete` rejected during a benchmark | Wait for it to finish, or `POST /api/bench/stop` |
 | Health is `degraded` | A supporting service (ChromaDB, SearXNG or Neo4j) is down; chat still works |
+| `401 Unauthorized` on `/api/*` or `/v1/*` | Send `Authorization: Bearer <token>`, or reach the app as `localhost` from the same machine |
 | Mic button missing or blocked on iPad | Use HTTPS on port 3443 with certificates in `certs/` that the device trusts |
 | `npm run dev` fails on port 3000 | `prepare` and `switch-stack.sh ollama\|mlx` already start PharmaLLM in the background (log in `data/logs/app.log`) |
 | Switch or rebuild failed | Check `data/logs/` (`mlx-chat.log`, `mlx-embed.log`, `reindex-<stack>.log`, `app.log`) |
 
 </details>
 
-**Hermes says the context length is below the minimum** — the Ollama model still has the old context. Run `scripts/switch-stack.sh ollama-ctx` (or any `switch-stack.sh ollama`), which recreates `qwen3.8-pharma` from the Modelfile without downloading.
+<details>
+<summary><b>Agents and the sandbox</b></summary>
 
-**Hermes tool calls to PharmaLLM fail after 5 minutes** — restart `pharmallm-mcp` so the version with keepalive notifications runs: `scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start`.
+<br/>
+
+| Symptom | Fix |
+|---|---|
+| Hermes says the context length is below the minimum | The Ollama model still has the old context. Run `scripts/switch-stack.sh ollama-ctx`, which recreates `qwen3.8-pharma` from the Modelfile without downloading |
+| MCP tool calls fail after 5 minutes | Restart `pharmallm-mcp` so the version with keepalive notifications runs: `scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start`. Expect the next Hermes message to take about 3 minutes longer |
+| `docker pull` hangs with no output | `~/.docker/config.json` sets `credsStore: desktop` while Docker Desktop is not running, so the pull blocks in the credential helper before it reaches the daemon. Start Docker Desktop, remove `credsStore`, or pull with an empty `DOCKER_CONFIG` against the colima socket. See [`hermes/README.md`](hermes/README.md) |
+| Hermes shell tool fails to start | The sandbox image is missing. Pull `nikolaik/python-nodejs:python3.11-nodejs20` once before first use |
+| `hermes-setup.sh check` reports the gateway as not loaded | It probes the `gui` launchd domain; the gateway loads in `user`. Confirm with `hermes gateway status` |
+
+</details>
 
 ---
 
 <div align="center">
 
-**Local model. Grounded answers. A knowledge base that repairs itself.**
+**Local model. Grounded answers. A knowledge base that repairs itself, and agents that can use it.**
 
 Built by [@sebdallais-git](https://github.com/sebdallais-git) for pharma security teams who take data sovereignty seriously.
 
