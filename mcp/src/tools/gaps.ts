@@ -3,6 +3,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
+import { compactGap } from "./compact.js";
 import { runLongTool, runTool } from "./result.js";
 import type { ToolLogger, ToolOptions } from "./result.js";
 
@@ -27,7 +28,7 @@ export function registerGapTools(server: McpServer, client: PharmaLLMClient, log
       runTool("list_knowledge_gaps", log, async () => {
         const gaps = gapsOf(await client.get("/api/knowledge/gaps"));
         return {
-          gaps: status ? gaps.filter((gap) => gap.status === status) : gaps,
+          gaps: (status ? gaps.filter((gap) => gap.status === status) : gaps).map(compactGap),
           stats: await client.get("/api/knowledge/gaps/stats"),
         };
       })

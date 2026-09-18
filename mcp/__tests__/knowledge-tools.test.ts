@@ -110,3 +110,37 @@ describe("knowledge_status", () => {
     expect(JSON.parse(toolText(result))).toEqual({ stats: { totalChunks: 7626 }, status: { chromadb: "ok" } });
   });
 });
+
+describe("payload size", () => {
+  it("drops the embedding vector each chunk carries and keeps the text", async () => {
+    harness.pharma.on("POST", "/api/knowledge/search", (_req, res) =>
+      sendJson(res, 200, {
+        results: [
+          { id: "c1", source: "vendor.md", content: "Air-gapped vault", embedding: Object.fromEntries(Array.from({ length: 1024 }, (_, i) => [i, i / 1024])) },
+        ],
+      })
+    );
+
+    const result = await harness.client.callTool({ name: "search_knowledge", arguments: { query: "vault" } });
+
+    const text = toolText(result);
+    expect(JSON.parse(text)).toEqual({ results: [{ id: "c1", source: "vendor.md", content: "Air-gapped vault" }] });
+    expect(text).not.toContain("embedding");
+    expect(text.length).toBeLessThan(500);
+  });
+
+  it("returns source counts instead of every source name", async () => {
+    const sources = Array.from({ length: 1080 }, (_, i) => `source-${i}`);
+    harness.pharma.on("GET", "/api/knowledge/stats", (_req, res) => sendJson(res, 200, { totalChunks: 7779, sources }));
+    harness.pharma.on("GET", "/api/knowledge/status", (_req, res) => sendJson(res, 200, { ready: true }));
+
+    const result = await harness.client.callTool({ name: "knowledge_status", arguments: {} });
+
+    const payload = JSON.parse(toolText(result)) as { stats: { totalChunks: number; sources: { count: number; sample: string[]; truncated: boolean } } };
+    expect(payload.stats.totalChunks).toBe(7779);
+    expect(payload.stats.sources.count).toBe(1080);
+    expect(payload.stats.sources.sample).toHaveLength(20);
+    expect(payload.stats.sources.truncated).toBe(true);
+  });
+});
+

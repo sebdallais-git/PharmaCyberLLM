@@ -3,6 +3,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
+import { compactKnowledgeStats, compactSearchResults } from "./compact.js";
 import { runLongTool, runTool } from "./result.js";
 import type { ToolLogger, ToolOptions } from "./result.js";
 
@@ -21,7 +22,9 @@ export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClien
       },
     },
     async ({ query, top_k }) =>
-      runTool("search_knowledge", log, () => client.post("/api/knowledge/search", { query, topK: top_k ?? 5 }))
+      runTool("search_knowledge", log, async () =>
+        compactSearchResults(await client.post("/api/knowledge/search", { query, topK: top_k ?? 5 }))
+      )
   );
 
   server.registerTool(
@@ -65,8 +68,8 @@ export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClien
     { description: "Knowledge base size, sources and ChromaDB status for the active stack." },
     async () =>
       runTool("knowledge_status", log, async () => ({
-        stats: await client.get("/api/knowledge/stats"),
-        status: await client.get("/api/knowledge/status"),
+        stats: compactKnowledgeStats(await client.get("/api/knowledge/stats")),
+        status: compactKnowledgeStats(await client.get("/api/knowledge/status")),
       }))
   );
 }

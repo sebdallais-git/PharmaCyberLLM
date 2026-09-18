@@ -165,3 +165,49 @@ describe("feedback tools", () => {
     expect(JSON.parse(toolText(await call("feedback_report", { kind: "weekly_digest" })))).toEqual({ week: "ok" });
   });
 });
+
+describe("payload size", () => {
+  it("shortens the stored model answers a gap row carries", async () => {
+    harness.pharma.on("GET", "/api/knowledge/gaps", (_req, res) =>
+      sendJson(res, 200, {
+        gaps: [
+          {
+            id: 9,
+            timestamp: "2026-09-17T10:00:00.000Z",
+            original_query: "Novartis breach cost",
+            search_topic: "Novartis",
+            reason: "low confidence",
+            status: "triggered",
+            retry_count: 0,
+            gemma_response: "g".repeat(4000),
+            resolved_response: "r".repeat(4000),
+            resolved_at: null,
+          },
+        ],
+      })
+    );
+    harness.pharma.on("GET", "/api/knowledge/gaps/stats", (_req, res) => sendJson(res, 200, { total_triggered: 1 }));
+
+    const result = await call("list_knowledge_gaps", { status: "triggered" });
+
+    const text = toolText(result);
+    expect(text).not.toContain("gemma_response");
+    expect(text).toContain("… (4000 chars)");
+    expect(text.length).toBeLessThan(1200);
+  });
+
+  it("returns the topic count instead of every scrape topic", async () => {
+    const topics = Array.from({ length: 188 }, (_, i) => `topic-${i}`);
+    harness.pharma.on("GET", "/api/agent/status", (_req, res) =>
+      sendJson(res, 200, { isRunning: false, lastRun: { newArticles: 21 }, topics, schedule: "daily" })
+    );
+
+    const result = await call("news_agent_status");
+
+    const payload = JSON.parse(toolText(result)) as { topics: { count: number; sample: string[] }; lastRun: { newArticles: number } };
+    expect(payload.topics.count).toBe(188);
+    expect(payload.topics.sample).toHaveLength(20);
+    expect(payload.lastRun.newArticles).toBe(21);
+  });
+});
+

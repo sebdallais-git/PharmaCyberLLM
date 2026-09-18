@@ -2,6 +2,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaLLMClient } from "../pharmallm-client.js";
+import { compactAgentStatus } from "./compact.js";
 import { runLongTool, runTool } from "./result.js";
 import type { ToolLogger, ToolOptions } from "./result.js";
 
@@ -35,7 +36,7 @@ export function registerOperationsTools(server: McpServer, client: PharmaLLMClie
   server.registerTool(
     "news_agent_status",
     { description: "Whether the news agent is running, its last run and its schedule." },
-    async () => runTool("news_agent_status", log, () => client.get("/api/agent/status"))
+    async () => runTool("news_agent_status", log, async () => compactAgentStatus(await client.get("/api/agent/status")))
   );
 
   server.registerTool(
