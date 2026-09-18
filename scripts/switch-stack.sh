@@ -62,6 +62,10 @@ OMLX_CACHE_MAX_GB="${OMLX_CACHE_MAX_GB:-20}"
 
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
+# Single source of truth for the stack names, mirroring STACK_NAMES in src/config/llm-stacks.ts
+# (__tests__/switch-stack-config.test.ts fails if the two lists drift apart).
+STACK_NAMES=(ollama mlx omlx)
+
 active_stack() {
   cat "$RUN_DIR/active-stack" 2>/dev/null || echo "ollama"
 }
@@ -477,7 +481,7 @@ show_logs() {
 # Stop every stack except the target: with three stacks "the other one" is no longer a single value
 stop_other_stacks() {
   local target="$1" other rc=0
-  for other in ollama mlx omlx; do
+  for other in "${STACK_NAMES[@]}"; do
     [ "$other" = "$target" ] && continue
     stop_stack "$other" || rc=$?
   done
@@ -487,7 +491,7 @@ stop_other_stacks() {
 # --- Commands ---------------------------------------------------------------------
 
 switch_to() {
-  local target="$1" previous
+  local target="$1" previous index_failed=0
   previous="$(active_stack)"
   # Set before any pre-flight check so a failure in one of them can still be recorded and
   # notified: without this, a bad stack name or missing models/ChromaDB left the previous
@@ -535,7 +539,14 @@ switch_to() {
     write_switch_phase warming
     if warm_up "$target"; then
       write_switch_phase indexing
-      if ensure_index "$target" && start_app "$target"; then
+      # Guarded separately from start_app, in the same style as the pre-flight checks above: the
+      # catch-all below blames the stack ("did not come up"), which is a lie when the stack started
+      # fine and it was the index check or rebuild that failed.
+      if ! ensure_index "$target"; then
+        write_switch_phase failed "could not prepare the indexes for $target"
+        notify_switch_result failed
+        index_failed=1
+      elif start_app "$target"; then
         echo "$target" >"$RUN_DIR/active-stack"
         write_switch_phase ready
         notify_switch_result ready
@@ -544,8 +555,10 @@ switch_to() {
       fi
     fi
   fi
-  write_switch_phase failed "$target did not come up"
-  notify_switch_result failed
+  if [ "$index_failed" -eq 0 ]; then
+    write_switch_phase failed "$target did not come up"
+    notify_switch_result failed
+  fi
 
   show_logs
   if [ "$previous" != "$target" ]; then
@@ -622,7 +635,7 @@ status() {
   log "  OLLAMA_NUM_PARALLEL: ${parallel:-not set in launchd (keep it at 1: each parallel slot allocates its own 64k context)}"
   if port_open "$OLLAMA_PORT"; then ollama ps || true; fi
   if curl -sf "${CHROMA_URL}/api/v2/heartbeat" >/dev/null 2>&1; then
-    for stack in ollama mlx; do
+    for stack in "${STACK_NAMES[@]}"; do
       (cd "$PROJECT_DIR" && LLM_PROVIDER="$stack" npx tsx scripts/reindex-stack.ts --status) || true
     done
   fi

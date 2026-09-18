@@ -15,8 +15,11 @@ export interface IndexCheck {
 
 const REINDEX_HINT = "run scripts/reindex-stack.ts";
 
+// Keyed on the stack's *index* identity, not on the stack itself: omlx reads and writes the MLX
+// stack's index, so it must present the MLX identity or every mlx<->omlx switch would look like a
+// mismatch and trigger a full rebuild (which deletes the collection first).
 export function expectedIndexMeta(stack: StackConfig): IndexMeta {
-  return { stack: stack.name, embeddingModel: stack.embeddingModel, dim: stack.embeddingDim };
+  return { stack: stack.indexStack, embeddingModel: stack.indexEmbeddingModel, dim: stack.embeddingDim };
 }
 
 export function checkIndexMeta(

@@ -25,7 +25,7 @@ A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama, MLX or oM
 [![Telegram](https://img.shields.io/badge/Telegram-answers_in_~90s-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](#hermes-agent-on-telegram)
 [![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#agents-mcp-and-the-model-gateway)
 
-[![Tests](https://img.shields.io/badge/Jest-237_tests_%C2%B7_29_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
+[![Tests](https://img.shields.io/badge/Jest-350_tests_%C2%B7_35_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
 [![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%C2%B7_MLX_%C2%B7_oMLX-6E56CF?style=flat-square)](#choose-your-stack)
 [![UI switch](https://img.shields.io/badge/UI_switch-Telegram_confirmed-26A5E4?style=flat-square)](#switching-from-the-web-ui)
 [![Context](https://img.shields.io/badge/context-64K_all_stacks-064e3b?style=flat-square)](#choose-your-stack)
@@ -757,7 +757,7 @@ PharmaCyberLLM/
 Tests run against fakes. None of them reaches a real model server, ChromaDB, the live app, Docker, launchd or Telegram.
 
 ```bash
-npm run test                 # Jest: 22 suites, 173 tests
+npm run test                 # Jest: 28 suites, 286 tests
 npm --prefix mcp test        # Jest: 7 suites, 64 tests
 npm run typecheck            # tsc --noEmit (strict mode)
 npm run typecheck:tests      # type-check the test suites

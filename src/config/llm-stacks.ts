@@ -20,6 +20,11 @@ export interface StackConfig {
   embeddingDim: number;
   chromaCollection: string;
   indexFile: string;
+  // The identity stamped into (and expected from) the index this stack reads and writes. Usually
+  // the stack's own name and embedding model, but stacks that share an index must agree on both or
+  // the index guard would invalidate it — and a rebuild deletes the live ChromaDB collection.
+  indexStack: string;
+  indexEmbeddingModel: string;
   // Extra request fields that keep both stacks comparable (thinking disabled)
   chatExtraBody: Record<string, unknown>;
 }
@@ -39,6 +44,8 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       embeddingDim: EMBEDDING_DIM,
       chromaCollection: "knowledge_base_ollama",
       indexFile: ".index.ollama.json",
+      indexStack: "ollama",
+      indexEmbeddingModel: "qwen3-embedding:0.6b-q8_0",
       chatExtraBody: { reasoning_effort: "none" },
     },
     mlx: {
@@ -50,6 +57,8 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       embeddingDim: EMBEDDING_DIM,
       chromaCollection: "knowledge_base_mlx",
       indexFile: ".index.mlx.json",
+      indexStack: "mlx",
+      indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
       chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
     // oMLX serves chat and embeddings from one process; its embeddings are identical to the MLX
@@ -63,6 +72,13 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       embeddingDim: EMBEDDING_DIM,
       chromaCollection: "knowledge_base_mlx",
       indexFile: ".index.mlx.json",
+      // Deliberately the MLX stack's identity, not omlx's: oMLX serves the very same embedding
+      // model under a different discovery id (double dashes instead of a slash) and produces
+      // interchangeable vectors (cosine 1.000000, verified). Stamping "omlx" here would make the
+      // index guard reject the shared index on every mlx<->omlx switch, and the rebuild branch
+      // deletes the collection and re-embeds the whole knowledge base.
+      indexStack: "mlx",
+      indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
       chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
   };

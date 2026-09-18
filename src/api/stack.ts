@@ -16,6 +16,7 @@ import { createTelegramSender, isTelegramConfigured, readTelegramConfig } from "
 import type { TelegramSender } from "../services/telegram-notify.js";
 
 const PROGRESS_FILE = join(process.cwd(), "data", "run", "stack-switch.json");
+const PUBLIC_URL_FILE = join(process.cwd(), "data", "run", "public-url");
 
 export interface StackRouterDeps {
   switcher: StackSwitch;
@@ -107,6 +108,25 @@ function readProgressFile(): SwitchProgress | null {
   }
 }
 
+// The base URL of the one-time confirmation link sent over Telegram. switch-stack.sh passes it in
+// the environment, but an app started by hand (npm run dev) gets nothing — so fall back to the same
+// data/run/public-url file the script itself reads, instead of a localhost link the owner's iPad
+// cannot reach. The value is never logged: it is only ever pasted into the confirmation link.
+export function resolveConfirmBaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  file: string = PUBLIC_URL_FILE
+): string {
+  const fromEnv = env.PHARMALLM_PUBLIC_URL?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const fromFile = readFileSync(file, "utf-8").trim();
+    if (fromFile) return fromFile;
+  } catch {
+    // Not written yet, or unreadable: the localhost default is still correct on this Mac
+  }
+  return "http://localhost:3000";
+}
+
 const telegramConfig = readTelegramConfig();
 
 export default createStackRouter({
@@ -134,6 +154,6 @@ export default createStackRouter({
   },
   activeStack: () => getActiveStack().name,
   readProgress: readProgressFile,
-  confirmBaseUrl: () => process.env.PHARMALLM_PUBLIC_URL ?? "http://localhost:3000",
+  confirmBaseUrl: () => resolveConfirmBaseUrl(),
   telegramConfigured: () => isTelegramConfigured(telegramConfig),
 });

@@ -39,6 +39,14 @@ describe("buildStacks", () => {
     expect(mlx.indexFile).toBe(".index.mlx.json");
   });
 
+  it("keeps each stack's own index identity where nothing is shared", () => {
+    const { ollama, mlx } = buildStacks({});
+    expect(ollama.indexStack).toBe("ollama");
+    expect(ollama.indexEmbeddingModel).toBe(ollama.embeddingModel);
+    expect(mlx.indexStack).toBe("mlx");
+    expect(mlx.indexEmbeddingModel).toBe(mlx.embeddingModel);
+  });
+
   it("disables thinking on both stacks", () => {
     const { ollama, mlx } = buildStacks({});
     expect(ollama.chatExtraBody).toEqual({ reasoning_effort: "none" });
@@ -58,6 +66,16 @@ describe("omlx stack", () => {
     expect(omlx.embeddingDim).toBe(mlx.embeddingDim);
     expect(omlx.chromaCollection).toBe(mlx.chromaCollection);
     expect(omlx.indexFile).toBe(mlx.indexFile);
+  });
+
+  // F1: sharing the collection and the index file is not enough — the stack metadata stamped into
+  // them has to match too, or the index guard invalidates the shared index on every mlx↔omlx switch.
+  it("reads and writes the index under the MLX stack's identity, not its own", () => {
+    const { mlx, omlx } = buildStacks({});
+    expect(omlx.indexStack).toBe(mlx.indexStack);
+    expect(omlx.indexEmbeddingModel).toBe(mlx.indexEmbeddingModel);
+    expect(omlx.indexStack).toBe("mlx");
+    expect(omlx.indexEmbeddingModel).toBe("mlx-community/Qwen3-Embedding-0.6B-8bit");
   });
 
   it("takes its URL from the environment", () => {

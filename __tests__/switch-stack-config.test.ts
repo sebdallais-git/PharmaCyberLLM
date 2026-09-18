@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildStacks } from "../src/config/llm-stacks.js";
+import { buildStacks, STACK_NAMES } from "../src/config/llm-stacks.js";
 import { parseProgress } from "../src/services/stack-switch.js";
 
 const script = readFileSync(join(process.cwd(), "scripts", "switch-stack.sh"), "utf-8");
@@ -147,7 +147,9 @@ describe("switch-stack.sh omlx stack", () => {
   it("stops every stack except the target instead of assuming two", () => {
     expect(script).toContain("stop_other_stacks()");
     expect(script).not.toContain("other_stack()");
-    expect(script).toContain('for other in ollama mlx omlx; do');
+    // F4: the literal list this used to pin moved into STACK_NAMES, checked against llm-stacks.ts
+    // by the "stack list" suite below.
+    expect(script).toContain('for other in "${STACK_NAMES[@]}"; do');
   });
 
   it("accepts omlx everywhere a stack name is taken", () => {
@@ -768,5 +770,108 @@ describe("switch-stack.sh switch_to: pre-flight checks are guarded and recorded"
     expect((progress as { error: string }).error).toBe("could not start ChromaDB");
     expect(curlLog).toContain("curl_called");
     expect(stubLog).not.toContain("stop_app_called");
+  });
+});
+
+// F4: `status` looped over a hand-written `ollama mlx`, so the omlx stack's index was never
+// reported. The script now keeps one list of stack names and drives both the status loop and
+// stop_other_stacks from it, and this pins that list to the one in llm-stacks.ts.
+describe("switch-stack.sh stack list", () => {
+  it("keeps a single stack list that cannot drift from llm-stacks.ts", () => {
+    const match = script.match(/^STACK_NAMES=\(([^)]*)\)$/m);
+    expect(match).not.toBeNull();
+    expect(match![1].trim().split(/\s+/)).toEqual([...STACK_NAMES]);
+  });
+
+  it("reports the index state of every stack in status, omlx included", () => {
+    expect(script).toContain('for stack in "${STACK_NAMES[@]}"; do');
+    expect(script).not.toContain("for stack in ollama mlx; do");
+  });
+
+  it("drives stop_other_stacks from the same list", () => {
+    expect(script).toContain('for other in "${STACK_NAMES[@]}"; do');
+  });
+});
+
+// F5: the catch-all after the start/warm/index chain blamed the stack ("<target> did not come up")
+// even when ensure_index was what failed, which sent the owner looking at model-server logs for an
+// indexing problem. ensure_index now has its own guarded branch with its own message.
+describe("switch-stack.sh switch_to: a failed index step says so", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Same harness idiom as the pre-flight tests above: only the function definitions are sourced,
+  // every step that would touch a service is stubbed, PATH is pinned to a stub dir and the run
+  // directory is a temp dir, so nothing here reaches a real stack, ChromaDB or Telegram.
+  function runIndexStub(ensureIndexRc: number): { progress: { phase?: string; error?: string }; status: number | null } {
+    const dir = mkdtempSync(join(tmpdir(), "switch-to-index-"));
+    dirs.push(dir);
+    const runDir = join(dir, "run");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "telegram-bot-token"), "FAKE_TOKEN_XYZ\n");
+    writeFileSync(join(runDir, "telegram-chat-id"), "424242\n");
+
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "curl"), ["#!/bin/bash", "exit 0"].join("\n"));
+    chmodSync(join(binDir, "curl"), 0o755);
+
+    const funcsFile = join(dir, "funcs.sh");
+    writeFileSync(funcsFile, extractFuncs());
+
+    const harness = [
+      "#!/bin/bash",
+      "set -uo pipefail",
+      'source "$FUNCS_FILE"',
+      "models_ready() { return 0; }",
+      "ensure_chromadb() { return 0; }",
+      "stop_app() { return 0; }",
+      "stop_other_stacks() { return 0; }",
+      "stop_stack() { return 0; }",
+      "start_stack() { return 0; }",
+      "warm_up() { return 0; }",
+      "start_app() { return 0; }",
+      "show_logs() { return 0; }",
+      `ensure_index() { return ${ensureIndexRc}; }`,
+      "switch_to omlx",
+    ].join("\n");
+    const harnessFile = join(dir, "harness.sh");
+    writeFileSync(harnessFile, harness);
+    chmodSync(harnessFile, 0o755);
+
+    const result = spawnSync("bash", [harnessFile], {
+      encoding: "utf-8",
+      env: {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        HOME: dir,
+        PHARMALLM_RUN_DIR: runDir,
+        SCRIPT_DIR: join(process.cwd(), "scripts"),
+        PROJECT_DIR: process.cwd(),
+        FUNCS_FILE: funcsFile,
+      },
+    });
+
+    const progress = JSON.parse(readFileSync(join(runDir, "stack-switch.json"), "utf-8")) as {
+      phase?: string;
+      error?: string;
+    };
+    return { progress, status: result.status };
+  }
+
+  it("blames the index step, not the stack, when ensure_index fails", () => {
+    const { progress, status } = runIndexStub(1);
+    expect(status).not.toBe(0);
+    expect(progress.phase).toBe("failed");
+    expect(progress.error).toBe("could not prepare the indexes for omlx");
+    expect(progress.error).not.toContain("did not come up");
+  });
+
+  it("still reaches ready when the index step succeeds", () => {
+    const { progress, status } = runIndexStub(0);
+    expect(status).toBe(0);
+    expect(progress.phase).toBe("ready");
   });
 });

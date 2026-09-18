@@ -152,6 +152,52 @@ describe("isStackSelectDisabled", () => {
   });
 });
 
+// F3: deciding whether a progress record belongs to the switch this browser asked for used to
+// compare the server's startedAt against the browser's own Date.now(). The owner taps the Telegram
+// link from an iPad over Tailscale, and an iPad clock even slightly ahead of the Mac's made every
+// record look older than the request: the UI never recognised its own switch, the countdown ran
+// out and it reported "Switch request expired" for a switch that had actually succeeded. The
+// browser now remembers the startedAt it last saw from /api/stack/status and treats any different
+// one as its own, so only server-supplied values are ever compared.
+describe("isOurSwitchProgress", () => {
+  // Loaded per test (loadBrowserFunction asserts), so a change to the helper fails the cases it
+  // breaks rather than taking the whole suite down with it.
+  const isOurSwitchProgress = (progress: unknown, baselineStartedAt: number | null): boolean =>
+    (loadBrowserFunction("isOurSwitchProgress") as (p: unknown, b: number | null) => boolean)(
+      progress,
+      baselineStartedAt
+    );
+  const progress = (startedAt: number): unknown => ({
+    phase: "warming",
+    target: "omlx",
+    previous: "mlx",
+    startedAt,
+  });
+
+  it("is not ours while the server still shows the record that was there when we asked", () => {
+    expect(isOurSwitchProgress(progress(1_700_000_000_000), 1_700_000_000_000)).toBe(false);
+  });
+
+  it("is ours as soon as a different record appears", () => {
+    expect(isOurSwitchProgress(progress(1_700_000_000_500), 1_700_000_000_000)).toBe(true);
+  });
+
+  it("is ours on the first ever switch, when there was no progress to capture", () => {
+    expect(isOurSwitchProgress(progress(1_700_000_000_000), null)).toBe(true);
+  });
+
+  it("is not ours when the server reports no progress at all", () => {
+    expect(isOurSwitchProgress(null, null)).toBe(false);
+    expect(isOurSwitchProgress(undefined, 1_700_000_000_000)).toBe(false);
+  });
+
+  // The whole point of the fix: a record the Mac stamped *before* this browser's clock reading is
+  // still ours. Under the old `startedAt >= watchSince` rule this was the failing case.
+  it("is ours even when the server's timestamp precedes the browser's idea of now", () => {
+    expect(isOurSwitchProgress(progress(1_699_999_999_000), 1_700_000_000_000)).toBe(true);
+  });
+});
+
 // Extracts one top-level function's source out of public/app.js and evaluates it in isolation, so
 // the drift tests above never load or execute the rest of the browser script (which touches the
 // DOM and fetch, neither available under Jest's node test environment).

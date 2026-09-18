@@ -5,9 +5,10 @@ import { isStackName } from "../config/llm-stacks.js";
 import type { StackName } from "../config/llm-stacks.js";
 
 export const CONFIRM_WINDOW_MS = 5 * 60 * 1000;
-// A switch takes two to three minutes; 15 gives generous headroom while still letting a killed
-// script's stale "in progress" state age out, instead of locking switching out forever.
-export const SWITCHING_WINDOW_MS = 15 * 60 * 1000;
+// Long enough to cover a stack start plus a full index rebuild (ensure_index re-embeds the whole
+// knowledge base in 12-16 minutes when the target's index is stale), short enough that a killed
+// script's stale "in progress" state ages out instead of locking switching out for an hour.
+export const SWITCHING_WINDOW_MS = 30 * 60 * 1000;
 
 const PHASES = ["confirmed", "stopping", "starting", "warming", "indexing", "ready", "failed"] as const;
 export type SwitchPhase = (typeof PHASES)[number];

@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import express from "express";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createStackRouter } from "../src/api/stack.js";
+import { createStackRouter, resolveConfirmBaseUrl } from "../src/api/stack.js";
 import { createStackSwitch } from "../src/services/stack-switch.js";
 import type { StackName } from "../src/config/llm-stacks.js";
 import type { SwitchProgress } from "../src/services/stack-switch.js";
@@ -267,5 +270,48 @@ describe("GET /api/stack/status", () => {
     expect((body.pending as Record<string, unknown>).target).toBe("omlx");
     expect((body.progress as Record<string, unknown>).phase).toBe("warming");
     expect(JSON.stringify(body)).not.toMatch(/tok-/);
+  });
+});
+
+// F6: switch-stack.sh writes data/run/public-url and passes it as PHARMALLM_PUBLIC_URL, but an app
+// started outside the script (npm run dev) has neither, and the localhost default put a Telegram
+// confirmation link in front of the owner that his iPad could not reach over Tailscale. Reading the
+// same file the script wrote keeps the two defaults in agreement. No live file is touched here: the
+// path is injected and points at a temp directory.
+describe("resolveConfirmBaseUrl", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function urlFile(contents: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "public-url-"));
+    dirs.push(dir);
+    const file = join(dir, "public-url");
+    writeFileSync(file, contents);
+    return file;
+  }
+
+  it("prefers the environment variable the script passes to the app", () => {
+    const file = urlFile("https://from-file.local:3443\n");
+    expect(resolveConfirmBaseUrl({ PHARMALLM_PUBLIC_URL: "https://from-env.local:3443" }, file)).toBe(
+      "https://from-env.local:3443"
+    );
+  });
+
+  it("falls back to the URL switch-stack.sh stored, trimming the trailing newline", () => {
+    expect(resolveConfirmBaseUrl({}, urlFile("https://mac.local:3443\n"))).toBe("https://mac.local:3443");
+  });
+
+  it("falls back to localhost when the file does not exist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "public-url-missing-"));
+    dirs.push(dir);
+    expect(resolveConfirmBaseUrl({}, join(dir, "public-url"))).toBe("http://localhost:3000");
+  });
+
+  it("falls back to localhost when the file is empty or the variable is blank", () => {
+    expect(resolveConfirmBaseUrl({}, urlFile("   \n"))).toBe("http://localhost:3000");
+    expect(resolveConfirmBaseUrl({ PHARMALLM_PUBLIC_URL: "  " }, urlFile(""))).toBe("http://localhost:3000");
   });
 });

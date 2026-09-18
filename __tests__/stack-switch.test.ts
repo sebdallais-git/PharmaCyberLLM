@@ -119,7 +119,21 @@ describe("request", () => {
     expect(h.switcher.request("omlx").ok).toBe(true);
   });
 
-  it("does not refuse a non-terminal phase older than 15 minutes (a killed script must not lock switching out forever)", () => {
+  // F2: ensure_index legitimately rebuilds on an ollama<->mlx switch with a stale index, and a
+  // rebuild re-embeds the whole knowledge base in 12-16 minutes. At the old 15-minute bound the
+  // guard lapsed mid-rebuild and a second switch-stack.sh was accepted against the same processes.
+  it("still refuses 20 minutes in, while a legitimate index rebuild is running", () => {
+    const h = harness();
+    h.state.progress = { phase: "indexing", target: "mlx", previous: "ollama", startedAt: h.clock.value - 20 * 60 * 1000 };
+
+    expect(h.switcher.request("omlx")).toEqual({ ok: false, reason: "switching", message: "a switch is already in progress" });
+  });
+
+  it("bounds the refusal at 30 minutes", () => {
+    expect(SWITCHING_WINDOW_MS).toBe(30 * 60 * 1000);
+  });
+
+  it("does not refuse a non-terminal phase older than the window (a killed script must not lock switching out forever)", () => {
     const h = harness();
     h.state.progress = { phase: "warming", target: "mlx", previous: "ollama", startedAt: h.clock.value - (SWITCHING_WINDOW_MS + 1) };
 

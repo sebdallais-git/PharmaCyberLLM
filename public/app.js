@@ -716,9 +716,20 @@ if (canRecord) {
 const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX" };
 let stackPollTimer = null;
 let lastKnownActive = null;
-let watchSince = null; // Date.now() when this browser posted a switch request
+let watching = false; // true while this browser is following the switch it asked for
+let watchBaselineStartedAt = null; // progress.startedAt the server reported when we asked (null: none)
+let lastSeenStartedAt = null; // progress.startedAt from the most recent /api/stack/status
 let watchExpiresAt = null; // expires_at from the 202 body of that request
 const CONFIRM_GRACE_MS = 15000; // the script writes its first phase within a second of the tap
+
+// Decides whether a progress record is the switch this browser asked for. Both values come from
+// the server (startedAt is stamped on the Mac), so the iPad's clock never enters the comparison:
+// comparing the Mac's timestamp against the browser's Date.now() made a switch that had actually
+// succeeded look foreign whenever the iPad's clock led the Mac's, and the UI reported it expired.
+function isOurSwitchProgress(progress, baselineStartedAt) {
+  if (!progress) return false;
+  return progress.startedAt !== baselineStartedAt;
+}
 
 // Same wording as src/services/switch-labels.ts. The browser cannot import TypeScript, so this is a
 // deliberate second copy; __tests__/switch-labels.test.ts pins the wording both must produce
@@ -762,19 +773,23 @@ function renderStackStatus(status) {
     ? "LLM stack (deployment environment)"
     : "Telegram confirmation not configured - run scripts/switch-stack.sh telegram";
 
-  // A progress entry counts as "ours" once it started at or after the request this browser posted;
-  // right after the Telegram tap, pending is already cleared but progress here still holds the
-  // PREVIOUS switch's terminal state, so following pending alone would stop tracking too early.
-  const oursHasAppeared = watchSince !== null && status.progress && status.progress.startedAt >= watchSince;
+  // Remembered for the next request: whatever is on the server now is what "not ours yet" means.
+  lastSeenStartedAt = status.progress ? status.progress.startedAt : null;
+
+  // A progress entry counts as "ours" once it differs from the one the server had when this browser
+  // posted its request; right after the Telegram tap, pending is already cleared but progress here
+  // still holds the PREVIOUS switch's terminal state, so following pending alone would stop
+  // tracking too early.
+  const oursHasAppeared = watching && isOurSwitchProgress(status.progress, watchBaselineStartedAt);
   let label, cls, busy;
 
-  if (watchSince !== null && !oursHasAppeared) {
+  if (watching && !oursHasAppeared) {
     if (Date.now() < watchExpiresAt + CONFIRM_GRACE_MS) {
       label = `${describeStackStatus(status)} (${formatCountdown(watchExpiresAt - Date.now())} left)`;
       cls = "busy";
       busy = true;
     } else {
-      watchSince = null;
+      watching = false;
       watchExpiresAt = null;
       label = "Switch request expired";
       cls = "error";
@@ -785,7 +800,7 @@ function renderStackStatus(status) {
     const phase = status.progress.phase;
     busy = phase !== "ready" && phase !== "failed";
     if (!busy) {
-      watchSince = null;
+      watching = false;
       watchExpiresAt = null;
     }
     label = describeStackStatus(status);
@@ -844,9 +859,11 @@ stackSelect.addEventListener("change", async () => {
   const target = stackSelect.value;
   const previousValue = lastKnownActive;
   stackSelect.disabled = true;
-  // Set before the POST: the server can write the first progress phase before the response
-  // resolves, and "ours" is decided by comparing against this timestamp.
-  watchSince = Date.now();
+  // Captured before the POST: the server can write the first progress phase before the response
+  // resolves, and "ours" is decided by comparing against the progress record that was on the
+  // server at this moment, not against any browser-side clock reading.
+  watchBaselineStartedAt = lastSeenStartedAt;
+  watching = true;
   try {
     const res = await fetch("/api/stack/switch", {
       method: "POST",
@@ -855,7 +872,7 @@ stackSelect.addEventListener("change", async () => {
     });
     const data = await res.json();
     if (!res.ok) {
-      watchSince = null;
+      watching = false;
       watchExpiresAt = null;
       if (previousValue) stackSelect.value = previousValue;
       setStatus(data.error || "Stack switch refused", "error");
@@ -866,7 +883,7 @@ stackSelect.addEventListener("change", async () => {
     watchStackSwitch();
     await pollStackStatus();
   } catch {
-    watchSince = null;
+    watching = false;
     watchExpiresAt = null;
     if (previousValue) stackSelect.value = previousValue;
     setStatus("Could not reach PharmaLLM", "error");
