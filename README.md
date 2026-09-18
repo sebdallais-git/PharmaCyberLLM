@@ -4,7 +4,7 @@
 
 ### Local-first cyber threat intelligence for the pharmaceutical industry
 
-A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, grounds every answer in a hybrid vector + graph knowledge base, detects and fills its own knowledge gaps, and serves the same knowledge to AI agents over MCP.
+A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama, MLX or oMLX**, grounds every answer in a hybrid vector + graph knowledge base, detects and fills its own knowledge gaps, and serves the same knowledge to AI agents over MCP.
 
 **It also answers on Telegram.** [Hermes Agent](https://hermes-agent.nousresearch.com/) runs on the same local model, searches the knowledge base with 16 MCP tools, and replies in about 90 seconds. Four scheduled jobs pull the news, close knowledge gaps, watch health and report on feedback, without sending a token to anyone's cloud.
 
@@ -14,7 +14,8 @@ A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, 
 <br/>
 [![Ollama](https://img.shields.io/badge/Ollama-Qwen3.8_27B-000000?style=for-the-badge&logo=ollama&logoColor=white)](https://ollama.com)
 [![MLX](https://img.shields.io/badge/MLX-Qwen3.8_27B-6E56CF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ml-explore/mlx-lm)
-[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M4_Pro_tested-555555?style=for-the-badge&logo=apple&logoColor=white)](#benchmarks-ollama-vs-mlx)
+[![oMLX](https://img.shields.io/badge/oMLX-chat_%2B_embeddings-F59E0B?style=for-the-badge)](https://github.com/jundot/omlx)
+[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M4_Pro_tested-555555?style=for-the-badge&logo=apple&logoColor=white)](#benchmarks)
 <br/>
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-vector_store-FF6446?style=for-the-badge)](https://www.trychroma.com)
 [![Neo4j](https://img.shields.io/badge/Neo4j-Graph_RAG-4581C3?style=for-the-badge&logo=neo4j&logoColor=white)](https://neo4j.com)
@@ -24,12 +25,13 @@ A RAG chatbot that runs a 27B Qwen model on your own Mac, on **Ollama or MLX**, 
 [![Telegram](https://img.shields.io/badge/Telegram-answers_in_~90s-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](#hermes-agent-on-telegram)
 [![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#agents-mcp-and-the-model-gateway)
 
-[![Tests](https://img.shields.io/badge/Jest-237_tests_%C2%B7_29_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
-[![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%E2%87%84_MLX-6E56CF?style=flat-square)](#choose-your-stack)
-[![Context](https://img.shields.io/badge/context-64K_both_stacks-064e3b?style=flat-square)](#choose-your-stack)
+[![Tests](https://img.shields.io/badge/Jest-350_tests_%C2%B7_35_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
+[![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%C2%B7_MLX_%C2%B7_oMLX-6E56CF?style=flat-square)](#choose-your-stack)
+[![UI switch](https://img.shields.io/badge/UI_switch-Telegram_confirmed-26A5E4?style=flat-square)](#switching-from-the-web-ui)
+[![Context](https://img.shields.io/badge/context-64K_all_stacks-064e3b?style=flat-square)](#choose-your-stack)
 [![Cloud calls](https://img.shields.io/badge/cloud_LLM_calls-0-064e3b?style=flat-square)](#why-pharmacyberllm)
 
-[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks-ollama-vs-mlx) · [How It Works](#how-it-works) · [Telegram agent](#hermes-agent-on-telegram) · [API](#api-reference)
+[Quick Start](#quick-start) · [Choose Your Stack](#choose-your-stack) · [Benchmarks](#benchmarks) · [How It Works](#how-it-works) · [Telegram agent](#hermes-agent-on-telegram) · [API](#api-reference)
 
 </div>
 
@@ -68,8 +70,8 @@ At runtime, network access is limited to live news lookups (Google News RSS for 
 
 | | Feature | What it does |
 |---|---|---|
-| 🧠 | **Local 27B LLM** | Qwen3.8 27B (4-bit) for chat and Qwen3-Embedding 0.6B (8-bit), on Ollama or MLX, with a 64K context |
-| 🔀 | **Two interchangeable stacks** | One script switches Ollama ⇄ MLX, with per-stack indexes and automatic rollback |
+| 🧠 | **Local 27B LLM** | Qwen3.8 27B (4-bit) for chat and Qwen3-Embedding 0.6B (8-bit), on Ollama, MLX or oMLX, with a 64K context |
+| 🔀 | **Three interchangeable stacks** | One script switches Ollama ⇄ MLX ⇄ oMLX, with per-stack indexes and automatic rollback — or drive the switch from the web UI, Telegram-confirmed |
 | 🔎 | **Hybrid retrieval** | ChromaDB, an in-memory vector + keyword index, Neo4j Graph RAG and live news, in parallel |
 | 💭 | **Visible reasoning** | Each retrieval step streams to the UI over SSE, with sources, TTFT and tok/s per answer |
 | 🧰 | **MCP service** | `pharmallm-mcp` exposes 16 tools over Streamable HTTP, token-protected, run by launchd |
@@ -79,7 +81,7 @@ At runtime, network access is limited to live news lookups (Google News RSS for 
 | 🎙️ | **Voice input** | Local speech-to-text with whisper.cpp; HTTPS mode for iPad and mobile microphones |
 | 📰 | **News agent** | 188 search topics pulled from Google News every 24 hours into the knowledge base |
 | 📊 | **Monitoring dashboard** | Chart.js dashboard for questions, confidence, ratings, gaps, KB health and service status |
-| ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX comparison with retrieval overlap and a blind A/B review page |
+| ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX vs oMLX comparison with retrieval overlap and a blind A/B review page |
 
 ---
 
@@ -94,9 +96,11 @@ git clone https://github.com/sebdallais-git/PharmaCyberLLM.git
 cd PharmaCyberLLM
 npm install
 
-# 2. One-time setup: download both stacks' models (~33 GB), create the MLX venv,
-#    then start ChromaDB, build the active stack's indexes and launch PharmaLLM
-scripts/switch-stack.sh prepare
+# 2. One-time setup: download the Ollama and MLX models (~33 GB), create the MLX
+#    and oMLX venvs (oMLX reuses the same Hugging Face snapshots, so it adds no
+#    extra download), then start ChromaDB, build the active stack's indexes and
+#    launch PharmaLLM
+scripts/switch-stack.sh prepare          # also installs the oMLX venv
 ```
 
 When `prepare` finishes, PharmaLLM is running on the Ollama stack (the default):
@@ -171,7 +175,7 @@ scripts/switch-stack.sh mcp start      # pharmallm-mcp under launchd (com.pharma
 scripts/switch-stack.sh mcp status
 ```
 
-Creating the API token does not enable it: restart the app (`scripts/switch-stack.sh ollama` or `mlx`) so it is exported. The Telegram assistant is a separate install, see [Agents, MCP and the model gateway](#agents-mcp-and-the-model-gateway).
+Creating the API token does not enable it: restart the app (`scripts/switch-stack.sh ollama`, `mlx` or `omlx`) so it is exported. The Telegram assistant is a separate install, see [Agents, MCP and the model gateway](#agents-mcp-and-the-model-gateway).
 
 </details>
 
@@ -179,40 +183,61 @@ Creating the API token does not enable it: restart the app (`scripts/switch-stac
 
 ## Choose Your Stack
 
-Every local model call, chat and embeddings alike, runs on **exactly one** stack. Both stacks run the same models at matching quantization levels (4-bit chat, 8-bit embeddings), so they can be compared fairly. There is no silent fallback: if the active stack is down, requests fail with a clear error.
+Every local model call, chat and embeddings alike, runs on **exactly one** stack. All three stacks run the same models at matching quantization levels (4-bit chat, 8-bit embeddings), so they can be compared fairly. There is no silent fallback: if the active stack is down, requests fail with a clear error.
 
-| | 🦙 Ollama stack | 🍎 MLX stack |
-|---|---|---|
-| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 64K context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` |
-| **Embedding model** | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` |
-| **Ports** | `:11434` | `:8080` chat, `:8081` embeddings |
-| **ChromaDB collection** | `knowledge_base_ollama` | `knowledge_base_mlx` |
-| **In-memory index** | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` |
-| **Prompt cache** | one shared cache, evicted by the next caller | several caches, capped by `--prompt-cache-bytes` (8 GB) |
-| **Graph rebuild** | ✅ supported | ❌ switch to Ollama first (`409`) |
+| | 🦙 Ollama stack | 🍎 MLX stack | 🧬 oMLX stack |
+|---|---|---|---|
+| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 64K context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` | `mlx-community--Qwen3.8-27B-4bit` (oMLX's discovery ids use double dashes) |
+| **Embedding model** | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` | `mlx-community--Qwen3-Embedding-0.6B-8bit` |
+| **Ports** | `:11434` | `:8080` chat, `:8081` embeddings | `:8090` — one server for chat and embeddings |
+| **ChromaDB collection** | `knowledge_base_ollama` | `knowledge_base_mlx` | `knowledge_base_mlx` (shared with the MLX stack) |
+| **In-memory index** | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` | `knowledge/.index.mlx.json` (shared with the MLX stack) |
+| **Prompt cache** | one shared cache, evicted by the next caller | several caches, capped by `--prompt-cache-bytes` (8 GB) | one paged SSD cache, capped by `--paged-ssd-cache-max-size` (20 GB default); survives an app restart |
+| **Graph rebuild** | ✅ supported | ❌ switch to Ollama first (`409`) | ❌ switch to Ollama first (`409`) — `python/graph_builder.py` calls Ollama directly |
 
 ```bash
-scripts/switch-stack.sh mlx        # stop Ollama, start MLX, restart PharmaLLM (rolls back on failure)
+scripts/switch-stack.sh mlx        # stop the other stacks, start MLX, restart PharmaLLM (rolls back on failure)
+scripts/switch-stack.sh omlx       # third stack, port 8090 — one server for chat and embeddings,
+                                    # shares the MLX index, restores long prompts from SSD after a restart
 scripts/switch-stack.sh ollama     # and back
 scripts/switch-stack.sh status     # active stack, ports, OLLAMA_NUM_PARALLEL and index counts
-scripts/switch-stack.sh prepare    # one-time model downloads (Ollama pulls + Hugging Face snapshots)
+scripts/switch-stack.sh prepare    # one-time model downloads; also installs the oMLX venv
+scripts/switch-stack.sh telegram   # store the Telegram credentials used to confirm UI-driven switches
 scripts/switch-stack.sh ollama-ctx # recreate qwen3.8-pharma if its context differs from the Modelfile
 ```
+
+### Switching from the web UI
+
+The header has a stack selector next to the model selector. Choosing a different stack does not switch immediately: PharmaLLM sends a Telegram message with a one-time confirmation link, valid for 5 minutes. Tapping it starts the switch; ignoring it reverts the selector. The UI then follows the switch (stopping, starting, warming up, checking indexes) and shows the new stack with how long it took — the header line next to the selector reads `OMLX stack ready (96 s)` — and Telegram gets a completion message with the same line.
+
+The route itself needs no token, because approval comes from the Telegram link. Store the credentials once:
+
+```bash
+scripts/switch-stack.sh telegram         # prompts for the bot token and your chat id, stores them at mode 600
+```
+
+Without them the selector is disabled and says so. A switch is refused while another switch is pending confirmation or already in progress, while a benchmark or a reindex is running, or when the requested stack is already active.
+
+**Embedding parity.** The oMLX stack shares the MLX index and ChromaDB collection because their embeddings are identical (cosine 1.000000). Every oMLX start re-checks that against `__tests__/fixtures/embedding-reference.json` and refuses to serve below a cosine of 0.9999, so a future oMLX upgrade that quietly changed the embedding cannot poison retrieval: without the check, it would write vectors into `knowledge_base_mlx` that no longer match the ones already there, and searches would return the wrong documents with no error. The probe turns that failure mode into a refused switch instead.
 
 **64K context.** `ollama/qwen3.8-pharma.Modelfile` sets `num_ctx 65536` and MLX is started with `--prompt-cache-bytes`. The model is a hybrid architecture: only 16 of its 64 layers keep a KV cache, so 64K costs about 4 GB instead of the 1 GB a 16K context used. Ollama's OpenAI API cannot set the context per request, so one shared size keeps a single copy of the model loaded. Keep `OLLAMA_NUM_PARALLEL` at 1, because each parallel slot allocates its own 64K context.
 
 ```mermaid
 flowchart LR
-    A["switch-stack.sh mlx"] --> B{"Models<br/>downloaded?"}
+    A["switch-stack.sh &lt;stack&gt;"] --> B{"Models<br/>downloaded?"}
     B -- no --> X["Exit: run prepare"]
-    B -- yes --> C["Stop app and<br/>other stack"]
-    C --> D["Start target stack<br/>and warm up"]
-    D --> E{"Indexes match stack<br/>and complete?"}
+    B -- yes --> C["Stop app and<br/>other stacks"]
+    C --> D["Start target stack"]
+    D -- "oMLX only" --> P["Check embedding<br/>parity (cosine ≥ 0.9999)"]
+    D --> W["Warm up"]
+    P --> W
+    W --> E{"Indexes match stack<br/>and complete?"}
     E -- no --> F["Rebuild indexes"]
     E -- yes --> G["Start app, wait for<br/>/api/health"]
     F --> G
     G --> H["Record active stack"]
     D -. failure .-> R["Roll back to<br/>previous stack"]
+    P -. failure .-> R
     F -. failure .-> R
     G -. failure .-> R
 
@@ -223,14 +248,16 @@ flowchart LR
 
 **How the switch stays safe**
 
-- **One client:** `src/services/llm-client.ts` talks to both stacks through the OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` APIs; `src/config/llm-stacks.ts` only swaps base URLs and model names. Thinking mode is disabled on both.
+- **One client:** `src/services/llm-client.ts` talks to all three stacks through the OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` APIs; `src/config/llm-stacks.ts` only swaps base URLs and model names. Thinking mode is disabled on all three.
 - **Guarded indexes:** each index records its stack, embedding model and dimension (1024), plus a completeness marker written only when a rebuild ran to the end. Search on a mismatched, incomplete or rebuilding index is refused instead of returning meaningless matches.
 - **Rebuildable from source:** indexes are rebuilt from `knowledge/` and `data/raw_documents/`, where uploads, ingested text and news articles are saved first. Rebuild with `LLM_PROVIDER=<stack> npx tsx scripts/reindex-stack.ts` (app stopped) or `POST /api/knowledge/reindex` (app running, asynchronous).
 - **Everything follows the stack:** n8n calls `POST /api/llm/complete`, agents call `/v1/chat/completions`, and both run on whichever stack is active.
 
 ---
 
-## Benchmarks: Ollama vs MLX
+## Benchmarks
+
+oMLX figures land in a follow-up task that measures all three stacks live; the tables below are the Ollama vs MLX baseline.
 
 ### RAG answers (the web chat workload)
 
@@ -320,7 +347,7 @@ flowchart TB
         RJ["reindex job<br/>202 + job id, poll status"]
     end
 
-    STACK["Active stack<br/>Ollama :11434 or MLX :8080"]
+    STACK["Active stack<br/>Ollama :11434, MLX :8080 or oMLX :8090"]
     DATA["ChromaDB · in-memory index<br/>Neo4j · SQLite"]
 
     B --> AUTH
@@ -507,6 +534,11 @@ The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_AP
 | `/api/bench/start` | POST | token | Pause background LLM jobs (15-minute lease, refreshed by calling again) |
 | `/api/bench/stop` | POST | token | Resume background LLM jobs |
 | `/api/bench/status` | GET | token | Benchmark flag and running background jobs |
+| `/api/stack/switch` | POST | open | `{ stack }` → request a switch to `ollama`, `mlx` or `omlx`; sends a Telegram confirmation link (`202` pending confirmation, `400` unknown stack, `409` refused — already active, another switch pending, a switch already in progress, a benchmark or a reindex running, or Telegram not configured, `502` if the Telegram send fails) |
+| `/api/stack/confirm` | GET | open | `?token=` from the Telegram link; starts `scripts/switch-stack.sh <target>` (`200` html page, `410` if the token expired or was already used) |
+| `/api/stack/status` | GET | open | Active stack, whether Telegram is configured, any pending switch, and switch progress |
+
+These three routes are `open` because approval comes from the one-time Telegram link, not from the bearer token — the link itself is the credential.
 
 </details>
 
@@ -628,14 +660,15 @@ Everything works with defaults. `scripts/switch-stack.sh` and `npm run dev` set 
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_PROVIDER` | `ollama` | Active stack: `ollama` or `mlx` |
+| `LLM_PROVIDER` | `ollama` | Active stack: `ollama`, `mlx` or `omlx` |
 | `PORT` | `3000` | HTTP port |
 | `HTTPS_PORT` | `3443` | HTTPS port (used when `certs/key.pem` and `certs/cert.pem` exist) |
 | `HOST` | `0.0.0.0` | Bind address |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama stack endpoint |
 | `MLX_CHAT_URL` | `http://localhost:8080` | MLX chat server |
 | `MLX_EMBED_URL` | `http://localhost:8081` | MLX embedding server |
-| `MLX_PYTHON` | `python3` | Python used to create `python/mlx-venv` |
+| `OMLX_URL` | `http://localhost:8090` | oMLX server (chat and embeddings) |
+| `MLX_PYTHON` | `python3` | Python used to create `python/mlx-venv` and `python/omlx-venv` |
 | `CHROMADB_URL` | `http://localhost:8100` | ChromaDB server |
 | `N8N_WEBHOOK_URL` | *(none)* | n8n webhook for gap auto-fill |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt URI |
@@ -664,10 +697,10 @@ Tokens live in `data/run/` at mode 600 and are passed through the environment on
 PharmaCyberLLM/
 ├── src/
 │   ├── server.ts               # Express + HTTPS, auth middleware, index checks, news agent schedule
-│   ├── config/llm-stacks.ts    # Ollama and MLX stack definitions
-│   ├── api/                    # auth, chat, knowledge, agent, feedback, dashboard, graph, bench, llm, v1
+│   ├── config/llm-stacks.ts    # Ollama, MLX and oMLX stack definitions
+│   ├── api/                    # auth, chat, knowledge, agent, feedback, dashboard, graph, bench, llm, v1, stack
 │   ├── services/
-│   │   ├── llm-client.ts       # One OpenAI-compatible client for both stacks
+│   │   ├── llm-client.ts       # One OpenAI-compatible client for all three stacks
 │   │   ├── model-gateway.ts    # /v1 body building and forwarding
 │   │   ├── index-guard.ts      # Refuses search on mismatched indexes
 │   │   ├── reindex.ts          # Rebuilds the active stack's indexes
@@ -680,6 +713,9 @@ PharmaCyberLLM/
 │   │   ├── graph-store.ts      # Neo4j queries and entity writes
 │   │   ├── gap-detector.ts     # Confidence check, cooldown, n8n webhook
 │   │   ├── news-agent.ts       # 188-topic Google News agent
+│   │   ├── stack-switch.ts     # Pending-switch state machine (confirm tokens, refusal reasons)
+│   │   ├── telegram-notify.ts  # Sends the confirmation link and the completion message
+│   │   ├── switch-labels.ts    # Switch-status text ("OMLX stack ready (96 s)"), synced with public/app.js
 │   │   └── ...                 # feedback, request log, response cache, web search, file parser
 │   └── utils/
 ├── mcp/                        # pharmallm-mcp: 16 MCP tools over Streamable HTTP
@@ -688,7 +724,7 @@ PharmaCyberLLM/
 │   └── __tests__/              # against a fake PharmaLLM server
 ├── hermes/                     # Telegram assistant: config template, SOUL.md, cron jobs, plist template
 ├── scripts/
-│   ├── switch-stack.sh         # prepare | ollama | mlx | status | token | mcp-token | mcp | ollama-ctx
+│   ├── switch-stack.sh         # prepare | ollama | mlx | omlx | status | token | telegram | mcp-token | mcp | ollama-ctx
 │   ├── start-services.sh       # npm run dev: ChromaDB + active stack + dev server
 │   ├── run-mcp.sh              # launchd entry point for pharmallm-mcp
 │   ├── hermes-setup.sh         # check | install-config | install-services | install-cron | all
@@ -721,7 +757,7 @@ PharmaCyberLLM/
 Tests run against fakes. None of them reaches a real model server, ChromaDB, the live app, Docker, launchd or Telegram.
 
 ```bash
-npm run test                 # Jest: 22 suites, 173 tests
+npm run test                 # Jest: 28 suites, 286 tests
 npm --prefix mcp test        # Jest: 7 suites, 64 tests
 npm run typecheck            # tsc --noEmit (strict mode)
 npm run typecheck:tests      # type-check the test suites

@@ -1,6 +1,15 @@
 // Stack definitions for the Ollama / MLX switch. Exactly one stack is active per process.
 
-export type StackName = "ollama" | "mlx";
+export type StackName = "ollama" | "mlx" | "omlx";
+
+// Single source of truth for the set of stack names: everything that needs to enumerate or
+// validate stacks (the router, the state machine, progress parsing) imports this rather than
+// keeping its own copy, so a fourth stack needs one edit instead of several.
+export const STACK_NAMES: readonly StackName[] = ["ollama", "mlx", "omlx"];
+
+export function isStackName(value: unknown): value is StackName {
+  return typeof value === "string" && (STACK_NAMES as readonly string[]).includes(value);
+}
 
 export interface StackConfig {
   name: StackName;
@@ -11,6 +20,11 @@ export interface StackConfig {
   embeddingDim: number;
   chromaCollection: string;
   indexFile: string;
+  // The identity stamped into (and expected from) the index this stack reads and writes. Usually
+  // the stack's own name and embedding model, but stacks that share an index must agree on both or
+  // the index guard would invalidate it — and a rebuild deletes the live ChromaDB collection.
+  indexStack: string;
+  indexEmbeddingModel: string;
   // Extra request fields that keep both stacks comparable (thinking disabled)
   chatExtraBody: Record<string, unknown>;
 }
@@ -30,6 +44,8 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       embeddingDim: EMBEDDING_DIM,
       chromaCollection: "knowledge_base_ollama",
       indexFile: ".index.ollama.json",
+      indexStack: "ollama",
+      indexEmbeddingModel: "qwen3-embedding:0.6b-q8_0",
       chatExtraBody: { reasoning_effort: "none" },
     },
     mlx: {
@@ -41,6 +57,28 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       embeddingDim: EMBEDDING_DIM,
       chromaCollection: "knowledge_base_mlx",
       indexFile: ".index.mlx.json",
+      indexStack: "mlx",
+      indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
+      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
+    },
+    // oMLX serves chat and embeddings from one process; its embeddings are identical to the MLX
+    // server's (cosine 1.000000, see the verification doc), so it shares the MLX index
+    omlx: {
+      name: "omlx",
+      chatBaseUrl: env.OMLX_URL ?? "http://localhost:8090",
+      embedBaseUrl: env.OMLX_URL ?? "http://localhost:8090",
+      chatModel: "mlx-community--Qwen3.8-27B-4bit",
+      embeddingModel: "mlx-community--Qwen3-Embedding-0.6B-8bit",
+      embeddingDim: EMBEDDING_DIM,
+      chromaCollection: "knowledge_base_mlx",
+      indexFile: ".index.mlx.json",
+      // Deliberately the MLX stack's identity, not omlx's: oMLX serves the very same embedding
+      // model under a different discovery id (double dashes instead of a slash) and produces
+      // interchangeable vectors (cosine 1.000000, verified). Stamping "omlx" here would make the
+      // index guard reject the shared index on every mlx<->omlx switch, and the rebuild branch
+      // deletes the collection and re-embeds the whole knowledge base.
+      indexStack: "mlx",
+      indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
       chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
   };
@@ -48,8 +86,8 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
 
 export function getActiveStack(env: NodeJS.ProcessEnv = process.env): StackConfig {
   const name = env.LLM_PROVIDER ?? "ollama";
-  if (name !== "ollama" && name !== "mlx") {
-    throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama" or "mlx")`);
+  if (name !== "ollama" && name !== "mlx" && name !== "omlx") {
+    throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama", "mlx" or "omlx")`);
   }
   return buildStacks(env)[name];
 }

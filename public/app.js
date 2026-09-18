@@ -3,6 +3,8 @@
 const chatContainer = document.getElementById("chat-container");
 const userInput = document.getElementById("user-input");
 const sendBtn = document.getElementById("send-btn");
+const stackSelect = document.getElementById("stack-select");
+const stackStatusEl = document.getElementById("stack-status");
 const modelSelect = document.getElementById("model-select");
 const fileUpload = document.getElementById("file-upload");
 const statusEl = document.getElementById("status");
@@ -708,6 +710,189 @@ if (canRecord) {
   // No MediaRecorder support — keep button hidden
   console.log("[Voice] MediaRecorder not available");
 }
+
+// Stack switching: the request needs a Telegram confirmation, so the UI waits and then follows the
+// switch it asked for, counting down the confirmation window and reverting if it expires unused.
+const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX" };
+let stackPollTimer = null;
+let lastKnownActive = null;
+let watching = false; // true while this browser is following the switch it asked for
+let watchBaselineStartedAt = null; // progress.startedAt the server reported when we asked (null: none)
+let lastSeenStartedAt = null; // progress.startedAt from the most recent /api/stack/status
+let watchExpiresAt = null; // expires_at from the 202 body of that request
+const CONFIRM_GRACE_MS = 15000; // the script writes its first phase within a second of the tap
+
+// Decides whether a progress record is the switch this browser asked for. Both values come from
+// the server (startedAt is stamped on the Mac), so the iPad's clock never enters the comparison:
+// comparing the Mac's timestamp against the browser's Date.now() made a switch that had actually
+// succeeded look foreign whenever the iPad's clock led the Mac's, and the UI reported it expired.
+function isOurSwitchProgress(progress, baselineStartedAt) {
+  if (!progress) return false;
+  return progress.startedAt !== baselineStartedAt;
+}
+
+// Same wording as src/services/switch-labels.ts. The browser cannot import TypeScript, so this is a
+// deliberate second copy; __tests__/switch-labels.test.ts pins the wording both must produce
+function formatCountdown(msRemaining) {
+  const totalSeconds = Math.max(0, Math.floor(msRemaining / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+// Same wording as src/services/switch-labels.ts. The browser cannot import TypeScript, so this is a
+// deliberate second copy; __tests__/switch-labels.test.ts pins the wording both must produce
+function isStackSelectDisabled(status, busy) {
+  return busy || Boolean(status.pending) || !status.telegram_configured;
+}
+
+function describeStackStatus(status) {
+  if (status.pending) return `Confirm the switch to ${status.pending.target.toUpperCase()} in Telegram`;
+  const p = status.progress;
+  if (p && p.phase === "failed") return `Switch to ${p.target.toUpperCase()} failed: ${p.error || "unknown error"}`;
+  if (p && p.phase === "ready" && p.finishedAt) {
+    return `${p.target.toUpperCase()} stack ready (${Math.round((p.finishedAt - p.startedAt) / 1000)} s)`;
+  }
+  const text = { confirmed: "starting", stopping: "stopping the current stack", starting: "starting the server",
+                 warming: "warming up the model", indexing: "checking the indexes" };
+  if (p && text[p.phase]) return `Switching to ${p.target.toUpperCase()}: ${text[p.phase]}`;
+  return `${status.active.toUpperCase()} stack active`;
+}
+
+// Writes the switch status into its own persistent element (#stack-status), not the transient
+// #status toast, which erases itself after 5 seconds and would never show a completed switch.
+function renderStackStatus(status) {
+  const options = (status.stacks || ["ollama", "mlx", "omlx"])
+    .map((name) => {
+      const selected = (status.pending ? status.pending.target : status.active) === name ? " selected" : "";
+      return `<option value="${name}"${selected}>${STACK_LABELS[name] || name}</option>`;
+    })
+    .join("");
+  if (stackSelect.innerHTML !== options) stackSelect.innerHTML = options;
+  stackSelect.title = status.telegram_configured
+    ? "LLM stack (deployment environment)"
+    : "Telegram confirmation not configured - run scripts/switch-stack.sh telegram";
+
+  // Remembered for the next request: whatever is on the server now is what "not ours yet" means.
+  lastSeenStartedAt = status.progress ? status.progress.startedAt : null;
+
+  // A progress entry counts as "ours" once it differs from the one the server had when this browser
+  // posted its request; right after the Telegram tap, pending is already cleared but progress here
+  // still holds the PREVIOUS switch's terminal state, so following pending alone would stop
+  // tracking too early.
+  const oursHasAppeared = watching && isOurSwitchProgress(status.progress, watchBaselineStartedAt);
+  let label, cls, busy;
+
+  if (watching && !oursHasAppeared) {
+    if (Date.now() < watchExpiresAt + CONFIRM_GRACE_MS) {
+      label = `${describeStackStatus(status)} (${formatCountdown(watchExpiresAt - Date.now())} left)`;
+      cls = "busy";
+      busy = true;
+    } else {
+      watching = false;
+      watchExpiresAt = null;
+      label = "Switch request expired";
+      cls = "error";
+      busy = false;
+      stackSelect.value = status.active;
+    }
+  } else if (oursHasAppeared) {
+    const phase = status.progress.phase;
+    busy = phase !== "ready" && phase !== "failed";
+    if (!busy) {
+      watching = false;
+      watchExpiresAt = null;
+    }
+    label = describeStackStatus(status);
+    cls = phase === "ready" ? "ready" : phase === "failed" ? "error" : "busy";
+  } else {
+    // Not watching: page load, or another browser's switch
+    const phase = status.progress && status.progress.phase;
+    busy = Boolean(status.pending) || (phase && phase !== "ready" && phase !== "failed");
+    label = describeStackStatus(status);
+    cls = phase === "failed" ? "error" : phase === "ready" ? "ready" : busy ? "busy" : "";
+  }
+
+  // F1: computed from `busy`, not just `status.pending` — `pending` clears the instant the
+  // Telegram link is tapped, so a gate keyed on it alone went live again while the switch script
+  // was still stopping/starting model servers, letting a second switch be requested mid-run.
+  stackSelect.disabled = isStackSelectDisabled(status, busy);
+
+  stackStatusEl.textContent = label;
+  stackStatusEl.className = cls ? `stack-status ${cls}` : "stack-status";
+
+  if (status.active !== lastKnownActive) {
+    lastKnownActive = status.active;
+    loadModels();
+  }
+  return busy;
+}
+
+async function pollStackStatus() {
+  try {
+    const res = await fetch("/api/stack/status");
+    if (!res.ok) return true;
+    return renderStackStatus(await res.json());
+  } catch {
+    // F3 (deliberate deviation from amendment A): written to #stack-status, not setStatus.
+    // setStatus erases itself after 5s, but the app can be down for a minute or more while it
+    // restarts on the new stack — a toast would vanish long before the app comes back, leaving
+    // no indication anything is still happening. Keep polling rather than reporting an error.
+    stackStatusEl.textContent = "Switching stack: waiting for PharmaLLM to come back";
+    stackStatusEl.className = "stack-status busy";
+    return true;
+  }
+}
+
+function watchStackSwitch() {
+  if (stackPollTimer) return;
+  stackPollTimer = setInterval(async () => {
+    const busy = await pollStackStatus();
+    if (!busy) {
+      clearInterval(stackPollTimer);
+      stackPollTimer = null;
+    }
+  }, 3000);
+}
+
+stackSelect.addEventListener("change", async () => {
+  const target = stackSelect.value;
+  const previousValue = lastKnownActive;
+  stackSelect.disabled = true;
+  // Captured before the POST: the server can write the first progress phase before the response
+  // resolves, and "ours" is decided by comparing against the progress record that was on the
+  // server at this moment, not against any browser-side clock reading.
+  watchBaselineStartedAt = lastSeenStartedAt;
+  watching = true;
+  try {
+    const res = await fetch("/api/stack/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stack: target }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      watching = false;
+      watchExpiresAt = null;
+      if (previousValue) stackSelect.value = previousValue;
+      setStatus(data.error || "Stack switch refused", "error");
+      await pollStackStatus();
+      return;
+    }
+    watchExpiresAt = data.expires_at;
+    watchStackSwitch();
+    await pollStackStatus();
+  } catch {
+    watching = false;
+    watchExpiresAt = null;
+    if (previousValue) stackSelect.value = previousValue;
+    setStatus("Could not reach PharmaLLM", "error");
+  }
+});
+
+pollStackStatus().then((busy) => {
+  if (busy) watchStackSwitch();
+});
 
 // Init
 loadModels();

@@ -49,6 +49,12 @@ describe("isProtectedRequest", () => {
     expect(isProtectedRequest("GET", "/Api/Knowledge/Gaps/")).toBe(true);
     expect(isProtectedRequest("GET", "/API/health")).toBe(false); // allowlisted route in another case
   });
+
+  it("keeps the stack switch routes open for the browser UI", () => {
+    expect(isProtectedRequest("POST", "/api/stack/switch")).toBe(false);
+    expect(isProtectedRequest("GET", "/api/stack/confirm")).toBe(false);
+    expect(isProtectedRequest("GET", "/api/stack/status")).toBe(false);
+  });
 });
 
 describe("authorizeRequest", () => {

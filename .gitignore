@@ -12,3 +12,5 @@ __pycache__/
 .chromadb-data/
 knowledge/.index.*.json
 python/mlx-venv/
+python/omlx-src/
+python/omlx-venv/

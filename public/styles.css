@@ -96,6 +96,24 @@ body {
   cursor: pointer;
 }
 
+.stack-status {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.stack-status.busy {
+  color: var(--primary);
+}
+
+.stack-status.error {
+  color: var(--error);
+}
+
+.stack-status.ready {
+  color: var(--accent);
+}
+
 /* Chat */
 .chat-container {
   flex: 1;

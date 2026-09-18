@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { parseSseLines } from "../src/services/llm-client.js";
 import type { ChatTimings } from "../src/services/bench-mode.js";
@@ -63,20 +64,36 @@ function run(command: string, args: string[]): string {
 }
 
 // Stack processes: Ollama 0.34 runs models in lib/ollama/llama-server children (older versions: "ollama runner");
-// MLX runs two Python servers
-function stackPatterns(stack: string): string[] {
-  return stack === "mlx"
-    ? ["mlx_lm.server", "mlx-embed-server.py"]
-    : ["ollama serve", "lib/ollama/llama-server", "ollama runner"];
+// MLX runs two Python servers; oMLX runs a single server process ("omlx-server", verified with ps during the
+// spike; "omlx serve" is also accepted in case the process title differs across versions)
+export function stackPatterns(stack: string): string[] {
+  switch (stack) {
+    case "mlx":
+      return ["mlx_lm.server", "mlx-embed-server.py"];
+    case "omlx":
+      return ["omlx-server", "omlx serve"];
+    default:
+      return ["ollama serve", "lib/ollama/llama-server", "ollama runner"];
+  }
+}
+
+// Collect PIDs across all of a stack's process patterns, deduplicated: one process can match more
+// than one pattern (e.g. omlx's "omlx-server" and "omlx serve" for the same server), and summing
+// `ps rss` per pattern without deduplicating would double-count it.
+export function collectPids(patterns: string[], pgrep: (pattern: string) => string = (pattern) => run("pgrep", ["-f", pattern])): Set<string> {
+  const pids = new Set<string>();
+  for (const pattern of patterns) {
+    for (const pid of pgrep(pattern).split("\n").filter((pid) => /^\d+$/.test(pid))) {
+      pids.add(pid);
+    }
+  }
+  return pids;
 }
 
 function sampleMemory(stack: string): MemoryPeak {
   let processKb = 0;
-  for (const pattern of stackPatterns(stack)) {
-    const pids = run("pgrep", ["-f", pattern]).split("\n").filter((pid) => /^\d+$/.test(pid));
-    for (const pid of pids) {
-      processKb += Number(run("ps", ["-o", "rss=", "-p", pid])) || 0;
-    }
+  for (const pid of collectPids(stackPatterns(stack))) {
+    processKb += Number(run("ps", ["-o", "rss=", "-p", pid])) || 0;
   }
 
   const vm = run("vm_stat", []);
@@ -184,12 +201,15 @@ async function main(): Promise<void> {
     macos: run("sw_vers", ["-productVersion"]),
     chip: run("sysctl", ["-n", "machdep.cpu.brand_string"]),
     thermal: run("pmset", ["-g", "therm"]),
-    stackVersion: stack === "mlx"
-      ? run(join(process.cwd(), "python", "mlx-venv", "bin", "python"), [
-          "-c",
-          "import importlib.metadata as m; print('mlx', m.version('mlx'), 'mlx-lm', m.version('mlx-lm'))",
-        ])
-      : run("ollama", ["--version"]),
+    stackVersion:
+      stack === "mlx"
+        ? run(join(process.cwd(), "python", "mlx-venv", "bin", "python"), [
+            "-c",
+            "import importlib.metadata as m; print('mlx', m.version('mlx'), 'mlx-lm', m.version('mlx-lm'))",
+          ])
+        : stack === "omlx"
+          ? run(join(process.cwd(), "python", "omlx-venv", "bin", "omlx"), ["--version"])
+          : run("ollama", ["--version"]),
     chatModel: models.chatModel,
     embeddingModel: models.embeddingModel,
   };
@@ -248,7 +268,13 @@ async function main(): Promise<void> {
   console.log(`Saved ${path}`);
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+// Only run when executed as a script (npx tsx scripts/benchmark-stack.ts), not when imported
+// (e.g. by a test importing stackPatterns) — otherwise importing this module would fire real
+// requests against a running app. pathToFileURL (rather than a manual `file://` template) also
+// works correctly behind a symlinked path.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("Fatal:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

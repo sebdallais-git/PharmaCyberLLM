@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Switch PharmaLLM between the Ollama and MLX stacks. Only one stack runs at a time.
 # Usage:
-#   scripts/switch-stack.sh ollama|mlx               stop the other stack, start this one, restart the app
+#   scripts/switch-stack.sh ollama|mlx|omlx          stop the other stacks, start this one, restart the app
 #   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
+#   scripts/switch-stack.sh telegram                 store the Telegram credentials used to confirm UI switches
 #   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
 #   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmallm-mcp
 #   scripts/switch-stack.sh mcp start|stop|status    control the pharmallm-mcp launchd service
@@ -21,6 +22,10 @@ source "$SCRIPT_DIR/lib/services.sh"
 RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
 TOKEN_FILE="$RUN_DIR/api-token"
 MCP_TOKEN_FILE="$RUN_DIR/mcp-token"
+SWITCH_FILE="$RUN_DIR/stack-switch.json"
+TELEGRAM_BOT_TOKEN_FILE="$RUN_DIR/telegram-bot-token"
+TELEGRAM_CHAT_ID_FILE="$RUN_DIR/telegram-chat-id"
+PUBLIC_URL_FILE="$RUN_DIR/public-url"
 MCP_LABEL="com.pharmallm.mcp"
 MCP_PLIST="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$MCP_LABEL.plist"
 MCP_PORT="3200"
@@ -41,11 +46,25 @@ OLLAMA_CHAT_MODEL="qwen3.8-pharma"
 OLLAMA_EMBED_MODEL="qwen3-embedding:0.6b-q8_0"
 MLX_CHAT_MODEL="mlx-community/Qwen3.8-27B-4bit"
 MLX_EMBED_MODEL="mlx-community/Qwen3-Embedding-0.6B-8bit"
+OMLX_CHAT_MODEL="mlx-community--Qwen3.8-27B-4bit"
+OMLX_EMBED_MODEL="mlx-community--Qwen3-Embedding-0.6B-8bit"
 OLLAMA_MODELFILE="$PROJECT_DIR/ollama/qwen3.8-pharma.Modelfile"
 # Caps how much memory mlx_lm.server spends on cached prompts (several 64k agent prompts would otherwise pile up)
 MLX_PROMPT_CACHE_BYTES="${MLX_PROMPT_CACHE_BYTES:-8589934592}"
 
+OMLX_VENV="$PROJECT_DIR/python/omlx-venv"
+OMLX_PORT="8090"
+# Pinned to the commit verified in docs/superpowers/plans/2026-09-18-omlx-stack-verification.md
+OMLX_VERSION="cbc1a80"
+OMLX_REPO="https://github.com/jundot/omlx"
+# Caps the oMLX paged SSD prefix cache (unbounded, it reached 4.3 GB in two short sessions)
+OMLX_CACHE_MAX_GB="${OMLX_CACHE_MAX_GB:-20}"
+
 mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+# Single source of truth for the stack names, mirroring STACK_NAMES in src/config/llm-stacks.ts
+# (__tests__/switch-stack-config.test.ts fails if the two lists drift apart).
+STACK_NAMES=(ollama mlx omlx)
 
 active_stack() {
   cat "$RUN_DIR/active-stack" 2>/dev/null || echo "ollama"
@@ -53,13 +72,9 @@ active_stack() {
 
 validate_stack() {
   case "$1" in
-    ollama|mlx) ;;
-    *) log "Unknown stack '$1' (expected ollama or mlx)"; exit 1 ;;
+    ollama|mlx|omlx) ;;
+    *) log "Unknown stack '$1' (expected ollama, mlx or omlx)"; return 1 ;;
   esac
-}
-
-other_stack() {
-  if [ "$1" = "mlx" ]; then echo "ollama"; else echo "mlx"; fi
 }
 
 # --- Model availability (checked on disk, so no server needs to run) ---------
@@ -82,6 +97,9 @@ models_ready() {
       ;;
     mlx)
       [ -x "$MLX_VENV/bin/mlx_lm.server" ] && hf_snapshot_present "$MLX_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
+      ;;
+    omlx)
+      [ -x "$OMLX_VENV/bin/omlx" ] && hf_snapshot_present "$MLX_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
       ;;
   esac
 }
@@ -159,12 +177,50 @@ start_mlx() {
   wait_http "http://localhost:$MLX_EMBED_PORT/v1/models" 180 || { log "MLX embedding server did not become ready"; return 1; }
 }
 
+stop_omlx() {
+  stop_pidfile omlx "$OMLX_PORT" ignore-foreign
+}
+
+start_omlx() {
+  if port_open "$OMLX_PORT"; then
+    project_listener_open "$OMLX_PORT" \
+      || { log "Port $OMLX_PORT is used by another program — cannot start oMLX"; return 1; }
+  else
+    nohup "$OMLX_VENV/bin/omlx" serve --host 127.0.0.1 --port "$OMLX_PORT" \
+      --model-dir "$HF_CACHE" --paged-ssd-cache-max-size "${OMLX_CACHE_MAX_GB}GB" \
+      >"$LOG_DIR/omlx.log" 2>&1 &
+    echo $! >"$RUN_DIR/omlx.pid"
+  fi
+  wait_http "http://localhost:$OMLX_PORT/v1/models" 180 || { log "oMLX did not become ready"; return 1; }
+}
+
+# The omlx stack shares the MLX index: serving it with drifted embeddings would silently poison retrieval
+check_embedding_parity() {
+  local out
+  if out="$("$MLX_PYTHON" "$PROJECT_DIR/scripts/lib/embedding-parity.py" \
+      "http://localhost:$OMLX_PORT" "$OMLX_EMBED_MODEL" \
+      "$PROJECT_DIR/__tests__/fixtures/embedding-reference.json" 2>&1)"; then
+    log "Embedding parity ok (${out})"
+    return 0
+  fi
+  log "Embedding parity check failed: $out"
+  return 1
+}
+
 start_stack() {
-  if [ "$1" = "mlx" ]; then start_mlx; else start_ollama && ensure_ollama_ctx; fi
+  case "$1" in
+    mlx) start_mlx ;;
+    omlx) start_omlx && check_embedding_parity ;;
+    *) start_ollama && ensure_ollama_ctx ;;
+  esac
 }
 
 stop_stack() {
-  if [ "$1" = "mlx" ]; then stop_mlx; else stop_ollama; fi
+  case "$1" in
+    mlx) stop_mlx ;;
+    omlx) stop_omlx ;;
+    *) stop_ollama ;;
+  esac
 }
 
 # Load both models into memory so the first real request doesn't pay for it
@@ -175,6 +231,12 @@ warm_up() {
     embed_url="http://localhost:$MLX_EMBED_PORT"
     chat_model="$MLX_CHAT_MODEL"
     embed_model="$MLX_EMBED_MODEL"
+    extra='"chat_template_kwargs":{"enable_thinking":false}'
+  elif [ "$1" = "omlx" ]; then
+    chat_url="http://localhost:$OMLX_PORT"
+    embed_url="$chat_url"
+    chat_model="$OMLX_CHAT_MODEL"
+    embed_model="$OMLX_EMBED_MODEL"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
   else
     chat_url="http://localhost:$OLLAMA_PORT"
@@ -254,6 +316,93 @@ api_token() {
   fi
 }
 
+# The UI polls this file while the app is down mid-switch
+write_switch_phase() {
+  local phase="$1" error="${2:-}" target="${SWITCH_TARGET:-}" previous="${SWITCH_PREVIOUS:-}"
+  [ -n "$target" ] || return 0
+  PHASE="$phase" TARGET="$target" PREVIOUS="$previous" STARTED="${SWITCH_STARTED:-0}" ERROR="$error" \
+    python3 - "$SWITCH_FILE" <<'PY'
+import json, os, sys
+record = {"phase": os.environ["PHASE"], "target": os.environ["TARGET"],
+          "previous": os.environ["PREVIOUS"], "startedAt": int(os.environ["STARTED"])}
+if os.environ["PHASE"] in ("ready", "failed"):
+    import time
+    record["finishedAt"] = int(time.time() * 1000)
+if os.environ.get("ERROR"):
+    record["error"] = os.environ["ERROR"]
+# Write to a temp file in the same directory and atomically replace the target, so a UI poll can
+# never observe a half-written file (open()+write() in place is not atomic).
+path = sys.argv[1]
+directory = os.path.dirname(path) or "."
+tmp_path = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record, handle)
+    os.replace(tmp_path, path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+PY
+}
+
+telegram_value() {
+  local file="$RUN_DIR/telegram-$1"
+  if [ -s "$file" ]; then tr -d '[:space:]' <"$file"; fi
+}
+
+# Public URL used for the Telegram confirmation link; falls back to this Mac's hostname rather
+# than localhost, since the owner taps the link on an iPad over Tailscale, where localhost is the iPad.
+public_url() {
+  local url=""
+  [ -s "$PUBLIC_URL_FILE" ] && url="$(tr -d '[:space:]' <"$PUBLIC_URL_FILE")"
+  if [ -z "$url" ]; then
+    url="https://$(hostname -s).local:$APP_HTTPS_PORT"
+  fi
+  echo "$url"
+}
+
+# Credentials the app uses to ask for confirmation of a UI-triggered switch
+ensure_telegram() {
+  local token="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}" url="${PHARMALLM_PUBLIC_URL:-}"
+  if [ -z "$token" ] && [ -t 0 ]; then read -rs -p "Telegram bot token: " token; echo >&2; fi
+  if [ -z "$chat" ] && [ -t 0 ]; then read -r -p "Telegram chat id: " chat; fi
+  if [ -z "$url" ] && [ -t 0 ]; then
+    read -r -p "Public URL for confirmation links (e.g. https://mac-mini.example.ts.net:3443): " url
+  fi
+  [ -n "$token" ] && [ -n "$chat" ] || { log "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or run this on a terminal"; exit 1; }
+  (umask 077 && printf '%s\n' "$token" >"$TELEGRAM_BOT_TOKEN_FILE")
+  (umask 077 && printf '%s\n' "$chat" >"$TELEGRAM_CHAT_ID_FILE")
+  (umask 077 && printf '%s\n' "$url" >"$PUBLIC_URL_FILE")
+  chmod 600 "$TELEGRAM_BOT_TOKEN_FILE" "$TELEGRAM_CHAT_ID_FILE" "$PUBLIC_URL_FILE"
+  if [ -z "$url" ]; then
+    log "No public URL set; confirmation links will fall back to this Mac's hostname"
+  fi
+  log "Stored Telegram credentials in $RUN_DIR (mode 600)"
+}
+
+# Tell the user how the switch ended: the app is mid-restart and cannot send this itself
+notify_switch_result() {
+  local phase="$1" token chat text elapsed payload
+  token="$(telegram_value bot-token)"; chat="$(telegram_value chat-id)"
+  [ -n "$token" ] && [ -n "$chat" ] || return 0
+  elapsed=$(( ($(date +%s) * 1000 - ${SWITCH_STARTED:-0}) / 1000 ))
+  if [ "$phase" = "ready" ]; then
+    text="PharmaLLM: ${SWITCH_TARGET} stack is ready (${elapsed}s)."
+  else
+    text="PharmaLLM: switch to ${SWITCH_TARGET} failed after ${elapsed}s; ${SWITCH_PREVIOUS} is being restored."
+  fi
+  payload="$(TEXT="$text" CHAT="$chat" python3 -c 'import json,os;print(json.dumps({"chat_id":os.environ["CHAT"],"text":os.environ["TEXT"]}))')"
+  # The URL carries the bot token; put it in curl's stdin config instead of argv, or `ps` would
+  # show it to every process on the machine for as long as the request is in flight.
+  printf 'url = "%s"\n' "https://api.telegram.org/bot${token}/sendMessage" \
+    | curl -K - -sS -m 10 -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary "$payload" \
+    || log "Could not send the Telegram completion message"
+}
+
 # Token agents send to pharmallm-mcp (readable only by you); run-mcp.sh passes it to the service
 ensure_mcp_token() {
   if [ -s "$MCP_TOKEN_FILE" ]; then
@@ -294,7 +443,14 @@ mcp_service() {
 
 start_app() {
   cd "$PROJECT_DIR"
+  local public_url_value
+  public_url_value="$(public_url)"
+  case "$public_url_value" in
+    *localhost*|*127.0.0.1*) log "Confirmation links will only work on this Mac ($public_url_value)" ;;
+  esac
   LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
+    TELEGRAM_BOT_TOKEN="$(telegram_value bot-token)" TELEGRAM_CHAT_ID="$(telegram_value chat-id)" \
+    PHARMALLM_PUBLIC_URL="$(public_url)" \
     nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
   echo $! >"$RUN_DIR/app.pid"
 
@@ -315,30 +471,93 @@ start_app() {
 
 show_logs() {
   local file
-  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/app.log"; do
+  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do
     [ -f "$file" ] || continue
     log "--- last lines of $(basename "$file") ---"
     tail -n 15 "$file"
   done
 }
 
+# Stop every stack except the target: with three stacks "the other one" is no longer a single value
+stop_other_stacks() {
+  local target="$1" other rc=0
+  for other in "${STACK_NAMES[@]}"; do
+    [ "$other" = "$target" ] && continue
+    stop_stack "$other" || rc=$?
+  done
+  return "$rc"
+}
+
 # --- Commands ---------------------------------------------------------------------
 
 switch_to() {
-  local target="$1" previous
+  local target="$1" previous index_failed=0
   previous="$(active_stack)"
-  validate_stack "$target"
-  models_ready "$target" || { log "Models for $target are missing. Run: scripts/switch-stack.sh prepare"; exit 1; }
-  ensure_chromadb
+  # Set before any pre-flight check so a failure in one of them can still be recorded and
+  # notified: without this, a bad stack name or missing models/ChromaDB left the previous
+  # switch's terminal state on disk with no "failed" entry, and the UI polled it forever.
+  SWITCH_TARGET="$target"; SWITCH_PREVIOUS="$previous"; SWITCH_STARTED="$(($(date +%s) * 1000))"
+  write_switch_phase confirmed
+
+  # Tolerant like the rollback path below (stop_app || true): under set -e a bare failing check
+  # here would exit before the failed phase/notification are ever written, and the UI would poll
+  # "confirmed" forever. Record the specific failure and tell the user instead of going silent.
+  if ! validate_stack "$target"; then
+    write_switch_phase failed "unknown stack '$target'"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! models_ready "$target"; then
+    write_switch_phase failed "models for $target are missing (run scripts/switch-stack.sh prepare)"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! ensure_chromadb; then
+    write_switch_phase failed "could not start ChromaDB"
+    notify_switch_result failed
+    exit 1
+  fi
 
   log "Switching: $previous -> $target"
-  stop_app
-  stop_stack "$(other_stack "$target")"
+  write_switch_phase stopping
+  # Tolerant like the rollback path below (stop_app || true): under set -e a bare failing stop here
+  # would exit before the failed phase/notification are ever written, and the UI would poll
+  # "stopping" forever. Record the specific failure and tell the user instead of going silent.
+  if ! stop_app; then
+    write_switch_phase failed "could not stop the current app"
+    notify_switch_result failed
+    exit 1
+  fi
+  if ! stop_other_stacks "$target"; then
+    write_switch_phase failed "could not stop the other stacks"
+    notify_switch_result failed
+    exit 1
+  fi
 
-  if start_stack "$target" && warm_up "$target" && ensure_index "$target" && start_app "$target"; then
-    echo "$target" >"$RUN_DIR/active-stack"
-    log "Active stack: $target"
-    return 0
+  write_switch_phase starting
+  if start_stack "$target"; then
+    write_switch_phase warming
+    if warm_up "$target"; then
+      write_switch_phase indexing
+      # Guarded separately from start_app, in the same style as the pre-flight checks above: the
+      # catch-all below blames the stack ("did not come up"), which is a lie when the stack started
+      # fine and it was the index check or rebuild that failed.
+      if ! ensure_index "$target"; then
+        write_switch_phase failed "could not prepare the indexes for $target"
+        notify_switch_result failed
+        index_failed=1
+      elif start_app "$target"; then
+        echo "$target" >"$RUN_DIR/active-stack"
+        write_switch_phase ready
+        notify_switch_result ready
+        log "Active stack: $target"
+        return 0
+      fi
+    fi
+  fi
+  if [ "$index_failed" -eq 0 ]; then
+    write_switch_phase failed "$target did not come up"
+    notify_switch_result failed
   fi
 
   show_logs
@@ -362,7 +581,7 @@ ensure_stack() {
   local target="$1"
   validate_stack "$target"
   models_ready "$target" || { log "Models for $target are missing. Run: scripts/switch-stack.sh prepare"; exit 1; }
-  stop_stack "$(other_stack "$target")"
+  stop_other_stacks "$target"
   if ! { start_stack "$target" && warm_up "$target" && ensure_index "$target"; }; then
     show_logs
     exit 1
@@ -376,8 +595,8 @@ prepare() {
   log "Preparing both stacks (about 33 GB of downloads on the first run)"
   stop_app
 
-  # Ollama models: pulling needs the Ollama service, so MLX must be down first
-  stop_mlx
+  # Ollama models: pulling needs the Ollama service, so every other stack must be down first
+  stop_other_stacks ollama
   start_ollama
   ollama pull "$OLLAMA_BASE_MODEL"
   ollama pull "$OLLAMA_EMBED_MODEL"
@@ -388,6 +607,16 @@ prepare() {
   "$MLX_VENV/bin/pip" install -q -r "$PROJECT_DIR/python/mlx-requirements.txt"
   "$MLX_VENV/bin/python" -c "from huggingface_hub import snapshot_download as d; d('$MLX_CHAT_MODEL'); d('$MLX_EMBED_MODEL')"
 
+  # oMLX venv: pinned, models come from the same Hugging Face cache
+  if [ ! -x "$OMLX_VENV/bin/omlx" ]; then
+    log "Installing oMLX $OMLX_VERSION into $OMLX_VENV"
+    rm -rf "$PROJECT_DIR/python/omlx-src"
+    git clone "$OMLX_REPO" "$PROJECT_DIR/python/omlx-src"
+    (cd "$PROJECT_DIR/python/omlx-src" && git checkout -q "$OMLX_VERSION")
+    "$MLX_PYTHON" -m venv "$OMLX_VENV"
+    "$OMLX_VENV/bin/pip" install -q -e "$PROJECT_DIR/python/omlx-src"
+  fi
+
   log "Models ready. Restoring the $previous stack..."
   switch_to "$previous"
 }
@@ -395,30 +624,32 @@ prepare() {
 status() {
   log "Active stack: $(active_stack)"
   local entry name port stack
-  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "chromadb:$CHROMA_PORT"; do
+  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "omlx:$OMLX_PORT" "chromadb:$CHROMA_PORT"; do
     name="${entry%%:*}"
     port="${entry#*:}"
     if port_open "$port"; then log "  $name (:$port) up"; else log "  $name (:$port) down"; fi
   done
+  [ -d "$HOME/.omlx" ] && log "  omlx SSD cache: $(du -sh "$HOME/.omlx" 2>/dev/null | cut -f1)"
   local parallel
   parallel="$(launchctl getenv OLLAMA_NUM_PARALLEL 2>/dev/null || true)"
   log "  OLLAMA_NUM_PARALLEL: ${parallel:-not set in launchd (keep it at 1: each parallel slot allocates its own 64k context)}"
   if port_open "$OLLAMA_PORT"; then ollama ps || true; fi
   if curl -sf "${CHROMA_URL}/api/v2/heartbeat" >/dev/null 2>&1; then
-    for stack in ollama mlx; do
+    for stack in "${STACK_NAMES[@]}"; do
       (cd "$PROJECT_DIR" && LLM_PROVIDER="$stack" npx tsx scripts/reindex-stack.ts --status) || true
     done
   fi
 }
 
 case "${1:-}" in
-  ollama|mlx) switch_to "$1" ;;
+  ollama|mlx|omlx) switch_to "$1" ;;
   ensure-stack) ensure_stack "${2:-}" ;;
   prepare) prepare ;;
   status) status ;;
   token) ensure_token ;;
+  telegram) ensure_telegram ;;
   ollama-ctx) ensure_ollama_ctx ;;
   mcp-token) ensure_mcp_token ;;
   mcp) mcp_service "${2:-}" ;;
-  *) sed -n '2,11p' "$0"; exit 1 ;;
+  *) sed -n '2,12p' "$0"; exit 1 ;;
 esac
