@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import socketserver
 import sys
 import tempfile
 import threading
@@ -13,6 +14,16 @@ from unittest import mock
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins" / "pharmallm-switch"
 TOKEN = "0123456789abcdef0123456789abcdef"
+
+
+class _LocalHTTPServer(HTTPServer):
+    """HTTPServer.server_bind() calls socket.getfqdn(), a reverse-DNS lookup that can stall for tens of
+    seconds in a sandboxed environment. The test never needs a real hostname, so skip it."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
 
 
 def load_plugin():
@@ -88,7 +99,7 @@ class PostJsonTest(unittest.TestCase):
             def log_message(self, *args):
                 pass
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _LocalHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.env = {"PHARMALLM_URL": f"http://127.0.0.1:{self.server.server_port}/",
                     "PHARMALLM_API_TOKEN": "api-secret"}

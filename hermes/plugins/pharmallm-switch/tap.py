@@ -61,7 +61,8 @@ def post_json(url: str, body: dict, token: str, timeout: float = 10.0) -> AppRep
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return AppReply(response.status, _json(response.read()))
     except urllib.error.HTTPError as err:
-        return AppReply(err.code, _json(err.read()))
+        with err:
+            return AppReply(err.code, _json(err.read()))
     except (urllib.error.URLError, OSError) as err:
         return AppReply(0, {}, type(err).__name__)
 
