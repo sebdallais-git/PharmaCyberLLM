@@ -1,0 +1,4 @@
+name: pharmallm-switch
+version: 1.0.0
+description: "Confirms or cancels a PharmaLLM stack switch from the Telegram buttons the app sends."
+author: PharmaLLM
