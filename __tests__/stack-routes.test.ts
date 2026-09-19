@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "@jest/globals";
 import express from "express";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createStackRouter } from "../src/api/stack.js";
+import { createStackRouter, newSwitchToken } from "../src/api/stack.js";
 import { createStackSwitch } from "../src/services/stack-switch.js";
 import type { StackName } from "../src/config/llm-stacks.js";
 import type { SwitchProgress } from "../src/services/stack-switch.js";
@@ -349,5 +349,18 @@ describe("GET /api/stack/status", () => {
 
     expect(body.hermes_ready).toBe(false);
     expect(body.hermes_reason).toBe("the Hermes gateway is not running");
+  });
+});
+
+describe("newSwitchToken", () => {
+  // The Hermes plugin only claims taps matching ^pls:(ok|no):[0-9a-f]{32}$, and Telegram caps
+  // callback_data at 64 bytes: a token outside either contract makes the buttons dead.
+  it("makes tokens the plugin's pattern accepts and that fit Telegram's callback data", () => {
+    const tokens = Array.from({ length: 50 }, () => newSwitchToken());
+    for (const token of tokens) {
+      expect(token).toMatch(/^[0-9a-f]{32}$/);
+      expect(Buffer.byteLength(`pls:ok:${token}`, "utf8")).toBeLessThanOrEqual(64);
+    }
+    expect(new Set(tokens).size).toBe(tokens.length);
   });
 });

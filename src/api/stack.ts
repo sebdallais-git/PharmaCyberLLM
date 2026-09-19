@@ -142,13 +142,19 @@ function readProgressFile(): SwitchProgress | null {
   }
 }
 
+// 32 lowercase hex chars: the Hermes plugin only claims taps matching ^pls:(ok|no):[0-9a-f]{32}$, and
+// "pls:ok:<token>" must fit Telegram's 64-byte callback_data limit
+export function newSwitchToken(): string {
+  return randomUUID().replace(/-/g, "");
+}
+
 const telegramConfig = readTelegramConfig();
 
 export default createStackRouter({
   switcher: createStackSwitch({
     now: () => Date.now(),
     newId: () => randomUUID(),
-    newToken: () => randomUUID().replace(/-/g, ""),
+    newToken: newSwitchToken,
     activeStack: () => getActiveStack().name,
     isBenchmarkActive: () => isBenchmarkActive(),
     runningJobs: () => getRunningJobs(),
