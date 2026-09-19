@@ -14,3 +14,7 @@ knowledge/.index.*.json
 python/mlx-venv/
 python/omlx-src/
 python/omlx-venv/
+
+# Local agent workspaces
+.worktrees/
+.superpowers/
