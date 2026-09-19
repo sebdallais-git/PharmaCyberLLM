@@ -1,5 +1,5 @@
 // Outbound-only Telegram messages. The app never polls for updates: Hermes' gateway is the single
-// allowed consumer of that bot's getUpdates stream.
+// allowed consumer of that bot's getUpdates stream, so button taps are Hermes' to receive (pharmallm-switch plugin).
 
 export interface TelegramConfig {
   botToken: string | null;
@@ -16,8 +16,18 @@ export interface TelegramFetch {
   (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<TelegramResponse>;
 }
 
+export interface TelegramButton {
+  text: string;
+  callbackData: string;
+}
+
+export interface TelegramSendOptions {
+  // Rows of inline keyboard buttons; a tap reaches Hermes' gateway, never this app
+  buttons?: TelegramButton[][];
+}
+
 export interface TelegramSender {
-  (text: string): Promise<void>;
+  (text: string, options?: TelegramSendOptions): Promise<void>;
 }
 
 export class TelegramError extends Error {}
@@ -37,16 +47,22 @@ const defaultFetch: TelegramFetch = (url, init) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) as unknown as Promise<TelegramResponse>;
 
 export function createTelegramSender(config: TelegramConfig, fetchImpl: TelegramFetch = defaultFetch): TelegramSender {
-  return async (text: string) => {
+  return async (text: string, options?: TelegramSendOptions) => {
     if (!isTelegramConfigured(config)) {
       throw new TelegramError("telegram is not configured (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)");
+    }
+    const payload: Record<string, unknown> = { chat_id: config.chatId, text, disable_web_page_preview: true };
+    if (options?.buttons && options.buttons.length > 0) {
+      payload.reply_markup = {
+        inline_keyboard: options.buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.callbackData }))),
+      };
     }
     let response: TelegramResponse;
     try {
       response = await fetchImpl(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: config.chatId, text, disable_web_page_preview: true }),
+        body: JSON.stringify(payload),
       });
     } catch (err) {
       // Never include the URL: it carries the bot token

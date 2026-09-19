@@ -54,4 +54,26 @@ describe("createTelegramSender", () => {
 
     await expect(send("hello")).rejects.toThrow(/not configured/);
   });
+
+  it("attaches an inline keyboard when buttons are given", async () => {
+    const bodies: unknown[] = [];
+    const fetchImpl = async (_url: string, init?: { body?: string }) => {
+      bodies.push(JSON.parse(init?.body ?? "{}"));
+      return { ok: true, status: 200, text: async () => "{}" };
+    };
+
+    const send = createTelegramSender({ botToken: BOT_TOKEN, chatId: CHAT_ID }, fetchImpl);
+    await send("switch?", {
+      buttons: [[{ text: "✅ Switch to mlx", callbackData: "pls:ok:abc" }, { text: "✖ Cancel", callbackData: "pls:no:abc" }]],
+    });
+
+    expect(bodies[0]).toEqual({
+      chat_id: CHAT_ID,
+      text: "switch?",
+      disable_web_page_preview: true,
+      reply_markup: {
+        inline_keyboard: [[{ text: "✅ Switch to mlx", callback_data: "pls:ok:abc" }, { text: "✖ Cancel", callback_data: "pls:no:abc" }]],
+      },
+    });
+  });
 });
