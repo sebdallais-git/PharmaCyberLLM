@@ -25,7 +25,6 @@ MCP_TOKEN_FILE="$RUN_DIR/mcp-token"
 SWITCH_FILE="$RUN_DIR/stack-switch.json"
 TELEGRAM_BOT_TOKEN_FILE="$RUN_DIR/telegram-bot-token"
 TELEGRAM_CHAT_ID_FILE="$RUN_DIR/telegram-chat-id"
-PUBLIC_URL_FILE="$RUN_DIR/public-url"
 MCP_LABEL="com.pharmallm.mcp"
 MCP_PLIST="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$MCP_LABEL.plist"
 MCP_PORT="3200"
@@ -357,37 +356,19 @@ telegram_value() {
   if [ -s "$file" ]; then tr -d '[:space:]' <"$file"; fi
 }
 
-# Public URL used for the Telegram confirmation link; falls back to this Mac's hostname rather
-# than localhost, since the owner taps the link on an iPad over Tailscale, where localhost is the iPad.
-public_url() {
-  local url=""
-  [ -s "$PUBLIC_URL_FILE" ] && url="$(tr -d '[:space:]' <"$PUBLIC_URL_FILE")"
-  if [ -z "$url" ]; then
-    url="https://$(hostname -s).local:$APP_HTTPS_PORT"
-  fi
-  echo "$url"
-}
-
 # Credentials the app uses to ask for confirmation of a UI-triggered switch
 ensure_telegram() {
-  local token="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}" url="${PHARMALLM_PUBLIC_URL:-}"
+  local token="${TELEGRAM_BOT_TOKEN:-}" chat="${TELEGRAM_CHAT_ID:-}"
   # read -s shows nothing as you type, which reads as a hung terminal unless we say so.
   if [ -z "$token" ] && [ -t 0 ]; then
     read -rs -p "Telegram bot token (input is hidden — paste, then press Enter): " token
     echo >&2
   fi
   if [ -z "$chat" ] && [ -t 0 ]; then read -r -p "Telegram chat id: " chat; fi
-  if [ -z "$url" ] && [ -t 0 ]; then
-    read -r -p "Public URL for confirmation links (e.g. https://mac-mini.example.ts.net:3443): " url
-  fi
   [ -n "$token" ] && [ -n "$chat" ] || { log "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or run this on a terminal"; exit 1; }
   (umask 077 && printf '%s\n' "$token" >"$TELEGRAM_BOT_TOKEN_FILE")
   (umask 077 && printf '%s\n' "$chat" >"$TELEGRAM_CHAT_ID_FILE")
-  (umask 077 && printf '%s\n' "$url" >"$PUBLIC_URL_FILE")
-  chmod 600 "$TELEGRAM_BOT_TOKEN_FILE" "$TELEGRAM_CHAT_ID_FILE" "$PUBLIC_URL_FILE"
-  if [ -z "$url" ]; then
-    log "No public URL set; confirmation links will fall back to this Mac's hostname"
-  fi
+  chmod 600 "$TELEGRAM_BOT_TOKEN_FILE" "$TELEGRAM_CHAT_ID_FILE"
   log "Stored Telegram credentials in $RUN_DIR (mode 600)"
 }
 
@@ -450,14 +431,8 @@ mcp_service() {
 
 start_app() {
   cd "$PROJECT_DIR"
-  local public_url_value
-  public_url_value="$(public_url)"
-  case "$public_url_value" in
-    *localhost*|*127.0.0.1*) log "Confirmation links will only work on this Mac ($public_url_value)" ;;
-  esac
   LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
     TELEGRAM_BOT_TOKEN="$(telegram_value bot-token)" TELEGRAM_CHAT_ID="$(telegram_value chat-id)" \
-    PHARMALLM_PUBLIC_URL="$(public_url)" \
     nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
   echo $! >"$RUN_DIR/app.pid"
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildStacks, STACK_NAMES } from "../src/config/llm-stacks.js";
@@ -283,13 +283,11 @@ describe("switch-stack.sh switch progress", () => {
     expect(script).toContain("notify_switch_result failed");
   });
 
-  it("passes the Telegram credentials and public URL to the app", () => {
+  it("passes the Telegram credentials to the app and no public URL", () => {
     expect(script).toContain('TELEGRAM_BOT_TOKEN="$(telegram_value bot-token)"');
     expect(script).toContain('TELEGRAM_CHAT_ID="$(telegram_value chat-id)"');
-    // Amended: a localhost default is useless for the iPad-over-Tailscale confirmation link,
-    // so start_app reads the stored public URL (with a hostname-based fallback) instead of
-    // defaulting PHARMALLM_PUBLIC_URL to http://localhost:$APP_PORT.
-    expect(script).toContain('PHARMALLM_PUBLIC_URL="$(public_url)"');
+    expect(script).not.toContain("PHARMALLM_PUBLIC_URL");
+    expect(script).not.toContain("public-url");
   });
 });
 
@@ -322,7 +320,7 @@ describe("switch-stack.sh telegram command", () => {
     expect(result.stdout + result.stderr).not.toContain("123456:AA-secret");
   });
 
-  it("also stores the public URL file when PHARMALLM_PUBLIC_URL is set, at mode 600, printing no value", () => {
+  it("never asks for or stores a public URL", () => {
     const dir = mkdtempSync(join(tmpdir(), "tg-url-"));
     dirs.push(dir);
 
@@ -334,66 +332,12 @@ describe("switch-stack.sh telegram command", () => {
         PHARMALLM_RUN_DIR: join(dir, "run"),
         TELEGRAM_BOT_TOKEN: "123456:AA-secret",
         TELEGRAM_CHAT_ID: "424242",
-        PHARMALLM_PUBLIC_URL: "https://mac-mini.example.ts.net:3443",
       },
     });
 
     expect(result.status).toBe(0);
-    expect(readFileSync(join(dir, "run", "telegram-bot-token"), "utf-8").trim()).toBe("123456:AA-secret");
-    expect(readFileSync(join(dir, "run", "telegram-chat-id"), "utf-8").trim()).toBe("424242");
-    expect(readFileSync(join(dir, "run", "public-url"), "utf-8").trim()).toBe("https://mac-mini.example.ts.net:3443");
-    expect(statSync(join(dir, "run", "telegram-bot-token")).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir, "run", "telegram-chat-id")).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir, "run", "public-url")).mode & 0o777).toBe(0o600);
-    expect(result.stdout + result.stderr).not.toContain("123456:AA-secret");
-    expect(result.stdout + result.stderr).not.toContain("https://mac-mini.example.ts.net:3443");
-  });
-});
-
-describe("switch-stack.sh public_url", () => {
-  const dirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
-  // Sources only the function definitions (as in the stop_other_stacks harness above), then calls
-  // public_url() directly with no data/run/public-url file present.
-  it("falls back to the hostname form when the file is absent", () => {
-    const dir = mkdtempSync(join(tmpdir(), "public-url-"));
-    dirs.push(dir);
-
-    const dispatchIndex = script.split("\n").findIndex((line) => line.startsWith('case "${1:-}" in'));
-    const funcs = script
-      .split("\n")
-      .slice(0, dispatchIndex)
-      .filter((line) => !line.startsWith('SCRIPT_DIR="') && !line.startsWith('PROJECT_DIR="'))
-      .join("\n");
-    const funcsFile = join(dir, "funcs.sh");
-    writeFileSync(funcsFile, funcs);
-
-    const outFile = join(dir, "out.txt");
-    const harness = ["#!/bin/bash", "set -uo pipefail", 'source "$FUNCS_FILE"', 'public_url >"$OUT_FILE"'].join("\n");
-    const harnessFile = join(dir, "harness.sh");
-    writeFileSync(harnessFile, harness);
-    chmodSync(harnessFile, 0o755);
-
-    const result = spawnSync("bash", [harnessFile], {
-      encoding: "utf-8",
-      env: {
-        PATH: "/usr/bin:/bin",
-        HOME: dir,
-        PHARMALLM_RUN_DIR: join(dir, "run"),
-        SCRIPT_DIR: join(process.cwd(), "scripts"),
-        PROJECT_DIR: process.cwd(),
-        FUNCS_FILE: funcsFile,
-        OUT_FILE: outFile,
-      },
-    });
-
-    expect(result.status).toBe(0);
-    const hostname = spawnSync("hostname", ["-s"], { encoding: "utf-8" }).stdout.trim();
-    expect(readFileSync(outFile, "utf-8").trim()).toBe(`https://${hostname}.local:3443`);
+    expect(existsSync(join(dir, "run", "public-url"))).toBe(false);
+    expect(result.stdout + result.stderr).not.toMatch(/public URL/i);
   });
 });
 
