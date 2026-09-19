@@ -46,6 +46,7 @@ export function formatCountdown(msRemaining: number): string {
 export interface StackSelectState {
   pending: { target: StackName; expires_at: number } | null;
   telegram_configured: boolean;
+  hermes_ready: boolean;
 }
 
 // F1: the selector must stay disabled for the whole switch, not just while a Telegram
@@ -54,5 +55,5 @@ export interface StackSelectState {
 // stopping/starting model servers. `busy` — whether this browser considers a switch in flight,
 // including one it is merely watching — must be computed by the caller and passed in here.
 export function isStackSelectDisabled(status: StackSelectState, busy: boolean): boolean {
-  return busy || Boolean(status.pending) || !status.telegram_configured;
+  return busy || Boolean(status.pending) || !status.telegram_configured || !status.hermes_ready;
 }

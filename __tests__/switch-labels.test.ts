@@ -119,19 +119,25 @@ describe("isStackSelectDisabled", () => {
   // stopping/starting model servers — this is the one place that combines "is this browser busy
   // following its own switch" with the server-reported state to decide the disabled attribute.
   it("disables while busy even when nothing is pending", () => {
-    expect(isStackSelectDisabled({ pending: null, telegram_configured: true }, true)).toBe(true);
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: true, hermes_ready: true }, true)).toBe(true);
   });
 
   it("stays enabled when idle, nothing pending, and Telegram is configured", () => {
-    expect(isStackSelectDisabled({ pending: null, telegram_configured: true }, false)).toBe(false);
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: true, hermes_ready: true }, false)).toBe(false);
   });
 
   it("disables while a confirmation is pending, even if the caller thinks it is not busy", () => {
-    expect(isStackSelectDisabled({ pending: { target: "omlx", expires_at: 0 }, telegram_configured: true }, false)).toBe(true);
+    expect(
+      isStackSelectDisabled({ pending: { target: "omlx", expires_at: 0 }, telegram_configured: true, hermes_ready: true }, false)
+    ).toBe(true);
   });
 
   it("disables when Telegram is not configured", () => {
-    expect(isStackSelectDisabled({ pending: null, telegram_configured: false }, false)).toBe(true);
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: false, hermes_ready: true }, false)).toBe(true);
+  });
+
+  it("disables the selector when Hermes cannot receive the confirmation", () => {
+    expect(isStackSelectDisabled({ pending: null, telegram_configured: true, hermes_ready: false }, false)).toBe(true);
   });
 
   it("keeps the browser copy identical to the module", () => {
@@ -140,9 +146,10 @@ describe("isStackSelectDisabled", () => {
       busy: boolean
     ) => boolean;
     const statuses = [
-      { pending: null, telegram_configured: true },
-      { pending: null, telegram_configured: false },
-      { pending: { target: "omlx" as const, expires_at: 0 }, telegram_configured: true },
+      { pending: null, telegram_configured: true, hermes_ready: true },
+      { pending: null, telegram_configured: false, hermes_ready: true },
+      { pending: { target: "omlx" as const, expires_at: 0 }, telegram_configured: true, hermes_ready: true },
+      { pending: null, telegram_configured: true, hermes_ready: false },
     ];
     for (const status of statuses) {
       for (const busy of [true, false]) {

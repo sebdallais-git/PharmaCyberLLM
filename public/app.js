@@ -712,7 +712,7 @@ if (canRecord) {
 }
 
 // Stack switching: the request needs a Telegram confirmation, so the UI waits and then follows the
-// switch it asked for, counting down the confirmation window and reverting if it expires unused.
+// switch it asked for, counting down the confirmation window and reverting if it is cancelled or expires unused.
 const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX" };
 let stackPollTimer = null;
 let lastKnownActive = null;
@@ -720,6 +720,7 @@ let watching = false; // true while this browser is following the switch it aske
 let watchBaselineStartedAt = null; // progress.startedAt the server reported when we asked (null: none)
 let lastSeenStartedAt = null; // progress.startedAt from the most recent /api/stack/status
 let watchExpiresAt = null; // expires_at from the 202 body of that request
+let watchId = null; // id from the 202 body: matches status.cancelled when this request is cancelled
 const CONFIRM_GRACE_MS = 15000; // the script writes its first phase within a second of the tap
 
 // Decides whether a progress record is the switch this browser asked for. Both values come from
@@ -743,7 +744,7 @@ function formatCountdown(msRemaining) {
 // Same wording as src/services/switch-labels.ts. The browser cannot import TypeScript, so this is a
 // deliberate second copy; __tests__/switch-labels.test.ts pins the wording both must produce
 function isStackSelectDisabled(status, busy) {
-  return busy || Boolean(status.pending) || !status.telegram_configured;
+  return busy || Boolean(status.pending) || !status.telegram_configured || !status.hermes_ready;
 }
 
 function describeStackStatus(status) {
@@ -769,9 +770,11 @@ function renderStackStatus(status) {
     })
     .join("");
   if (stackSelect.innerHTML !== options) stackSelect.innerHTML = options;
-  stackSelect.title = status.telegram_configured
-    ? "LLM stack (deployment environment)"
-    : "Telegram confirmation not configured - run scripts/switch-stack.sh telegram";
+  stackSelect.title = !status.telegram_configured
+    ? "Telegram confirmation not configured - run scripts/switch-stack.sh telegram"
+    : !status.hermes_ready
+      ? `Hermes cannot receive the Telegram confirmation: ${status.hermes_reason || "unknown reason"}`
+      : "LLM stack (deployment environment)";
 
   // Remembered for the next request: whatever is on the server now is what "not ours yet" means.
   lastSeenStartedAt = status.progress ? status.progress.startedAt : null;
@@ -783,7 +786,15 @@ function renderStackStatus(status) {
   const oursHasAppeared = watching && isOurSwitchProgress(status.progress, watchBaselineStartedAt);
   let label, cls, busy;
 
-  if (watching && !oursHasAppeared) {
+  if (watching && !oursHasAppeared && status.cancelled && status.cancelled.id === watchId) {
+    watching = false;
+    watchExpiresAt = null;
+    watchId = null;
+    label = "Switch cancelled";
+    cls = "";
+    busy = false;
+    stackSelect.value = status.active;
+  } else if (watching && !oursHasAppeared) {
     if (Date.now() < watchExpiresAt + CONFIRM_GRACE_MS) {
       label = `${describeStackStatus(status)} (${formatCountdown(watchExpiresAt - Date.now())} left)`;
       cls = "busy";
@@ -791,6 +802,7 @@ function renderStackStatus(status) {
     } else {
       watching = false;
       watchExpiresAt = null;
+      watchId = null;
       label = "Switch request expired";
       cls = "error";
       busy = false;
@@ -802,6 +814,7 @@ function renderStackStatus(status) {
     if (!busy) {
       watching = false;
       watchExpiresAt = null;
+      watchId = null;
     }
     label = describeStackStatus(status);
     cls = phase === "ready" ? "ready" : phase === "failed" ? "error" : "busy";
@@ -874,17 +887,20 @@ stackSelect.addEventListener("change", async () => {
     if (!res.ok) {
       watching = false;
       watchExpiresAt = null;
+      watchId = null;
       if (previousValue) stackSelect.value = previousValue;
       setStatus(data.error || "Stack switch refused", "error");
       await pollStackStatus();
       return;
     }
     watchExpiresAt = data.expires_at;
+    watchId = data.id;
     watchStackSwitch();
     await pollStackStatus();
   } catch {
     watching = false;
     watchExpiresAt = null;
+    watchId = null;
     if (previousValue) stackSelect.value = previousValue;
     setStatus("Could not reach PharmaLLM", "error");
   }
