@@ -163,6 +163,50 @@ describe("confirm", () => {
   });
 });
 
+describe("cancel", () => {
+  it("clears the pending switch without starting it and remembers which request was cancelled", () => {
+    const h = harness();
+    const outcome = h.switcher.request("omlx");
+    if (!outcome.ok) throw new Error("request refused");
+
+    const cancelled = h.switcher.cancel(outcome.pending.token);
+
+    expect(cancelled?.target).toBe("omlx");
+    expect(h.switcher.pending()).toBeNull();
+    expect(h.switcher.lastCancelled()).toEqual({ id: outcome.pending.id, target: "omlx" });
+    expect(h.switcher.confirm(outcome.pending.token)).toBeNull();
+  });
+
+  it("ignores a wrong token and leaves the pending switch alone", () => {
+    const h = harness();
+    h.switcher.request("omlx");
+
+    expect(h.switcher.cancel("nope")).toBeNull();
+    expect(h.switcher.pending()?.target).toBe("omlx");
+    expect(h.switcher.lastCancelled()).toBeNull();
+  });
+
+  it("refuses an expired token", () => {
+    const h = harness();
+    const outcome = h.switcher.request("omlx");
+    if (!outcome.ok) throw new Error("request refused");
+    h.clock.value += CONFIRM_WINDOW_MS;
+
+    expect(h.switcher.cancel(outcome.pending.token)).toBeNull();
+  });
+
+  it("forgets the last cancel once a new switch is requested", () => {
+    const h = harness();
+    const first = h.switcher.request("omlx");
+    if (!first.ok) throw new Error("request refused");
+    h.switcher.cancel(first.pending.token);
+
+    h.switcher.request("mlx");
+
+    expect(h.switcher.lastCancelled()).toBeNull();
+  });
+});
+
 describe("parseProgress", () => {
   it("reads a progress record the script wrote", () => {
     expect(

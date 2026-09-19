@@ -1,4 +1,4 @@
-// Pending stack switches: a UI request becomes a one-time token, confirmed out of band through Telegram.
+// Pending stack switches: a UI request becomes a one-time token, confirmed or cancelled out of band through Telegram.
 // Pure state plus pure parsing; the HTTP layer owns I/O and process spawning.
 
 import { isStackName } from "../config/llm-stacks.js";
@@ -19,6 +19,12 @@ export interface PendingSwitch {
   token: string;
   requestedAt: number;
   expiresAt: number;
+}
+
+// The most recently cancelled request, so the browser that asked can tell a cancel from a confirm
+export interface CancelledSwitch {
+  id: string;
+  target: StackName;
 }
 
 export interface SwitchProgress {
@@ -52,6 +58,8 @@ export interface StackSwitchDeps {
 export interface StackSwitch {
   request(target: StackName): SwitchOutcome;
   confirm(token: string): PendingSwitch | null;
+  cancel(token: string): PendingSwitch | null;
+  lastCancelled(): CancelledSwitch | null;
   pending(): PendingSwitch | null;
 }
 
@@ -77,6 +85,7 @@ export function parseProgress(value: unknown): SwitchProgress | null {
 
 export function createStackSwitch(deps: StackSwitchDeps): StackSwitch {
   let current: PendingSwitch | null = null;
+  let cancelled: CancelledSwitch | null = null;
 
   const live = (): PendingSwitch | null => {
     if (current && current.expiresAt <= deps.now()) current = null;
@@ -106,6 +115,7 @@ export function createStackSwitch(deps: StackSwitchDeps): StackSwitch {
       if (deps.runningJobs().includes("reindex")) {
         return { ok: false, reason: "reindex", message: "a reindex is running; try again when it finishes" };
       }
+      cancelled = null;
       const requestedAt = deps.now();
       current = {
         id: deps.newId(),
@@ -122,6 +132,18 @@ export function createStackSwitch(deps: StackSwitchDeps): StackSwitch {
       if (!pending || pending.token !== token) return null;
       current = null;
       return pending;
+    },
+
+    cancel(token) {
+      const pending = live();
+      if (!pending || pending.token !== token) return null;
+      current = null;
+      cancelled = { id: pending.id, target: pending.target };
+      return pending;
+    },
+
+    lastCancelled() {
+      return cancelled;
     },
 
     pending() {
