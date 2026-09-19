@@ -3,6 +3,7 @@ No Telegram or Hermes imports, so it tests with the standard library alone."""
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import urllib.error
@@ -54,16 +55,19 @@ def _json(raw: bytes) -> dict:
 
 
 def post_json(url: str, body: dict, token: str, timeout: float = 10.0) -> AppReply:
-    request = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
     try:
+        # Request(...) itself can raise (e.g. ValueError on a malformed PHARMALLM_URL), so it stays
+        # inside the try: every failure path must return an AppReply, never raise.
+        request = urllib.request.Request(
+            url, data=json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return AppReply(response.status, _json(response.read()))
     except urllib.error.HTTPError as err:
         with err:
             return AppReply(err.code, _json(err.read()))
-    except (urllib.error.URLError, OSError) as err:
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as err:
+        # Class name only: a message could echo the URL or the request body.
         return AppReply(0, {}, type(err).__name__)
 
 

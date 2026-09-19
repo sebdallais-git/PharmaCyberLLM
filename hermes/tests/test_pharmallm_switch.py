@@ -89,7 +89,12 @@ class PostJsonTest(unittest.TestCase):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 seen.append((self.path, self.headers["Authorization"], body))
-                code = 200 if body.get("token") == TOKEN else 410
+                if body.get("token") == TOKEN:
+                    code = 200
+                elif body.get("token") == "unauthorized":
+                    code = 401
+                else:
+                    code = 410
                 payload = json.dumps({"status": "switching", "target": "mlx"} if code == 200 else {"error": "x"})
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -124,15 +129,48 @@ class PostJsonTest(unittest.TestCase):
         self.assertTrue(reply.error)
         self.assertNotIn("api-secret", reply.error)
 
+    def test_a_401_keeps_the_buttons_and_names_the_status(self):
+        # Exercises the HTTPError "with err:" branch for a non-410 status.
+        outcome = tap.resolve(tap.Tap("confirm", "unauthorized"), self.env)
+        self.assertIsNone(outcome.text)
+        self.assertIn("401", outcome.toast)
+
+    def test_a_malformed_url_reports_the_error_class_without_raising(self):
+        # Request(...) itself raises ValueError here, before urlopen() is even reached.
+        reply = tap.post_json("not-a-url", {"token": TOKEN}, "api-secret", timeout=2)
+        self.assertEqual(reply.status, 0)
+        self.assertTrue(reply.error)
+
+    def test_a_garbage_status_line_reports_the_error_class_without_raising(self):
+        # http.client.BadStatusLine is an HTTPException, not an OSError: a distinct catch is needed.
+        class GarbageHandler(socketserver.BaseRequestHandler):
+            def handle(self):
+                self.request.recv(65536)
+                self.request.sendall(b"garbage\r\n\r\n")
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), GarbageHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/stack/confirm"
+            reply = tap.post_json(url, {"token": TOKEN}, "api-secret", timeout=2)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(reply.status, 0)
+        self.assertTrue(reply.error)
+
 
 class FakeQuery:
-    def __init__(self, data, user_id):
+    def __init__(self, data, user_id, answer_error=None):
         self.data = data
         self.from_user = mock.Mock(id=user_id)
         self.answers, self.edits = [], []
+        self.answer_error = answer_error  # raised by answer(), e.g. Telegram rejecting a late answer
 
     async def answer(self, text=None):
         self.answers.append(text)
+        if self.answer_error is not None:
+            raise self.answer_error
 
     async def edit_message_text(self, text):
         self.edits.append(text)
@@ -165,7 +203,16 @@ class HandleTapTest(unittest.TestCase):
     def test_leaves_the_message_alone_when_the_outcome_keeps_the_buttons(self):
         query = FakeQuery(f"pls:no:{TOKEN}", 424242)
         self.run_tap(query, tap.Outcome("⚠️ Could not reach PharmaLLM (HTTP 500)", None))
+        self.assertEqual(query.answers, ["⚠️ Could not reach PharmaLLM (HTTP 500)"])
         self.assertEqual(query.edits, [])
+
+    def test_edits_even_when_telegram_rejects_the_answer(self):
+        # A stale/duplicate answer failing must not stop the handler: the app already acted, so the
+        # message still has to be edited and no exception may reach the gateway's dispatcher.
+        query = FakeQuery(f"pls:ok:{TOKEN}", 424242, answer_error=RuntimeError("Query is too old"))
+        self.run_tap(query, tap.Outcome("✅ Switching to mlx", "✅ Switching to mlx — restarts"))
+        self.assertEqual(query.answers, ["✅ Switching to mlx"])
+        self.assertEqual(query.edits, ["✅ Switching to mlx — restarts"])
 
 
 class ReadyFileTest(unittest.TestCase):
