@@ -19,7 +19,6 @@ export const BROWSER_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["GET", "/api/graph/stats"],
   ["GET", "/api/health"],
   ["POST", "/api/stack/switch"],
-  ["GET", "/api/stack/confirm"],
   ["GET", "/api/stack/status"],
 ];
 

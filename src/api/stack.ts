@@ -1,5 +1,7 @@
-// Stack switching for the browser UI. The route itself needs no token: approval arrives out of band,
-// as a one-time link in a Telegram message. The spawned script outlives the app it restarts.
+// Stack switching for the browser UI. Requesting a switch needs no token; approval arrives out of
+// band, as a tap on a Telegram button. Hermes' gateway receives the tap (it is the shared bot's only
+// update consumer) and its pharmallm-switch plugin calls /confirm or /cancel here with the API token.
+// The spawned script outlives the app it restarts.
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -10,13 +12,14 @@ import type { Request, Response } from "express";
 import { getActiveStack, isStackName, STACK_NAMES } from "../config/llm-stacks.js";
 import type { StackName } from "../config/llm-stacks.js";
 import { getRunningJobs, isBenchmarkActive } from "../services/bench-mode.js";
+import { createHermesReadiness, hermesHome, queryGatewayStatus, readPluginReadyFile } from "../services/hermes-readiness.js";
+import type { HermesReadinessChecker } from "../services/hermes-readiness.js";
 import { createStackSwitch, parseProgress } from "../services/stack-switch.js";
 import type { StackSwitch, SwitchProgress } from "../services/stack-switch.js";
 import { createTelegramSender, isTelegramConfigured, readTelegramConfig } from "../services/telegram-notify.js";
 import type { TelegramSender } from "../services/telegram-notify.js";
 
 const PROGRESS_FILE = join(process.cwd(), "data", "run", "stack-switch.json");
-const PUBLIC_URL_FILE = join(process.cwd(), "data", "run", "public-url");
 
 export interface StackRouterDeps {
   switcher: StackSwitch;
@@ -24,8 +27,8 @@ export interface StackRouterDeps {
   spawnSwitch(target: StackName): void;
   activeStack(): StackName;
   readProgress(): SwitchProgress | null;
-  confirmBaseUrl(): string;
   telegramConfigured(): boolean;
+  hermes: HermesReadinessChecker;
 }
 
 export function createStackRouter(deps: StackRouterDeps): Router {
@@ -44,17 +47,33 @@ export function createStackRouter(deps: StackRouterDeps): Router {
       });
       return;
     }
+    // Refuse before anything is pending or sent: a button nobody can receive would only expire
+    const hermes = await deps.hermes.check();
+    if (!hermes.ready) {
+      res.status(409).json({
+        reason: "hermes_unavailable",
+        error: `Hermes cannot receive the Telegram confirmation: ${hermes.reason}. Switch with scripts/switch-stack.sh ${target}`,
+      });
+      return;
+    }
     const outcome = deps.switcher.request(target);
     if (!outcome.ok) {
       res.status(409).json({ reason: outcome.reason, error: outcome.message });
       return;
     }
-    const link = `${deps.confirmBaseUrl()}/api/stack/confirm?token=${outcome.pending.token}`;
+    const { token } = outcome.pending;
     try {
       await deps.sendTelegram(
         `PharmaLLM: switch the LLM stack from ${deps.activeStack()} to ${target}?\n` +
-          `Confirm within 5 minutes:\n${link}\n` +
-          `If you did not ask for this, ignore this message and nothing happens.`
+          `Confirm within 5 minutes. If you did not ask for this, tap Cancel or ignore it.`,
+        {
+          buttons: [
+            [
+              { text: `✅ Switch to ${target}`, callbackData: `pls:ok:${token}` },
+              { text: "✖ Cancel", callbackData: `pls:no:${token}` },
+            ],
+          ],
+        }
       );
     } catch (err) {
       // Drop the pending switch: nobody was asked, so nobody can confirm
@@ -67,37 +86,52 @@ export function createStackRouter(deps: StackRouterDeps): Router {
     }
     res.status(202).json({
       status: "pending_confirmation",
+      id: outcome.pending.id,
       target,
       expires_at: outcome.pending.expiresAt,
     });
   });
 
-  router.get("/confirm", (req: Request, res: Response): void => {
-    const token = typeof req.query.token === "string" ? req.query.token : "";
-    const pending = deps.switcher.confirm(token);
+  router.post("/confirm", (req: Request, res: Response): void => {
+    const pending = deps.switcher.confirm(bodyToken(req));
     if (!pending) {
-      res.status(410).type("html").send("<h1>Link expired</h1><p>Request the switch again from PharmaLLM.</p>");
+      res.status(410).json({ error: "This switch request expired or was already answered" });
       return;
     }
     deps.spawnSwitch(pending.target);
-    res
-      .status(200)
-      .type("html")
-      .send(`<h1>Switching to ${pending.target}</h1><p>PharmaLLM restarts in a moment. You can close this page.</p>`);
+    res.json({ status: "switching", target: pending.target });
   });
 
-  router.get("/status", (_req: Request, res: Response): void => {
+  router.post("/cancel", (req: Request, res: Response): void => {
+    const pending = deps.switcher.cancel(bodyToken(req));
+    if (!pending) {
+      res.status(410).json({ error: "This switch request expired or was already answered" });
+      return;
+    }
+    res.json({ status: "cancelled", target: pending.target });
+  });
+
+  router.get("/status", async (_req: Request, res: Response): Promise<void> => {
     const pending = deps.switcher.pending();
+    const hermes = await deps.hermes.cached();
     res.json({
       active: deps.activeStack(),
       stacks: STACK_NAMES,
       telegram_configured: deps.telegramConfigured(),
+      hermes_ready: hermes.ready,
+      hermes_reason: hermes.reason,
       pending: pending ? { target: pending.target, expires_at: pending.expiresAt } : null,
+      cancelled: deps.switcher.lastCancelled(),
       progress: deps.readProgress(),
     });
   });
 
   return router;
+}
+
+function bodyToken(req: Request): string {
+  const token = (req.body as { token?: unknown } | undefined)?.token;
+  return typeof token === "string" ? token : "";
 }
 
 function readProgressFile(): SwitchProgress | null {
@@ -106,25 +140,6 @@ function readProgressFile(): SwitchProgress | null {
   } catch {
     return null;
   }
-}
-
-// The base URL of the one-time confirmation link sent over Telegram. switch-stack.sh passes it in
-// the environment, but an app started by hand (npm run dev) gets nothing — so fall back to the same
-// data/run/public-url file the script itself reads, instead of a localhost link the owner's iPad
-// cannot reach. The value is never logged: it is only ever pasted into the confirmation link.
-export function resolveConfirmBaseUrl(
-  env: NodeJS.ProcessEnv = process.env,
-  file: string = PUBLIC_URL_FILE
-): string {
-  const fromEnv = env.PHARMALLM_PUBLIC_URL?.trim();
-  if (fromEnv) return fromEnv;
-  try {
-    const fromFile = readFileSync(file, "utf-8").trim();
-    if (fromFile) return fromFile;
-  } catch {
-    // Not written yet, or unreadable: the localhost default is still correct on this Mac
-  }
-  return "http://localhost:3000";
 }
 
 const telegramConfig = readTelegramConfig();
@@ -148,12 +163,16 @@ export default createStackRouter({
       stdio: "ignore",
     });
     // Without this, a missing script or a lost executable bit throws an unhandled 'error' event
-    // after the confirm page already told the owner it worked
+    // after the Telegram message already told the owner it worked
     child.on("error", (err) => console.error(`stack switch spawn failed: ${err.message}`));
     child.unref();
   },
   activeStack: () => getActiveStack().name,
   readProgress: readProgressFile,
-  confirmBaseUrl: () => resolveConfirmBaseUrl(),
   telegramConfigured: () => isTelegramConfigured(telegramConfig),
+  hermes: createHermesReadiness({
+    queryGatewayStatus: () => queryGatewayStatus(join(hermesHome(), "gateway.sock")),
+    readPluginReadyFile: () => readPluginReadyFile(join(hermesHome(), "pharmallm-switch.ready.json")),
+    now: () => Date.now(),
+  }),
 });

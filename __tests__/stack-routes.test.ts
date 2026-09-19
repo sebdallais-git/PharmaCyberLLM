@@ -1,25 +1,27 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import express from "express";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createStackRouter, resolveConfirmBaseUrl } from "../src/api/stack.js";
+import { createStackRouter } from "../src/api/stack.js";
 import { createStackSwitch } from "../src/services/stack-switch.js";
 import type { StackName } from "../src/config/llm-stacks.js";
 import type { SwitchProgress } from "../src/services/stack-switch.js";
+import type { TelegramSendOptions } from "../src/services/telegram-notify.js";
 
-const BOT_MESSAGE_TOKEN_PATTERN = /token=([a-zA-Z0-9_-]+)/;
 const servers: Server[] = [];
 
 afterEach(async () => {
   for (const server of servers.splice(0)) await new Promise<void>((r) => server.close(() => r()));
 });
 
+interface SentMessage {
+  text: string;
+  options?: TelegramSendOptions;
+}
+
 interface Fixture {
   url: string;
-  messages: string[];
+  messages: SentMessage[];
   spawned: StackName[];
   state: {
     active: StackName;
@@ -29,6 +31,7 @@ interface Fixture {
     configured: boolean;
     sendFails: boolean;
     sendFailMessage: string;
+    hermesReady: boolean;
   };
 }
 
@@ -41,8 +44,9 @@ async function startApp(): Promise<Fixture> {
     configured: true,
     sendFails: false,
     sendFailMessage: "telegram sendMessage failed (401)",
+    hermesReady: true,
   };
-  const messages: string[] = [];
+  const messages: SentMessage[] = [];
   const spawned: StackName[] = [];
   let counter = 0;
   const switcher = createStackSwitch({
@@ -56,23 +60,25 @@ async function startApp(): Promise<Fixture> {
     // src/api/stack.ts (both the route and the state machine read the one progress file).
     currentProgress: () => state.progress,
   });
+  const readiness = async () =>
+    state.hermesReady ? { ready: true, reason: "" } : { ready: false, reason: "the Hermes gateway is not running" };
   const app = express();
   app.use(express.json());
   app.use(
     "/api/stack",
     createStackRouter({
       switcher,
-      sendTelegram: async (text: string) => {
+      sendTelegram: async (text: string, options?: TelegramSendOptions) => {
         if (state.sendFails) throw new Error(state.sendFailMessage);
-        messages.push(text);
+        messages.push({ text, options });
       },
       spawnSwitch: (target: StackName) => {
         spawned.push(target);
       },
       activeStack: () => state.active,
       readProgress: () => state.progress,
-      confirmBaseUrl: () => "https://mac:3443",
       telegramConfigured: () => state.configured,
+      hermes: { check: readiness, cached: readiness },
     })
   );
   const server = await new Promise<Server>((resolve) => {
@@ -80,6 +86,21 @@ async function startApp(): Promise<Fixture> {
   });
   servers.push(server);
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, messages, spawned, state };
+}
+
+// The token rides in the buttons' callback data, never in the text
+function tokenFrom(message: SentMessage): string {
+  const data = message.options?.buttons?.[0]?.[0]?.callbackData ?? "";
+  return data.replace(/^pls:ok:/, "");
+}
+
+async function answer(url: string, action: "confirm" | "cancel", body: unknown) {
+  const res = await fetch(`${url}/api/stack/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
 async function post(url: string, stack: string) {
@@ -101,20 +122,44 @@ async function postRaw(url: string, body: unknown) {
 }
 
 describe("POST /api/stack/switch", () => {
-  it("accepts a switch, sends exactly one Telegram message with a confirm link, and starts nothing yet", async () => {
+  it("accepts a switch and sends one message with Switch and Cancel buttons, no link, and starts nothing yet", async () => {
     const fixture = await startApp();
 
     const { status, body } = await post(fixture.url, "omlx");
 
     expect(status).toBe(202);
     expect(body.status).toBe("pending_confirmation");
+    expect(body.id).toBe("id-1");
     expect(typeof body.expires_at).toBe("number");
     expect(fixture.messages).toHaveLength(1);
-    expect(fixture.messages[0]).toContain("omlx");
-    expect(fixture.messages[0]).toMatch(BOT_MESSAGE_TOKEN_PATTERN);
-    expect(fixture.messages[0]).toContain("https://mac:3443/api/stack/confirm?token=");
+    const [message] = fixture.messages;
+    expect(message.text).toContain("from ollama to omlx");
+    expect(message.text).not.toMatch(/https?:\/\//);
+    expect(message.options?.buttons).toEqual([
+      [
+        { text: "✅ Switch to omlx", callbackData: "pls:ok:tok-1" },
+        { text: "✖ Cancel", callbackData: "pls:no:tok-1" },
+      ],
+    ]);
     expect(fixture.spawned).toEqual([]);
     expect(JSON.stringify(body)).not.toMatch(/tok-/);
+  });
+
+  it("refuses up front when Hermes cannot receive the tap, and sends nothing", async () => {
+    const fixture = await startApp();
+    fixture.state.hermesReady = false;
+
+    const { status, body } = await post(fixture.url, "omlx");
+
+    expect(status).toBe(409);
+    expect(body.reason).toBe("hermes_unavailable");
+    expect(String(body.error)).toContain("the Hermes gateway is not running");
+    expect(String(body.error)).toContain("scripts/switch-stack.sh omlx");
+    expect(fixture.messages).toEqual([]);
+
+    // Nothing was left pending
+    fixture.state.hermesReady = true;
+    expect((await post(fixture.url, "omlx")).status).toBe(202);
   });
 
   it("refuses an unknown stack name", async () => {
@@ -231,28 +276,50 @@ describe("POST /api/stack/switch", () => {
   });
 });
 
-describe("GET /api/stack/confirm", () => {
+describe("POST /api/stack/confirm", () => {
   it("spawns the switch once for a good token", async () => {
     const fixture = await startApp();
     await post(fixture.url, "omlx");
-    const token = BOT_MESSAGE_TOKEN_PATTERN.exec(fixture.messages[0])?.[1] ?? "";
+    const token = tokenFrom(fixture.messages[0]);
 
-    const first = await fetch(`${fixture.url}/api/stack/confirm?token=${token}`);
-    const second = await fetch(`${fixture.url}/api/stack/confirm?token=${token}`);
+    const first = await answer(fixture.url, "confirm", { token });
+    const second = await answer(fixture.url, "confirm", { token });
 
-    expect(first.status).toBe(200);
-    expect((await first.text()).toLowerCase()).toContain("omlx");
+    expect(first).toEqual({ status: 200, body: { status: "switching", target: "omlx" } });
     expect(second.status).toBe(410);
     expect(fixture.spawned).toEqual(["omlx"]);
   });
 
-  it("refuses an unknown token without spawning", async () => {
+  it("refuses an unknown, missing or non-string token without spawning", async () => {
     const fixture = await startApp();
+    await post(fixture.url, "omlx");
 
-    const res = await fetch(`${fixture.url}/api/stack/confirm?token=nope`);
-
-    expect(res.status).toBe(410);
+    expect((await answer(fixture.url, "confirm", { token: "nope" })).status).toBe(410);
+    expect((await answer(fixture.url, "confirm", {})).status).toBe(410);
+    expect((await answer(fixture.url, "confirm", { token: ["tok-1"] })).status).toBe(410);
     expect(fixture.spawned).toEqual([]);
+  });
+});
+
+describe("POST /api/stack/cancel", () => {
+  it("drops the pending switch, starts nothing, and reports which request was cancelled", async () => {
+    const fixture = await startApp();
+    const requested = await post(fixture.url, "omlx");
+    const token = tokenFrom(fixture.messages[0]);
+
+    const cancelled = await answer(fixture.url, "cancel", { token });
+    const status = (await (await fetch(`${fixture.url}/api/stack/status`)).json()) as Record<string, unknown>;
+
+    expect(cancelled).toEqual({ status: 200, body: { status: "cancelled", target: "omlx" } });
+    expect(status.pending).toBeNull();
+    expect(status.cancelled).toEqual({ id: requested.body.id, target: "omlx" });
+    expect((await answer(fixture.url, "confirm", { token })).status).toBe(410);
+    expect(fixture.spawned).toEqual([]);
+  });
+
+  it("answers 410 for a token that is not pending", async () => {
+    const fixture = await startApp();
+    expect((await answer(fixture.url, "cancel", { token: "nope" })).status).toBe(410);
   });
 });
 
@@ -270,48 +337,17 @@ describe("GET /api/stack/status", () => {
     expect((body.pending as Record<string, unknown>).target).toBe("omlx");
     expect((body.progress as Record<string, unknown>).phase).toBe("warming");
     expect(JSON.stringify(body)).not.toMatch(/tok-/);
-  });
-});
-
-// F6: switch-stack.sh writes data/run/public-url and passes it as PHARMALLM_PUBLIC_URL, but an app
-// started outside the script (npm run dev) has neither, and the localhost default put a Telegram
-// confirmation link in front of the owner that his iPad could not reach over Tailscale. Reading the
-// same file the script wrote keeps the two defaults in agreement. No live file is touched here: the
-// path is injected and points at a temp directory.
-describe("resolveConfirmBaseUrl", () => {
-  const dirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    expect(body.hermes_ready).toBe(true);
+    expect(body.cancelled).toBeNull();
   });
 
-  function urlFile(contents: string): string {
-    const dir = mkdtempSync(join(tmpdir(), "public-url-"));
-    dirs.push(dir);
-    const file = join(dir, "public-url");
-    writeFileSync(file, contents);
-    return file;
-  }
+  it("reports why Hermes is not ready", async () => {
+    const fixture = await startApp();
+    fixture.state.hermesReady = false;
 
-  it("prefers the environment variable the script passes to the app", () => {
-    const file = urlFile("https://from-file.local:3443\n");
-    expect(resolveConfirmBaseUrl({ PHARMALLM_PUBLIC_URL: "https://from-env.local:3443" }, file)).toBe(
-      "https://from-env.local:3443"
-    );
-  });
+    const body = (await (await fetch(`${fixture.url}/api/stack/status`)).json()) as Record<string, unknown>;
 
-  it("falls back to the URL switch-stack.sh stored, trimming the trailing newline", () => {
-    expect(resolveConfirmBaseUrl({}, urlFile("https://mac.local:3443\n"))).toBe("https://mac.local:3443");
-  });
-
-  it("falls back to localhost when the file does not exist", () => {
-    const dir = mkdtempSync(join(tmpdir(), "public-url-missing-"));
-    dirs.push(dir);
-    expect(resolveConfirmBaseUrl({}, join(dir, "public-url"))).toBe("http://localhost:3000");
-  });
-
-  it("falls back to localhost when the file is empty or the variable is blank", () => {
-    expect(resolveConfirmBaseUrl({}, urlFile("   \n"))).toBe("http://localhost:3000");
-    expect(resolveConfirmBaseUrl({ PHARMALLM_PUBLIC_URL: "  " }, urlFile(""))).toBe("http://localhost:3000");
+    expect(body.hermes_ready).toBe(false);
+    expect(body.hermes_reason).toBe("the Hermes gateway is not running");
   });
 });
