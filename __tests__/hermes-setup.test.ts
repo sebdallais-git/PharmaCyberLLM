@@ -285,7 +285,8 @@ describe("hermes-setup.sh install-plugin", () => {
     const dest = join(box.home, "plugins", "pharmallm-switch");
     expect(readdirSync(dest).sort()).toEqual(["__init__.py", "plugin.yaml", "tap.py"]);
     const calls = readFileSync(box.calls, "utf-8");
-    expect(calls).toContain("hermes [plugins] [enable] [pharmallm-switch]");
+    // --no-allow-tool-override answers Hermes' y/N tool-override prompt, which would otherwise block
+    expect(calls).toContain("hermes [plugins] [enable] [pharmallm-switch] [--no-allow-tool-override]");
     expect(calls).toContain("hermes [gateway] [restart]");
     expect(calls.indexOf("[plugins] [enable]")).toBeLessThan(calls.indexOf("[gateway] [restart]"));
   });
@@ -302,16 +303,49 @@ describe("hermes-setup.sh check: plugin", () => {
     expect(checkOutput(sandbox())).toContain("plugin pharmallm-switch: missing");
   });
 
+  function writeRecords(box: Sandbox, gateway: unknown, ready: unknown): void {
+    mkdirSync(box.home, { recursive: true });
+    writeFileSync(join(box.home, "gateway.pid"), JSON.stringify(gateway));
+    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify(ready));
+  }
+
+  function isLive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error: unknown) {
+      return error instanceof Error && "code" in error && error.code === "EPERM";
+    }
+  }
+
   it("reports a plugin loaded by the running gateway only when pid and start time both match", () => {
     const box = sandbox();
     setup(box, ["install-plugin"]);
-    mkdirSync(box.home, { recursive: true });
-    writeFileSync(join(box.home, "gateway.pid"), JSON.stringify({ pid: 4242, start_time: 777, kind: "hermes-gateway" }));
-    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify({ pid: 4242, start_time: 777 }));
+    // check probes the pid, so it has to name a live process: Jest's own
+    const pid = process.pid;
+    writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 777 });
     expect(checkOutput(box)).toContain("plugin pharmallm-switch: loaded by the running gateway");
 
-    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify({ pid: 4242, start_time: 1 }));
+    writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 1 });
     expect(checkOutput(box)).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+  });
+
+  it("does not report a plugin loaded when the gateway process is gone", () => {
+    const box = sandbox();
+    setup(box, ["install-plugin"]);
+    const pid = 999999999;
+    expect(isLive(pid)).toBe(false);
+    writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 777 });
+    expect(checkOutput(box)).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+  });
+
+  it("treats a ready file that is not a JSON object as not loaded, without a traceback", () => {
+    const box = sandbox();
+    setup(box, ["install-plugin"]);
+    writeRecords(box, { pid: process.pid, start_time: 777, kind: "hermes-gateway" }, [process.pid, 777]);
+    const output = checkOutput(box);
+    expect(output).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+    expect(output).not.toContain("Traceback");
   });
 });
 

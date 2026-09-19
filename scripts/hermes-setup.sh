@@ -179,7 +179,9 @@ install_plugin() {
   for file in "${PLUGIN_FILES[@]}"; do
     cp "$src/$file" "$dest/$file"
   done
-  "$HERMES_BIN" plugins enable "$PLUGIN_NAME"
+  # The flag answers Hermes' "replace built-in tools? [y/N]" prompt for non-bundled plugins, which would
+  # otherwise stop an unattended install. The plugin adds a Telegram handler and no tools, so "no" is right.
+  "$HERMES_BIN" plugins enable "$PLUGIN_NAME" --no-allow-tool-override
   # The plugin wires its Telegram handler when the gateway connects, so only a restart loads it
   "$HERMES_BIN" gateway restart
   log "Installed the $PLUGIN_NAME plugin and restarted the gateway"
@@ -248,13 +250,14 @@ check() {
       problems=1
     fi
   done
-  # "Loaded" means the ready file names the gateway now running (pid and start time): a pid alone
-  # can be reused after a crash. The wording avoids "not loaded", which reports services above.
+  # "Loaded" means the ready file names the gateway now running (pid and start time, and that pid is
+  # alive): a pid alone can be reused after a crash, and both records outlive a gateway that died.
+  # The wording avoids "not loaded", which reports services above.
   if [ ! -f "$HERMES_HOME/plugins/$PLUGIN_NAME/plugin.yaml" ]; then
     log "plugin $PLUGIN_NAME: missing"
     problems=1
   elif python3 - "$HERMES_HOME" "$PLUGIN_NAME" <<'PY'
-import json, sys
+import json, os, sys
 from pathlib import Path
 home, name = Path(sys.argv[1]), sys.argv[2]
 try:
@@ -262,8 +265,19 @@ try:
     ready = json.loads((home / f"{name}.ready.json").read_text(encoding="utf-8"))
 except (OSError, ValueError):
     sys.exit(1)
-same = (ready.get("pid"), ready.get("start_time")) == (gateway.get("pid"), gateway.get("start_time"))
-sys.exit(0 if same and ready.get("pid") is not None else 1)
+if not isinstance(gateway, dict) or not isinstance(ready, dict):
+    sys.exit(1)
+pid = ready.get("pid")
+same = (pid, ready.get("start_time")) == (gateway.get("pid"), gateway.get("start_time"))
+if not same or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    sys.exit(1)
+try:
+    os.kill(pid, 0)  # signal 0 only probes: nothing is sent
+except PermissionError:
+    pass  # alive, owned by another user
+except (ProcessLookupError, OverflowError, OSError):
+    sys.exit(1)
+sys.exit(0)
 PY
   then
     log "plugin $PLUGIN_NAME: loaded by the running gateway"
