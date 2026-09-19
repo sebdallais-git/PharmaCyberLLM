@@ -92,6 +92,20 @@ If `docker pull` hangs with no output, the daemon is wedged: `colima restart` cl
 
 **Stack switches and benchmarks.** Hermes always uses the active stack. During a switch or a benchmark, PharmaLLM is unavailable or answers 503, and Hermes says so.
 
+## Stack-switch buttons
+
+PharmaLLM's web UI confirms a stack switch with Telegram buttons instead of a link. The app and Hermes share one bot, and Hermes' gateway is that bot's only update consumer, so the `pharmallm-switch` plugin (`hermes/plugins/pharmallm-switch/`) is what receives the tap.
+
+Install it with:
+
+```bash
+scripts/hermes-setup.sh install-plugin
+```
+
+This also restarts the gateway, because the plugin only wires its Telegram handler when the gateway connects. Once loaded, it writes `~/.hermes/pharmallm-switch.ready.json` with the gateway's pid and start time; PharmaLLM compares that file against the gateway's own status before it will let you request a stack switch. `scripts/hermes-setup.sh check` reports the plugin as `missing`, `loaded by the running gateway`, or `installed, waiting for a gateway restart`.
+
+Its tests run with `npm run test:hermes-plugin`.
+
 ## Moving Hermes to a second Mac
 
 On the PharmaLLM Mac, let the MCP service listen on the network:

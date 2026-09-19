@@ -208,15 +208,15 @@ scripts/switch-stack.sh ollama-ctx # recreate qwen3.8-pharma if its context diff
 
 ### Switching from the web UI
 
-The header has a stack selector next to the model selector. Choosing a different stack does not switch immediately: PharmaLLM sends a Telegram message with a one-time confirmation link, valid for 5 minutes. Tapping it starts the switch; ignoring it reverts the selector. The UI then follows the switch (stopping, starting, warming up, checking indexes) and shows the new stack with how long it took — the header line next to the selector reads `OMLX stack ready (96 s)` — and Telegram gets a completion message with the same line.
+The header has a stack selector next to the model selector. Choosing a different stack does not switch immediately: PharmaLLM sends a Telegram message with **Switch** and **Cancel** buttons, valid for 5 minutes. Tapping Switch starts it, tapping Cancel or ignoring the message reverts the selector. The tap goes through the Hermes gateway (the `pharmallm-switch` plugin), which calls the app on localhost, so the phone never has to reach the Mac. The UI then follows the switch (stopping, starting, warming up, checking indexes) and shows the new stack with how long it took — the header line next to the selector reads `OMLX stack ready (96 s)` — and Telegram gets a completion message with the same line.
 
-The route itself needs no token, because approval comes from the Telegram link. Store the credentials once:
+The route itself needs no token, because approval comes from tapping the Telegram button. Store the credentials once:
 
 ```bash
 scripts/switch-stack.sh telegram         # prompts for the bot token and your chat id, stores them at mode 600
 ```
 
-Without them the selector is disabled and says so. A switch is refused while another switch is pending confirmation or already in progress, while a benchmark or a reindex is running, or when the requested stack is already active.
+Without them the selector is disabled and says so. The Hermes gateway must also be running on this Mac with the `pharmallm-switch` plugin installed (`scripts/hermes-setup.sh install-plugin`), or the selector is disabled and says why. A two-Mac Hermes setup can't confirm switches this way — switch with `scripts/switch-stack.sh` there instead. A switch is refused while another switch is pending confirmation or already in progress, while a benchmark or a reindex is running, or when the requested stack is already active.
 
 **Embedding parity.** The oMLX stack shares the MLX index and ChromaDB collection because their embeddings are identical (cosine 1.000000). Every oMLX start re-checks that against `__tests__/fixtures/embedding-reference.json` and refuses to serve below a cosine of 0.9999, so a future oMLX upgrade that quietly changed the embedding cannot poison retrieval: without the check, it would write vectors into `knowledge_base_mlx` that no longer match the ones already there, and searches would return the wrong documents with no error. The probe turns that failure mode into a refused switch instead.
 
@@ -542,11 +542,12 @@ The **Auth** column shows which routes need `Authorization: Bearer <PHARMALLM_AP
 | `/api/bench/start` | POST | token | Pause background LLM jobs (15-minute lease, refreshed by calling again) |
 | `/api/bench/stop` | POST | token | Resume background LLM jobs |
 | `/api/bench/status` | GET | token | Benchmark flag and running background jobs |
-| `/api/stack/switch` | POST | open | `{ stack }` → request a switch to `ollama`, `mlx` or `omlx`; sends a Telegram confirmation link (`202` pending confirmation, `400` unknown stack, `409` refused — already active, another switch pending, a switch already in progress, a benchmark or a reindex running, or Telegram not configured, `502` if the Telegram send fails) |
-| `/api/stack/confirm` | GET | open | `?token=` from the Telegram link; starts `scripts/switch-stack.sh <target>` (`200` html page, `410` if the token expired or was already used) |
-| `/api/stack/status` | GET | open | Active stack, whether Telegram is configured, any pending switch, and switch progress |
+| `/api/stack/switch` | POST | open | `{ stack }` → request a switch to `ollama`, `mlx` or `omlx`; sends a Telegram message with Switch/Cancel buttons (`202` pending confirmation, with `id`; `400` unknown stack; `409` refused — already active, another switch pending, a switch already in progress, a benchmark or a reindex running, Telegram not configured, or `hermes_unavailable` when the Hermes gateway or its plugin cannot receive the tap; `502` if the Telegram send fails) |
+| `/api/stack/confirm` | POST | token | `{ token }` from the Telegram button, sent by the Hermes plugin; starts `scripts/switch-stack.sh <target>` (`200 {status, target}`, `410` if the token expired or was already used) |
+| `/api/stack/cancel` | POST | token | `{ token }`; drops the pending switch (`200 {status, target}`, `410` as above) |
+| `/api/stack/status` | GET | open | Active stack, whether Telegram is configured, `hermes_ready`, `hermes_reason`, any pending switch, `cancelled`, and switch progress |
 
-These three routes are `open` because approval comes from the one-time Telegram link, not from the bearer token — the link itself is the credential.
+`/api/stack/switch` and `/api/stack/status` are `open` because requesting a switch or checking its status needs no proof of identity — approval happens on the Telegram tap. `/api/stack/confirm` and `/api/stack/cancel` need the bearer token because the tap reaches PharmaLLM through the Hermes plugin, not through the phone directly.
 
 </details>
 
@@ -722,7 +723,8 @@ PharmaCyberLLM/
 │   │   ├── gap-detector.ts     # Confidence check, cooldown, n8n webhook
 │   │   ├── news-agent.ts       # 188-topic Google News agent
 │   │   ├── stack-switch.ts     # Pending-switch state machine (confirm tokens, refusal reasons)
-│   │   ├── telegram-notify.ts  # Sends the confirmation link and the completion message
+│   │   ├── telegram-notify.ts  # Sends the switch buttons and the completion message
+│   │   ├── hermes-readiness.ts # Can Hermes receive the switch buttons? (gateway socket + plugin ready file)
 │   │   ├── switch-labels.ts    # Switch-status text ("OMLX stack ready (96 s)"), synced with public/app.js
 │   │   └── ...                 # feedback, request log, response cache, web search, file parser
 │   └── utils/
@@ -731,6 +733,7 @@ PharmaCyberLLM/
 │   ├── src/http.ts             # auth middleware, /mcp, /healthz
 │   └── __tests__/              # against a fake PharmaLLM server
 ├── hermes/                     # Telegram assistant: config template, SOUL.md, cron jobs, plist template
+│   └── plugins/pharmallm-switch/ # Hermes plugin: handles the Switch / Cancel buttons
 ├── scripts/
 │   ├── switch-stack.sh         # prepare | ollama | mlx | omlx | status | token | telegram | mcp-token | mcp | ollama-ctx
 │   ├── start-services.sh       # npm run dev: ChromaDB + active stack + dev server
