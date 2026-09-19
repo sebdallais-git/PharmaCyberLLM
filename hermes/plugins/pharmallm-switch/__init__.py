@@ -2,7 +2,10 @@
 
 The app shares Hermes' bot and Hermes' gateway is that bot's only getUpdates consumer, so a tap on the
 app's buttons lands here. The handler is scoped to ``pls:`` callback data and registered before
-Hermes' own catch-all, so every other button keeps working."""
+Hermes' own catch-all, so every other button keeps working.
+
+The ready file PharmaLLM checks is written only once the adapter is connected with this plugin's handler
+in place: a Telegram app rebuilt by a transient init retry never gets plugin handlers, so it gets no file."""
 
 from __future__ import annotations
 
@@ -17,6 +20,8 @@ from .tap import PATTERN, is_allowed, parse_tap, resolve
 
 logger = logging.getLogger(__name__)
 READY_FILE_NAME = "pharmallm-switch.ready.json"
+# Strong references to the ready-file publishers: the loop keeps only weak ones to its tasks
+_pending: set[asyncio.Task] = set()
 
 
 def register(ctx) -> None:
@@ -28,12 +33,41 @@ def _wire(app, adapter) -> None:
     # gets here, so it cannot overwrite the ready file with its own pid.
     from telegram.ext import CallbackQueryHandler
     from gateway.status import get_process_start_time
-    from hermes_cli.config import get_hermes_home
+    from hermes_constants import get_process_hermes_home
 
-    app.add_handler(CallbackQueryHandler(handle_tap, pattern=PATTERN))
+    # The launch home, like gateway.pid and gateway.sock: get_hermes_home() honours per-session
+    # profile overrides, which would put the file where PharmaLLM never looks
+    home = Path(get_process_hermes_home())
+    # A file left by an earlier connect must not vouch for this one while it is still in progress
+    (home / READY_FILE_NAME).unlink(missing_ok=True)
+    for task in list(_pending):  # an earlier connect's publisher would only log a spurious error
+        task.cancel()
+    # block=False: the tap waits on the app, and a blocking handler would hold up every other update
+    app.add_handler(CallbackQueryHandler(handle_tap, pattern=PATTERN, block=False))
     pid = os.getpid()
-    # Same function the gateway's own pid record uses, so PharmaLLM can compare the two exactly
-    write_ready_file(Path(get_hermes_home()), pid, get_process_start_time(pid))
+    # Same function the gateway's own pid record uses, so PharmaLLM can compare the two exactly.
+    # The factory runs inside the adapter's connect() coroutine, so there is a running loop.
+    task = asyncio.get_running_loop().create_task(
+        publish_ready_when_connected(adapter, app, home, pid, get_process_start_time(pid)))
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
+
+
+async def publish_ready_when_connected(adapter, app, home: Path, pid: int, start_time: Optional[int],
+                                       poll: float = 0.5, timeout: float = 120.0) -> None:
+    # connect() can still fail after the factory ran, or rebuild its Application on a transient init
+    # error without re-running plugin factories: only a connected adapter still on our app gets a file.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not adapter.is_connected:
+        if loop.time() >= deadline:
+            logger.warning("pharmallm-switch: Telegram did not connect within %.0f s; no ready file", timeout)
+            return
+        await asyncio.sleep(poll)
+    if getattr(adapter, "_app", app) is not app:
+        logger.error("pharmallm-switch: Telegram app was rebuilt without plugin handlers; restart the gateway")
+        return
+    write_ready_file(home, pid, start_time)
 
 
 def write_ready_file(home: Path, pid: int, start_time: Optional[int]) -> Path:

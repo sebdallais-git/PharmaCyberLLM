@@ -7,6 +7,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -159,6 +160,25 @@ class PostJsonTest(unittest.TestCase):
         self.assertEqual(reply.status, 0)
         self.assertTrue(reply.error)
 
+    def test_an_error_body_cut_short_still_returns_the_status(self):
+        # err.read() raises IncompleteRead when the connection closes before Content-Length bytes
+        # arrive; the sibling except clauses do not cover the HTTPError handler, so it needs its own.
+        class TruncatedHandler(socketserver.BaseRequestHandler):
+            def handle(self):
+                self.request.recv(65536)
+                self.request.sendall(b"HTTP/1.1 410 Gone\r\nContent-Type: application/json\r\n"
+                                     b"Content-Length: 1000\r\nConnection: close\r\n\r\n{\"error\"")
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), TruncatedHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/stack/confirm"
+            reply = tap.post_json(url, {"token": TOKEN}, "api-secret", timeout=2)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(reply, tap.AppReply(410, {}))
+
 
 class FakeQuery:
     def __init__(self, data, user_id, answer_error=None):
@@ -222,6 +242,96 @@ class ReadyFileTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"pid": 4242, "start_time": 777})
             self.assertEqual(path.name, "pharmallm-switch.ready.json")
             self.assertEqual([p.name for p in Path(home).iterdir()], ["pharmallm-switch.ready.json"])
+
+
+class FakeAdapter:
+    """Stands in for Hermes' Telegram adapter: connects after ``connect_after`` polls (never when None),
+    and holds ``rebuilt`` as its app from then on when given, as a transient-init retry would."""
+
+    def __init__(self, app, connect_after=None, rebuilt=None):
+        self._app, self.connect_after, self.rebuilt, self.polls = app, connect_after, rebuilt, 0
+
+    @property
+    def is_connected(self):
+        self.polls += 1
+        if self.connect_after is None or self.polls < self.connect_after:
+            return False
+        if self.rebuilt is not None:
+            self._app = self.rebuilt
+        return True
+
+
+class PublishReadyTest(unittest.TestCase):
+    def publish(self, adapter, app, home, timeout=1.0):
+        return asyncio.run(plugin.publish_ready_when_connected(
+            adapter, app, home, 4242, 777, poll=0.01, timeout=timeout))
+
+    def test_writes_the_file_once_connected_with_its_own_app(self):
+        app = object()
+        adapter = FakeAdapter(app, connect_after=3)
+        with tempfile.TemporaryDirectory() as home:
+            self.publish(adapter, app, Path(home))
+            ready = Path(home) / plugin.READY_FILE_NAME
+            self.assertEqual(json.loads(ready.read_text()), {"pid": 4242, "start_time": 777})
+        self.assertGreaterEqual(adapter.polls, 3)
+
+    def test_never_writes_when_the_app_was_rebuilt_without_the_handler(self):
+        app = object()
+        adapter = FakeAdapter(app, connect_after=2, rebuilt=object())
+        with tempfile.TemporaryDirectory() as home, self.assertLogs(plugin.logger, "ERROR") as logs:
+            self.publish(adapter, app, Path(home))
+            self.assertEqual(list(Path(home).iterdir()), [])
+        self.assertIn("restart the gateway", logs.output[0])
+
+    def test_gives_up_without_a_file_when_never_connected(self):
+        app = object()
+        with tempfile.TemporaryDirectory() as home, self.assertLogs(plugin.logger, "WARNING"):
+            self.publish(FakeAdapter(app), app, Path(home), timeout=0.05)
+            self.assertEqual(list(Path(home).iterdir()), [])
+
+
+class WireTest(unittest.TestCase):
+    """_wire with fake Telegram/Hermes modules: never the real gateway."""
+
+    def test_removes_a_stale_ready_file_and_registers_a_non_blocking_handler(self):
+        handlers = []
+
+        class FakeHandler:
+            def __init__(self, callback, **kwargs):
+                self.callback, self.kwargs = callback, kwargs
+
+        class FakeApp:
+            def add_handler(self, handler):
+                handlers.append(handler)
+
+        with tempfile.TemporaryDirectory() as home:
+            stale = Path(home) / plugin.READY_FILE_NAME
+            stale.write_text(json.dumps({"pid": 1, "start_time": 1}))
+            telegram_ext = types.ModuleType("telegram.ext")
+            telegram_ext.CallbackQueryHandler = FakeHandler
+            gateway_status = types.ModuleType("gateway.status")
+            gateway_status.get_process_start_time = lambda pid: 777
+            constants = types.ModuleType("hermes_constants")
+            # Only the process home is offered: the plugin must not read the per-session override
+            constants.get_process_hermes_home = lambda: Path(home)
+            fakes = {"telegram": types.ModuleType("telegram"), "telegram.ext": telegram_ext,
+                     "gateway": types.ModuleType("gateway"), "gateway.status": gateway_status,
+                     "hermes_constants": constants}
+
+            async def wire_then_look():
+                app = FakeApp()
+                plugin._wire(app, FakeAdapter(app))  # never connects: no file may appear
+                await asyncio.sleep(0)
+                exists = stale.exists()
+                for task in list(plugin._pending):
+                    task.cancel()
+                return exists
+
+            with mock.patch.dict(sys.modules, fakes):
+                self.assertFalse(asyncio.run(wire_then_look()))
+        self.assertEqual(len(handlers), 1)
+        self.assertIs(handlers[0].callback, plugin.handle_tap)
+        self.assertEqual(handlers[0].kwargs, {"pattern": plugin.PATTERN, "block": False})
 
 
 if __name__ == "__main__":

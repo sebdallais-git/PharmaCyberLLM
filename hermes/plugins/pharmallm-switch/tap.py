@@ -65,7 +65,12 @@ def post_json(url: str, body: dict, token: str, timeout: float = 10.0) -> AppRep
             return AppReply(response.status, _json(response.read()))
     except urllib.error.HTTPError as err:
         with err:
-            return AppReply(err.code, _json(err.read()))
+            # Reading the body can fail too (e.g. IncompleteRead): the status alone is still the answer
+            try:
+                body = _json(err.read())
+            except (OSError, http.client.HTTPException):
+                body = {}
+            return AppReply(err.code, body)
     except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as err:
         # Class name only: a message could echo the URL or the request body.
         return AppReply(0, {}, type(err).__name__)
