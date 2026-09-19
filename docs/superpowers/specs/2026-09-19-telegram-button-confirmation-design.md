@@ -120,10 +120,11 @@ reads it any more.
 Source in the repo at `hermes/plugins/pharmallm-switch/`:
 
 - `plugin.yaml`: name, version, description.
-- `__init__.py`: `register(ctx)` does two things:
-  1. `ctx.register_telegram_handler(factory)`. The factory imports PTB inside itself and adds
-     `CallbackQueryHandler(handle_tap, pattern=PATTERN)`.
-  2. Writes `$HERMES_HOME/pharmallm-switch.ready.json` = `{pid, start_time}` of the current
+- `__init__.py`: `register(ctx)` only calls `ctx.register_telegram_handler(factory)`. The factory
+  runs when the gateway's Telegram adapter connects (never in a CLI session, which also loads
+  plugins), and there it does two things:
+  1. imports PTB and adds `CallbackQueryHandler(handle_tap, pattern=PATTERN)`;
+  2. writes `$HERMES_HOME/pharmallm-switch.ready.json` = `{pid, start_time}` of the current
      process. `start_time` is taken the same way the gateway's own pid file records it, so the two
      compare equal; the plan's first task confirms the exact source.
 - The HTTP call uses the standard library (`urllib.request` in a thread via `asyncio.to_thread`)
