@@ -275,6 +275,46 @@ describe("hermes-setup.sh all", () => {
   });
 });
 
+describe("hermes-setup.sh install-plugin", () => {
+  it("copies only the plugin's own files, enables it and restarts the gateway", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-plugin"]);
+
+    expect(result.status).toBe(0);
+    const dest = join(box.home, "plugins", "pharmallm-switch");
+    expect(readdirSync(dest).sort()).toEqual(["__init__.py", "plugin.yaml", "tap.py"]);
+    const calls = readFileSync(box.calls, "utf-8");
+    expect(calls).toContain("hermes [plugins] [enable] [pharmallm-switch]");
+    expect(calls).toContain("hermes [gateway] [restart]");
+    expect(calls.indexOf("[plugins] [enable]")).toBeLessThan(calls.indexOf("[gateway] [restart]"));
+  });
+});
+
+describe("hermes-setup.sh check: plugin", () => {
+  function checkOutput(box: Sandbox): string {
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+    const result = setup(box, ["check"]);
+    return result.stdout + result.stderr;
+  }
+
+  it("reports the plugin as missing before install-plugin", () => {
+    expect(checkOutput(sandbox())).toContain("plugin pharmallm-switch: missing");
+  });
+
+  it("reports a plugin loaded by the running gateway only when pid and start time both match", () => {
+    const box = sandbox();
+    setup(box, ["install-plugin"]);
+    mkdirSync(box.home, { recursive: true });
+    writeFileSync(join(box.home, "gateway.pid"), JSON.stringify({ pid: 4242, start_time: 777, kind: "hermes-gateway" }));
+    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify({ pid: 4242, start_time: 777 }));
+    expect(checkOutput(box)).toContain("plugin pharmallm-switch: loaded by the running gateway");
+
+    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify({ pid: 4242, start_time: 1 }));
+    expect(checkOutput(box)).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+  });
+});
+
 describe("hermes-setup.sh check", () => {
   it("reports variable names without printing their values", () => {
     const box = sandbox();

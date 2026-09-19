@@ -98,3 +98,9 @@ security:
   allow_private_urls: false
 
 unauthorized_dm_behavior: ignore
+
+# Receives the Switch / Cancel buttons PharmaLLM sends for a stack switch (hermes/plugins/pharmallm-switch).
+# Installed by scripts/hermes-setup.sh install-plugin.
+plugins:
+  enabled:
+    - pharmallm-switch

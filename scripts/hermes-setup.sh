@@ -4,8 +4,9 @@
 #   scripts/hermes-setup.sh check             read-only status (prints variable names, never values)
 #   scripts/hermes-setup.sh install-config    copy config.yaml and SOUL.md into ~/.hermes and fill ~/.hermes/.env
 #   scripts/hermes-setup.sh install-services  install the pharmallm-mcp launch agent and the Hermes gateway service
+#   scripts/hermes-setup.sh install-plugin    install the pharmallm-switch plugin (Telegram switch buttons) and restart the gateway
 #   scripts/hermes-setup.sh install-cron      create or update the scheduled jobs from hermes/cron/jobs.json
-#   scripts/hermes-setup.sh all               install-config, install-services, install-cron
+#   scripts/hermes-setup.sh all               install-config, install-services, install-plugin, install-cron
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,6 +20,9 @@ HERMES_BIN="${HERMES_BIN:-hermes}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
 MCP_HEALTH_URL="${MCP_HEALTH_URL:-http://127.0.0.1:3200/healthz}"
 MCP_LABEL="com.pharmallm.mcp"
+PLUGIN_NAME="pharmallm-switch"
+# Only the plugin's own files: the tests next to it in the repo stay out of ~/.hermes
+PLUGIN_FILES=(plugin.yaml __init__.py tap.py)
 ENV_KEYS=(PHARMALLM_URL PHARMALLM_MCP_URL SEARXNG_URL PHARMALLM_API_TOKEN PHARMALLM_MCP_TOKEN
   TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_HOME_CHANNEL)
 
@@ -168,6 +172,19 @@ install_services() {
   log "Installed the Hermes gateway service"
 }
 
+install_plugin() {
+  require_hermes
+  local src="$TEMPLATE_DIR/plugins/$PLUGIN_NAME" dest="$HERMES_HOME/plugins/$PLUGIN_NAME" file
+  mkdir -p "$dest"
+  for file in "${PLUGIN_FILES[@]}"; do
+    cp "$src/$file" "$dest/$file"
+  done
+  "$HERMES_BIN" plugins enable "$PLUGIN_NAME"
+  # The plugin wires its Telegram handler when the gateway connects, so only a restart loads it
+  "$HERMES_BIN" gateway restart
+  log "Installed the $PLUGIN_NAME plugin and restarted the gateway"
+}
+
 install_cron() {
   require_hermes
   HERMES_BIN="$HERMES_BIN" python3 - "$TEMPLATE_DIR/cron/jobs.json" "$HERMES_HOME/cron/jobs.json" <<'PY'
@@ -231,6 +248,29 @@ check() {
       problems=1
     fi
   done
+  # "Loaded" means the ready file names the gateway now running (pid and start time): a pid alone
+  # can be reused after a crash. The wording avoids "not loaded", which reports services above.
+  if [ ! -f "$HERMES_HOME/plugins/$PLUGIN_NAME/plugin.yaml" ]; then
+    log "plugin $PLUGIN_NAME: missing"
+    problems=1
+  elif python3 - "$HERMES_HOME" "$PLUGIN_NAME" <<'PY'
+import json, sys
+from pathlib import Path
+home, name = Path(sys.argv[1]), sys.argv[2]
+try:
+    gateway = json.loads((home / "gateway.pid").read_text(encoding="utf-8"))
+    ready = json.loads((home / f"{name}.ready.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+same = (ready.get("pid"), ready.get("start_time")) == (gateway.get("pid"), gateway.get("start_time"))
+sys.exit(0 if same and ready.get("pid") is not None else 1)
+PY
+  then
+    log "plugin $PLUGIN_NAME: loaded by the running gateway"
+  else
+    log "plugin $PLUGIN_NAME: installed, waiting for a gateway restart"
+    problems=1
+  fi
   # /healthz answers 200 with {"ok":true,"pharmallm":false} while the app behind the service is down,
   # so a 200 alone says nothing: parse the field instead of trusting the status code
   local health
@@ -256,12 +296,14 @@ case "${1:-}" in
   check) check ;;
   install-config) install_config ;;
   install-services) install_services ;;
+  install-plugin) install_plugin ;;
   install-cron) install_cron ;;
   # Separate statements, not &&: set -e is ignored inside && lists, which would hide a failed install_config
   all)
     install_config
     install_services
+    install_plugin
     install_cron
     ;;
-  *) sed -n '2,8p' "$0"; exit 1 ;;
+  *) sed -n '2,9p' "$0"; exit 1 ;;
 esac

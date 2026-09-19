@@ -112,6 +112,10 @@ describe("hermes/config.template.yaml", () => {
     expect(at("mcp_servers.pharmallm_cron.tools.prompts")).toBe(false);
   });
 
+  it("enables the pharmallm-switch plugin that receives the stack-switch buttons", () => {
+    expect(at("plugins.enabled")).toContain("pharmallm-switch");
+  });
+
   it("keeps the tools the scheduled jobs actually call available to the cron server", () => {
     const excluded = at("mcp_servers.pharmallm_cron.tools.exclude") as string[];
     for (const tool of ["run_news_agent", "knowledge_status", "list_knowledge_gaps", "resolve_knowledge_gap", "system_health", "feedback_report"]) {
