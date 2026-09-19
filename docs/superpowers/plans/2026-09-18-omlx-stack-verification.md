@@ -147,3 +147,65 @@ growing it). oMLX process RSS 16.5 GB; system memory 91% free.
   revert path, and the `already_active` refusal.
 - Step 7: benchmark all three stacks and fill in the README's third column, which Task 9
   deliberately left empty rather than invent.
+
+### Step 7 — all three stacks benchmarked (2026-09-19)
+
+Same machine, same day, same index, switched between runs, 23 questions each through
+`POST /api/chat`:
+
+| Metric (median) | Ollama | MLX | oMLX |
+|---|---:|---:|---:|
+| Time to first token | 19.1 s | 18.4 s | **17.5 s** |
+| Decode | 12.4 tok/s | 13.2 tok/s | **15.2 tok/s** |
+| Total per answer | 99.6 s | 92.3 s | **82.5 s** |
+| Query embedding | 31 ms | **19 ms** | 21 ms |
+| Retrieval | 76 ms | **44 ms** | 68 ms |
+| Peak system memory | 42,845 MB | **37,409 MB** | 41,009 MB |
+| Model process memory | 28,459 MB | **16,184 MB** | 17,119 MB |
+| Hit the 1024-token cap | 15 / 23 | 11 / 23 | 10 / 23 |
+| Failed runs | 0 / 23 | 0 / 23 | 0 / 23 |
+
+oMLX leads generation (+23% decode over Ollama, +15% over MLX, −17% total answer time
+against Ollama). MLX keeps the lowest memory and the fastest retrieval — its embedding
+server is a separate process, where oMLX shares one process with chat.
+
+Raw files: `data/benchmarks/{ollama,mlx,omlx}-2026-09-19T*.json`.
+
+### Cost incurred: two Hermes cron jobs failed
+
+Benchmark mode makes `/v1` return `503`, and Hermes runs entirely through `/v1`. Both of
+that morning's scheduled jobs died against it:
+
+```
+pharmallm-news-digest     06:32:53  error  HTTP 503: Benchmark in progress
+pharmallm-gap-resolution  07:00:55  error  HTTP 503: Benchmark in progress
+```
+
+The second was avoidable — the oMLX run was still finishing at 07:04 and the collision with
+the 07:00 job had already been predicted. The later MLX and Ollama runs were scheduled into
+the 07:10–08:55 gap and finished at 08:29, clear of the 09:00 health-watch.
+
+**Lesson for anyone benchmarking this machine:** read `~/.hermes/cron/jobs.json` for
+`next_run_at` before starting. A full three-stack run needs about 100 minutes including
+switches, and the agent is blind for all of it.
+
+### Two bugs the live run found that the test suite could not
+
+1. **oMLX was a one-way trap.** `is_project_pid` identified our processes by matching the
+   project path in their command line, but oMLX depends on `setproctitle` and runs as plain
+   `omlx-server`. The script disowned its own server: it refused to reuse a running oMLX
+   (`Port 8090 is used by another program`) *and* would have refused to stop it. The app
+   was left down after a failed switch. Fixed in `179ec91` by checking recorded pid files
+   first. Tests could not have caught it — they stub the binary, and a stub keeps the
+   project path in its command line.
+2. **The oMLX venv could not be built by `prepare`.** oMLX pins `>=3.11,<3.14`; this
+   machine's `python3` and `python/mlx-venv` are both 3.14.7. `prepare` used `$MLX_PYTHON`
+   and failed after a 213 MB clone. Fixed in `0bf7bb4` with its own `OMLX_PYTHON`.
+
+### Still outstanding
+
+The UI switch confirmed from Telegram (steps 4 and 5). The message arrives and the 5-minute
+expiry was observed working, but tapping the link failed with "a server with the specified
+hostname could not be found" — the receiving device was not resolving Tailscale MagicDNS.
+Confirmation links were repointed at the Tailscale IP (`https://100.69.110.112:3443`), which
+needs no MagicDNS; retest pending.

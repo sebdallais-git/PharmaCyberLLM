@@ -257,45 +257,50 @@ flowchart LR
 
 ## Benchmarks
 
-oMLX figures land in a follow-up task that measures all three stacks live; the tables below are the Ollama vs MLX baseline.
-
 ### RAG answers (the web chat workload)
 
-First head-to-head run on a **Mac mini M4 Pro, 48 GB** (macOS 26.4), 2026-09-16. Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024 on both stacks, background LLM jobs paused.
+All three stacks measured on the same day, **2026-09-19**, on a Mac mini M4 Pro, 48 GB (macOS 26.4). Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024, background LLM jobs paused. The stacks were switched between runs and nothing else ran on the machine.
 
-| Metric (median) | 🦙 Ollama | 🍎 MLX | MLX vs Ollama |
+| Metric (median) | 🦙 Ollama | 🍎 MLX | ⚡ oMLX |
 |---|---:|---:|---:|
-| Time to first token | 19.1 s | 18.5 s | **−2.8%** |
-| Decode speed | 12.4 tok/s | 13.0 tok/s | **+4.9%** |
-| Total time per answer | 99.6 s | 93.8 s | **−5.8%** |
-| Query embedding | 30 ms | 18 ms | −40.0% |
-| Retrieval | 80 ms | 42 ms | −47.5% |
-| Peak system memory used | 39,958 MB | 37,338 MB | **−6.6%** |
-| Loaded model memory (chat + embeddings) | ~20.4 GB | 16.0 GB | ≈ −22% |
-| Index build (~7k raw documents) | 15.6 min | 11.6 min | −25% |
-| Failed runs | 0 / 23 | 0 / 23 | |
+| Time to first token | 19.1 s | 18.4 s | **17.5 s** |
+| Decode speed | 12.4 tok/s | 13.2 tok/s | **15.2 tok/s** |
+| Total time per answer | 99.6 s | 92.3 s | **82.5 s** |
+| Query embedding | 31 ms | **19 ms** | 21 ms |
+| Retrieval | 76 ms | **44 ms** | 68 ms |
+| Peak system memory used | 42,845 MB | **37,409 MB** | 41,009 MB |
+| Model process memory | 28,459 MB | **16,184 MB** | 17,119 MB |
+| Answers hitting the 1024-token cap | 15 / 23 | 11 / 23 | 10 / 23 |
+| Failed runs | 0 / 23 | 0 / 23 | 0 / 23 |
+| Version | Ollama 0.34.0 | mlx 0.32.2, mlx-lm 0.31.3 | oMLX 0.7.0.dev3 |
 
-**Quality checks:** cross-stack embedding parity has a mean cosine of **0.9986** (min 0.9875 over 20 texts, threshold 0.98), and retrieved chunks overlap at **0.91** (mean Jaccard), so both stacks answered from nearly the same evidence.
+**oMLX generates fastest** — 23% quicker decode than Ollama and 15% quicker than MLX, which compounds into a 17% shorter answer than Ollama end to end. **MLX stays leanest**: lowest peak memory and the fastest retrieval, because its embedding server is a separate process rather than sharing one with chat as oMLX does. Ollama's memory figure is honest now that the sampler follows its `llama-server` children — it genuinely holds the most.
+
+The oMLX and MLX rows come from the *same* ChromaDB collection and the same on-disk index: the two stacks share them, so these numbers compare generation, not two different corpora.
 
 ### Long prompts (the agent workload)
 
 Measured 2026-09-17 on the same machine, through `/v1` with a 16.7K-token prompt, streamed, sent cold and then again with the same prefix.
 
-| Metric | 🦙 Ollama | 🍎 MLX |
-|---|---:|---:|
-| Cold time to first token | 156.3 s | 141.2 s |
-| Warm time to first token, same prefix | 5.8 s | 0.8 s |
-| Decode | 11.3–11.6 tok/s | 11.5–12.4 tok/s |
-| Memory pressure | normal, 41% free | normal, 40% free |
+| Metric | 🦙 Ollama | 🍎 MLX | ⚡ oMLX |
+|---|---:|---:|---:|
+| Cold time to first token | 156.3 s | 141.2 s | 149.6 s |
+| Warm time to first token, same prefix | 5.8 s | **0.8 s** | 7.1 s |
+| Same prompt after restarting the model server | ≈156 s | ≈141 s | **12.6 s** |
+| Decode | 11.3–11.6 tok/s | 11.5–12.4 tok/s | 11.4–12.1 tok/s |
+| Memory pressure | normal, 41% free | normal, 40% free | normal, 39% free |
 
-Prefill is the cost, at roughly 104–118 tok/s. Caching works on both stacks: appending a tool result to a conversation keeps the cached prefix, and a 14.6K-token prompt that cost 140.6 s cold came back in 10.9 s once about 1K tokens were appended. On Ollama the cache is shared, so a web chat between two agent steps evicts it.
+The oMLX column was measured on 2026-09-18 during its trial, on the same machine and the same 16.7K-token prompt. **Restart recovery is the one axis where it is in a different class**: its SSD prefix cache restored 16,384 tokens and recomputed only 368, turning a 149.6 s cold prefill into 12.6 s (`Prefix cache restore … source=paged cached=16384 suffix=368`). The cache costs about 4.3 GB under `~/.omlx`, capped by `OMLX_CACHE_MAX_GB` (default 20).
+
+Prefill is the cost, at roughly 104–118 tok/s. Caching works on all three: appending a tool result to a conversation keeps the cached prefix, and a 14.6K-token prompt that cost 140.6 s cold came back in 10.9 s once about 1K tokens were appended. On Ollama the cache is shared, so a web chat between two agent steps evicts it.
 
 **Reading it honestly**
 
-- 🟰 MLX is modestly faster end to end on RAG answers (~6%). Generation dominates: embedding and retrieval gains are milliseconds against ~95 s answers.
-- ✂️ Most answers hit the 1024-token cap (15/23 on Ollama, 13/23 on MLX). The cap is identical, so the comparison is fair, but totals reflect truncated answers and the blind review compares truncated text.
-- 🧮 The benchmark's own Ollama *process* memory reading (59 MB) was invalid: Ollama 0.34 runs models in `llama-server` child processes the sampler missed. The ~20.4 GB figure was measured directly afterwards (17,576 MB chat + 2,780 MB embeddings), and the sampler has since been fixed.
-- 🔁 These are single cold runs on one machine, so treat the percentages as a first signal rather than a verdict.
+- 🏁 oMLX wins the part that dominates: decode. Embedding and retrieval differences are milliseconds against 80–100 s answers, so they barely move the total.
+- ✂️ Many answers hit the 1024-token cap (15/23 Ollama, 11/23 MLX, 10/23 oMLX). The cap is identical everywhere, so the comparison is fair, but the totals describe truncated answers — and a faster stack hits the cap in less time, which flatters its total slightly.
+- 🧮 Ollama really does hold the most memory (28.5 GB of model process). An earlier run reported 59 MB because the sampler missed Ollama 0.34's `llama-server` child processes; that is fixed, and this table is the corrected measurement.
+- 🐍 oMLX is alpha software pinned at one commit, roughly seven months old and largely one maintainer's work. It is the fastest of the three here; that is not the same as the safest.
+- 🔁 Single cold runs on one machine. Treat the percentages as a signal, not a verdict.
 
 <details>
 <summary><b>Reproduce the benchmark</b></summary>
@@ -305,8 +310,11 @@ Prefill is the cost, at roughly 104–118 tok/s. Caching works on both stacks: a
 ```bash
 scripts/switch-stack.sh ollama && npx tsx scripts/benchmark-stack.ts
 scripts/switch-stack.sh mlx    && npx tsx scripts/benchmark-stack.ts
+scripts/switch-stack.sh omlx   && npx tsx scripts/benchmark-stack.ts
 npx tsx scripts/compare-benchmarks.ts data/benchmarks/ollama-<time>.json data/benchmarks/mlx-<time>.json
 ```
+
+`compare-benchmarks.ts` takes two runs at a time, so compare the pairs you care about. Benchmark mode makes `/v1` return `503`, which takes the Telegram agent offline for the duration — check `~/.hermes/cron/jobs.json` for the next scheduled run before starting, or it fails with `HTTP 503: Benchmark in progress`.
 
 `benchmark-stack.ts` accepts `--runs`, `--app` and `--questions`. Benchmark mode (`/api/bench/start`, a 15-minute lease) pauses the news agent and other background LLM jobs; chat requests with `benchmark: true` use temperature 0, skip web search and cap answers at 1024 tokens. `/v1` and `/api/llm/complete` return `503` while it runs. The comparison reports TTFT, decode speed, embedding and retrieval time, peak memory, retrieval overlap, and writes a blind A/B review page with stack labels hidden.
 
