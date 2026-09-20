@@ -6,7 +6,8 @@
 // what a plain regex tag match tolerates, no nested/embedded feeds. Task 4's
 // "rss" adapter reuses parseFeed() directly rather than re-implementing it.
 
-import type { Feed } from "./watchlist-config.js";
+import { createHash } from "node:crypto";
+import type { Entity, Feed } from "./watchlist-config.js";
 
 // ---- fetch injection -------------------------------------------------------
 
@@ -253,4 +254,168 @@ export async function verifyFeed(
 
   const newest = dated.reduce((max, current) => (current > max ? current : max), dated[0]);
   return { ok: true, items: items.length, newest };
+}
+
+// ---- rss/news adapters -----------------------------------------------------
+
+// Timeout the nightly ingest run should apply per outbound request. Kept
+// distinct from DEFAULT_FEED_TIMEOUT_MS (verify-feeds' own, shorter default)
+// since a run's per-source budget is looser than an interactive verify
+// command's. Adapters here receive an already-built FetchLike via
+// AdapterDeps -- they don't call createFetch themselves -- so this constant
+// is what the orchestrator wiring deps.fetchImpl should pass as timeoutMs,
+// e.g. createFetch({ userAgent, timeoutMs: DEFAULT_ADAPTER_TIMEOUT_MS }).
+export const DEFAULT_ADAPTER_TIMEOUT_MS = 15_000;
+
+// A single ingested item before tagging/summarization (later tasks). RSS and
+// Atom carry no separate description through parseFeed (Task 3 extracts only
+// title/link/date), so `body` is the title itself -- there is no other text
+// to reuse without writing a second parser, which the brief rules out.
+export interface RawItem {
+  title: string;
+  url: string;
+  publishedAt: string;
+  body: string;
+  sourceKind: Feed["kind"];
+  sourceName: string;
+}
+
+export interface AdapterDeps {
+  fetchImpl: FetchLike;
+  // Injected clock, not Date.now(): lets tests fix "now" and lets a feed
+  // item with no parseable date (see below) get a deterministic fallback
+  // instead of being silently dropped.
+  now(): Date;
+  userAgent: string;
+}
+
+// Fetches one URL through deps.fetchImpl and returns its body, converting
+// every failure mode (network/TLS error, non-2xx status) into a rejected
+// Error carrying `label` and the status/message -- never the url itself,
+// which may carry a tracking query string that shouldn't end up in logs.
+// This still lets the run survive a per-feed failure: rejecting here makes
+// rssAdapter/newsAdapter's returned promise reject, which the orchestrator
+// (a later task) awaits per feed inside its own try/catch, exactly the way
+// verifyFeed's caller already isolates one bad feed from the rest of a run.
+async function fetchBody(deps: AdapterDeps, url: string, label: string): Promise<string> {
+  let response: { ok: boolean; status: number; text(): Promise<string> };
+  try {
+    response = await deps.fetchImpl(url, { headers: { "User-Agent": deps.userAgent } });
+  } catch (err) {
+    throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`${label} failed: HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
+// Shared by rssAdapter and newsAdapter: turns parsed feed items into
+// RawItems, applying the since cutoff and the "no date" fallback. An item
+// exactly at `since` is treated as already seen and dropped, on the
+// assumption `since` is the high-water mark of the previous run.
+function toRawItems(
+  parsed: ParsedFeedItem[],
+  sourceKind: Feed["kind"],
+  sourceName: string,
+  since: string | null,
+  now: () => Date,
+): RawItem[] {
+  const items: RawItem[] = [];
+  for (const item of parsed) {
+    const publishedAt = item.publishedAt ?? now().toISOString();
+    if (since !== null && publishedAt <= since) continue;
+    items.push({
+      title: item.title,
+      url: item.link,
+      publishedAt,
+      body: item.title,
+      sourceKind,
+      sourceName,
+    });
+  }
+  return items;
+}
+
+// Fetches and parses one entity's feed (rss or ir_page: both are just an XML
+// URL to GET). Reuses parseFeed rather than a second parser, per the brief.
+export function rssAdapter(
+  deps: AdapterDeps,
+): (feed: Feed, entity: Entity, since: string | null) => Promise<RawItem[]> {
+  return async (feed, entity, since) => {
+    if (feed.url === undefined) {
+      throw new Error(`feed for "${entity.name}" (${feed.kind}) has no url`);
+    }
+    const body = await fetchBody(deps, feed.url, `feed for "${entity.name}" (${feed.kind})`);
+    return toRawItems(parseFeed(body), feed.kind, entity.name, since, deps.now);
+  };
+}
+
+// Fetches Google News' RSS search for a query -- same URL shape as
+// src/services/web-search.ts's searchWeb (q/hl/gl/ceid), so the two never
+// drift into fetching subtly different result sets for the same text.
+export function newsAdapter(deps: AdapterDeps): (query: string, since: string | null) => Promise<RawItem[]> {
+  return async (query, since) => {
+    const params = new URLSearchParams({ q: query, hl: "en-US", gl: "US", ceid: "US:en" });
+    const url = `https://news.google.com/rss/search?${params.toString()}`;
+    const body = await fetchBody(deps, url, "Google News request");
+    return toRawItems(parseFeed(body), "news", "Google News", since, deps.now);
+  };
+}
+
+// ---- dedupe keys ------------------------------------------------------------
+
+// Query params that only carry tracking/attribution noise, never identify
+// the underlying article -- stripping them is what lets the same press
+// release reached via IR RSS, Google News and EDGAR collapse to one url.
+const TRACKING_PARAM_EXACT = new Set(["fbclid", "gclid"]);
+
+function isTrackingParam(key: string): boolean {
+  const lower = key.toLowerCase();
+  return lower.startsWith("utm_") || TRACKING_PARAM_EXACT.has(lower);
+}
+
+// Normalizes a url into the dedupe key the whole nightly run's cost depends
+// on: lowercase host (the WHATWG URL parser already does this, and the
+// scheme, for free), no fragment, no tracking params, a stable (sorted)
+// order for whatever query params remain, and no trailing slash on a
+// non-root path. Two urls that are "the same page" by these rules produce
+// byte-identical output.
+//
+// A url the URL constructor can't parse at all is returned trimmed rather
+// than thrown on -- canonicalization best-effort degrades to "as given"
+// instead of aborting an ingest run over one malformed link.
+export function canonicalUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url.trim();
+  }
+
+  const keptParams = [...parsed.searchParams.entries()]
+    .filter(([key]) => !isTrackingParam(key))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const query = new URLSearchParams(keptParams).toString();
+
+  let pathname = parsed.pathname;
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    pathname = pathname.slice(0, -1);
+  }
+
+  const host = parsed.host.toLowerCase();
+  return `${parsed.protocol}//${host}${pathname}${query.length > 0 ? `?${query}` : ""}`;
+}
+
+// Hashes title+body over normalised whitespace and case so the same press
+// release re-typeset with different spacing/casing across sources still
+// hashes identically -- the second half of the dedupe key alongside
+// canonicalUrl (a source can reuse one url for many stories, e.g. a
+// paginated newsroom index, so url alone isn't enough).
+export function contentHash(title: string, body: string): string {
+  const normalized = `${title}\n${body}`
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return createHash("sha256").update(normalized).digest("hex");
 }
