@@ -18,6 +18,25 @@ import type { ChatMessage, ChatOptions } from "./llm-client.js";
 const DOMAIN_SET: ReadonlySet<string> = new Set(DOMAINS);
 const SIGNAL_SET: ReadonlySet<string> = new Set(SIGNALS);
 
+// Short glosses for the prompt (fix round 2): a live smoke test against the
+// real 27B model tagged a phase III trial result as domains: ["rnd_it"] --
+// "rnd_it" reads, to a model guessing from the bare id, as "this is R&D
+// news" rather than its actual meaning, "R&D *IT*" (lab informatics,
+// research data platforms, scientific computing). Every domain gets the
+// same terse treatment so none of them are left for the model to guess at.
+const DOMAIN_GLOSSES: Record<Domain, string> = {
+  cyber: "security incidents, controls, threat actors",
+  ai: "AI/ML platforms, GPUs, AI factories, model deployment",
+  cloud: "public/hybrid cloud adoption and migration",
+  infrastructure: "datacentre, compute, network, end-user computing",
+  rnd_it: "research informatics, lab data platforms, scientific computing",
+  mfg_it: "manufacturing execution, OT/shop-floor systems, serialisation",
+  sap: "SAP and ERP programmes",
+  data: "data platforms, warehouses, lakehouses, analytics",
+  storage: "primary/secondary storage systems",
+  backup: "backup, recovery, cyber-vault",
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -120,7 +139,10 @@ export function buildTaggingPrompt(item: RawItem, watchlist: Watchlist, candidat
     "Candidate entities for this item:",
     entityList,
     "",
-    `- domains: pick zero or more values ONLY from: ${DOMAINS.join(", ")}.`,
+    "- domains: describe ONLY the IT/technology dimension of the item -- never the business, clinical or scientific subject on its own. Pick zero or more values from:",
+    ...DOMAINS.map((domain) => `  ${domain} = ${DOMAIN_GLOSSES[domain]}`),
+    "  An item with no technology angle (most pharma business, clinical and scientific news) MUST return domains: [] -- this is normal and expected, not an error.",
+    "  Example: a drug approval, trial result or regulatory milestone that names no technology is domains: [] and usually signal: corporate.",
     `- signal: pick exactly one of: ${SIGNALS.join(", ")}, or null.`,
     "- importance: an integer from 1 to 5, rating how much this item matters to the watchlist:",
     "  5 = a named customer's strategic IT or financial move (a platform switch, a major outage, an acquisition, a large contract).",

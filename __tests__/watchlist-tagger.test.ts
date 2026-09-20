@@ -133,6 +133,32 @@ describe("buildTaggingPrompt", () => {
 
     expect(text).toContain("pick exactly one of: it_move, financial, cyber, corporate, or null");
   });
+
+  it("states that domains are the IT dimension, glosses every domain, and calls out the empty-domains case", () => {
+    const messages = buildTaggingPrompt(ITEM, WATCHLIST, ["roche", "aws"]);
+    const text = messages.map((m) => m.content).join("\n");
+
+    // The IT/technology framing that distinguishes domains from the
+    // business/clinical/scientific subject of an item.
+    expect(text).toContain("IT/technology dimension");
+
+    // Every domain gets its own short gloss (fix round 2: a live smoke test
+    // mistagged a trial result as rnd_it without one).
+    expect(text).toContain("rnd_it = research informatics, lab data platforms, scientific computing");
+    expect(text).toContain("cyber = security incidents, controls, threat actors");
+    expect(text).toContain("ai = AI/ML platforms, GPUs, AI factories, model deployment");
+    expect(text).toContain("cloud = public/hybrid cloud adoption and migration");
+    expect(text).toContain("infrastructure = datacentre, compute, network, end-user computing");
+    expect(text).toContain("mfg_it = manufacturing execution, OT/shop-floor systems, serialisation");
+    expect(text).toContain("sap = SAP and ERP programmes");
+    expect(text).toContain("data = data platforms, warehouses, lakehouses, analytics");
+    expect(text).toContain("storage = primary/secondary storage systems");
+    expect(text).toContain("backup = backup, recovery, cyber-vault");
+
+    // domains: [] is explicitly normal, with the trial-result case named.
+    expect(text).toContain("domains: [] -- this is normal and expected, not an error");
+    expect(text).toContain("drug approval, trial result or regulatory milestone");
+  });
 });
 
 describe("parseTagging", () => {
