@@ -23,6 +23,7 @@ import { createTagger } from "../src/services/watchlist-tagger.js";
 import {
   createIngestRun,
   DEFAULT_INGEST_LIMIT,
+  DISABLED_FEED_KINDS,
   isRunnableFeed,
   type IngestAdapters,
   type IngestDeps,
@@ -194,7 +195,11 @@ export function parseIngestArgs(argv: string[]): IngestArgs {
 // to tell "every feed failed" apart from "nothing was ever attempted".
 // isRunnableFeed is imported from watchlist-ingest.ts rather than
 // re-implemented here (fix round 1 duplicated this predicate and drifted
-// from buildTasks' own copy) -- one predicate, used by both.
+// from buildTasks' own copy) -- one predicate, used by both. R20: a
+// DISABLED_FEED_KINDS feed is excluded here too, for the same reason --
+// buildTasks never attempts it, so counting it here would make "every
+// attempted feed failed" compare against a total that includes feeds that
+// were never attempted.
 export function countPlannedFeeds(watchlist: Watchlist, only: string[] | undefined): number {
   const wanted = only === undefined ? null : new Set(only);
   let total = 0;
@@ -202,7 +207,7 @@ export function countPlannedFeeds(watchlist: Watchlist, only: string[] | undefin
     if (wanted !== null && !wanted.has(id)) continue;
     const entity = watchlist.entities.get(id);
     if (entity === undefined) continue;
-    total += entity.feeds.filter(isRunnableFeed).length;
+    total += entity.feeds.filter((feed) => isRunnableFeed(feed) && !DISABLED_FEED_KINDS.has(feed.kind)).length;
   }
   if (wanted === null) total += watchlist.topics.length;
   return total;

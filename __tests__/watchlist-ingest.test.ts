@@ -21,6 +21,7 @@ import {
   computeCandidateIds,
   createIngestRun,
   DEFAULT_INGEST_BUDGET_MS,
+  DISABLED_FEED_KINDS,
   feedIdFor,
   FIRST_RUN_BACKFILL_MS,
   topicFeedId,
@@ -84,6 +85,7 @@ interface Harness {
   rssCalls: Array<{ feed: Feed; entity: Entity; since: string | null }>;
   newsCalls: Array<{ query: string; since: string | null }>;
   edgarCalls: Array<{ cik: string; since: string | null; at: number }>;
+  irPageCalls: Array<{ url: string; entity: Entity; since: string | null }>;
   logs: string[];
   run(options?: { since?: string; only?: string[] }): Promise<IngestResult>;
 }
@@ -103,6 +105,10 @@ interface HarnessOptions {
   // (C1's budget). Takes precedence over the fixed `now` above.
   clock?(): Date;
   budgetMs?: number;
+  // R20: overrides the production default (DISABLED_FEED_KINDS) so a test
+  // can re-enable a disabled kind to exercise its own fetch/anomaly logic
+  // (e.g. ir_page's R16 check), without changing what ships by default.
+  disabledKinds?: ReadonlySet<Feed["kind"]>;
 }
 
 function makeHarness(options: HarnessOptions): Harness {
@@ -112,6 +118,7 @@ function makeHarness(options: HarnessOptions): Harness {
   const rssCalls: Harness["rssCalls"] = [];
   const newsCalls: Harness["newsCalls"] = [];
   const edgarCalls: Harness["edgarCalls"] = [];
+  const irPageCalls: Harness["irPageCalls"] = [];
   const logs: string[] = [];
 
   const deps: IngestDeps = {
@@ -131,6 +138,7 @@ function makeHarness(options: HarnessOptions): Harness {
         return options.edgar !== undefined ? await options.edgar(cik, entity, since) : [];
       },
       async irPage(url, entity, since) {
+        irPageCalls.push({ url, entity, since });
         return options.irPage !== undefined
           ? await options.irPage(url, entity, since)
           : { items: [], linksScanned: 0, datedLinks: 0 };
@@ -149,6 +157,7 @@ function makeHarness(options: HarnessOptions): Harness {
     log: (line) => logs.push(line),
     edgarMinIntervalMs: options.edgarMinIntervalMs,
     budgetMs: options.budgetMs,
+    disabledKinds: options.disabledKinds,
   };
 
   return {
@@ -159,6 +168,7 @@ function makeHarness(options: HarnessOptions): Harness {
     rssCalls,
     newsCalls,
     edgarCalls,
+    irPageCalls,
     logs,
     run: (runOptions) => createIngestRun(deps)(runOptions),
   };
@@ -522,6 +532,11 @@ describe("watchlist ingest", () => {
     const harness = makeHarness({
       watchlist: makeWatchlist([roche]),
       limit: 1,
+      // R20 disables ir_page by default; this test is about skippedByCap and
+      // the anomaly count together, so it re-enables ir_page to still get an
+      // anomaly out of the same run (see the dedicated R20 tests below for
+      // ir_page's own skipped-not-failed behaviour under the real default).
+      disabledKinds: new Set(),
       async rss() {
         return [
           rawItem({ title: "One", url: "https://roche.com/a", publishedAt: "2026-09-16T00:00:00.000Z" }),
@@ -907,11 +922,15 @@ describe("watchlist ingest", () => {
     harness.store.close();
   });
 
+  // R20 disables ir_page by default in production, but its own R16
+  // anomaly-detection logic must keep working for Phase 2, when it is
+  // re-enabled -- these two tests exercise it directly via disabledKinds.
   it("records an IR page that scanned links but recognised no dates as an anomaly (R16)", async () => {
     const irFeed: Feed = { kind: "ir_page", url: "https://roche.com/investors/reports" };
     const roche = makeEntity({ id: "roche", name: "Roche", feeds: [irFeed] });
     const harness = makeHarness({
       watchlist: makeWatchlist([roche]),
+      disabledKinds: new Set(),
       async irPage() {
         return { items: [], linksScanned: 12, datedLinks: 0 };
       },
@@ -930,6 +949,7 @@ describe("watchlist ingest", () => {
     const roche = makeEntity({ id: "roche", name: "Roche", feeds: [irFeed] });
     const harness = makeHarness({
       watchlist: makeWatchlist([roche]),
+      disabledKinds: new Set(),
       async irPage() {
         return { items: [], linksScanned: 0, datedLinks: 0 };
       },
@@ -1206,6 +1226,72 @@ describe("watchlist ingest", () => {
     const lastRun = harness.store.lastRun();
     expect(lastRun).not.toBeNull();
     expect(lastRun?.finishedAt).not.toBeNull();
+    harness.store.close();
+  });
+});
+
+// ---- R20: ir_page disabled by default in the nightly run -------------------
+
+describe("R20: disabled feed kinds", () => {
+  it("DISABLED_FEED_KINDS disables ir_page", () => {
+    // Pinned so a future edit that quietly re-enables ir_page (or disables
+    // something else instead) is caught here rather than only showing up as
+    // the live run's noise coming back.
+    expect(DISABLED_FEED_KINDS.has("ir_page")).toBe(true);
+  });
+
+  it("tags only the rss items when an entity has both an rss and an ir_page feed, reporting the ir_page as skipped rather than failed, and never calling the ir-page adapter", async () => {
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const irFeed: Feed = { kind: "ir_page", url: "https://roche.com/investors" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed, irFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      // No `disabledKinds` override: this is the real production default.
+      async rss() {
+        return [rawItem({ title: "Roche picks a cloud", url: "https://roche.com/a" })];
+      },
+      async irPage() {
+        // If this were ever called it would report a broken-extraction
+        // anomaly -- proving the assertions below aren't passing by luck.
+        return { items: [], linksScanned: 50, datedLinks: 0 };
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.tagged).toBe(1);
+    expect(result.stored).toBe(1);
+    expect(harness.irPageCalls).toEqual([]);
+    expect(result.anomalies).toEqual([]);
+    expect(result.failedFeeds).toEqual([]);
+    expect(result.skippedKinds).toBe(1);
+
+    const stored = harness.store.itemsInPeriod(ALL_TIME.from, ALL_TIME.to);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].title).toBe("Roche picks a cloud");
+
+    // The ir_page feed's own watermark must never move: buildTasks skipped
+    // it entirely, so it was never fetched, let alone resolved.
+    expect(harness.store.getFeedState(feedIdFor(roche, irFeed)).lastSeenAt).toBeNull();
+    harness.store.close();
+  });
+
+  it("counts a skipped ir_page feed in the log line and IngestResult without touching fetched/deduped/tagged/stored/failedFeeds/anomalies", async () => {
+    const irFeed: Feed = { kind: "ir_page", url: "https://roche.com/investors" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [irFeed] });
+    const harness = makeHarness({ watchlist: makeWatchlist([roche]) });
+
+    const result = await harness.run();
+
+    expect(result.skippedKinds).toBe(1);
+    expect(result.fetched).toBe(0);
+    expect(result.deduped).toBe(0);
+    expect(result.tagged).toBe(0);
+    expect(result.stored).toBe(0);
+    expect(result.failedFeeds).toEqual([]);
+    expect(result.anomalies).toEqual([]);
+    expect(harness.irPageCalls).toEqual([]);
+    expect(harness.logs.some((line) => line.includes("skippedKinds"))).toBe(true);
     harness.store.close();
   });
 });

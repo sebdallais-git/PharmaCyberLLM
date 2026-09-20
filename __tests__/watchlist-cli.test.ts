@@ -161,6 +161,21 @@ describe("countPlannedFeeds", () => {
 
     expect(countPlannedFeeds(makeWatchlist([misconfigured]), undefined)).toBe(1);
   });
+
+  // R20: a well-formed ir_page feed is still excluded, same as one missing
+  // its url -- buildTasks never attempts either, so "every attempted feed
+  // failed" must be computed against a total that leaves both out.
+  it("excludes a well-formed ir_page feed, since R20 disables the kind at the run level", () => {
+    const withIrPage = makeEntity({
+      id: "roche",
+      feeds: [
+        { kind: "rss", url: "https://roche/a" },
+        { kind: "ir_page", url: "https://roche/investors" },
+      ],
+    });
+
+    expect(countPlannedFeeds(makeWatchlist([withIrPage]), undefined)).toBe(1);
+  });
 });
 
 // ---- resolveStackName ---------------------------------------------------------

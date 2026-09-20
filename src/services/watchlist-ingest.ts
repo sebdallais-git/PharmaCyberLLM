@@ -73,6 +73,18 @@ export const TITLE_KEY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 // handful of candidates ever reach the model.
 export const MAX_CANDIDATE_IDS = 8;
 
+// R20: the live backfill showed ir_page scanning hundreds of links per
+// entity and recognising zero dates on 14 of 29 pages (astrazeneca 569/0,
+// samsung-bioepis 344/0, gsk 289/0, hikma 266/0, sun-pharma 181/0, ...),
+// plus 8 more failing outright (403s, timeouts) -- for 4 of the run's 203
+// stored items total. Recurring noise at that scale from a broken
+// date-extraction heuristic masks genuinely new failures elsewhere, so the
+// kind is disabled at the RUN level, not removed from the config: every
+// ir_page feed and the research behind its URL stays in
+// config/watchlist.yaml for Phase 2, which fixes the date extraction and
+// re-enables the kind by deleting it from this one set.
+export const DISABLED_FEED_KINDS: ReadonlySet<Feed["kind"]> = new Set(["ir_page"]);
+
 // R-candidates: an alias shorter than this is ignored when scanning an item's
 // text ("GNE", "AG", "SA" match far too much). An entity's canonical NAME is
 // always matched, however short -- "SAP", "AWS" and "IBM" are real names we
@@ -113,6 +125,12 @@ export interface IngestDeps {
   // how much of OUR work to do, so an injected clock is exactly right and
   // lets a test spend an hour of budget in a millisecond.
   budgetMs?: number;
+  // R20: feed kinds excluded from this run's task list entirely -- never
+  // fetched, never counted as failed or anomalous. Defaults to
+  // DISABLED_FEED_KINDS; overridable only so tests can exercise a disabled
+  // kind's own logic (e.g. the ir_page R16 anomaly check) without flipping
+  // the production default.
+  disabledKinds?: ReadonlySet<Feed["kind"]>;
 }
 
 export interface IngestResult {
@@ -132,6 +150,11 @@ export interface IngestResult {
   // a quiet night and exit 0.
   taggerFailures: number;
   failedFeeds: string[];
+  // R20: feed instances excluded by disabledKinds before they were ever
+  // fetched -- not a failure, not an anomaly, not a success. Kept separate
+  // so the run's numbers still add up honestly (fetched+skippedKinds+... is
+  // the true count of every feed the config lists for this run).
+  skippedKinds: number;
   // R16: things that are not failures but are not normal either -- an IR page
   // whose links yielded no recognizable date, an embedding write that did not
   // land. Kept separate from failedFeeds because they do not stop a feed from
@@ -267,10 +290,21 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
   );
   // Same "non-positive means unset" rule as `limit` and the EDGAR interval.
   const budgetMs = deps.budgetMs !== undefined && deps.budgetMs > 0 ? deps.budgetMs : DEFAULT_INGEST_BUDGET_MS;
+  const disabledKinds = deps.disabledKinds ?? DISABLED_FEED_KINDS;
 
-  function buildTasks(only: string[] | undefined): FeedTask[] {
+  // R20: buildTasks also reports how many feed instances it left out because
+  // their kind is disabled, broken down by kind so the run's log line and
+  // IngestResult can say honestly what was skipped and why.
+  interface BuiltTasks {
+    tasks: FeedTask[];
+    skippedKinds: number;
+    skippedKindCounts: Partial<Record<Feed["kind"], number>>;
+  }
+
+  function buildTasks(only: string[] | undefined): BuiltTasks {
     const wanted = only === undefined ? null : new Set(only);
     const tasks: FeedTask[] = [];
+    const skippedKindCounts: Partial<Record<Feed["kind"], number>> = {};
 
     // watchlist.priority is already customers -> peers -> vendors, which is
     // exactly the order the cap must consume (a customer's news outranks a
@@ -283,6 +317,15 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
       for (const feed of entity.feeds) {
         const feedId = feedIdFor(entity, feed);
         const label = `${entity.name} (${feed.kind})`;
+
+        // R20: a disabled kind is skipped before the config-completeness
+        // check below -- it is never attempted regardless of whether it is
+        // otherwise well-formed, and it must never be counted as a failure,
+        // an anomaly or a success.
+        if (disabledKinds.has(feed.kind)) {
+          skippedKindCounts[feed.kind] = (skippedKindCounts[feed.kind] ?? 0) + 1;
+          continue;
+        }
 
         if (!isRunnableFeed(feed)) {
           const missingField = feed.kind === "edgar" ? "cik" : feed.kind === "news" ? "query" : "url";
@@ -355,7 +398,8 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
       }
     }
 
-    return tasks;
+    const skippedKinds = Object.values(skippedKindCounts).reduce<number>((total, count) => total + (count ?? 0), 0);
+    return { tasks, skippedKinds, skippedKindCounts };
   }
 
   return async function run(options: IngestOptions = {}): Promise<IngestResult> {
@@ -373,6 +417,7 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
     let skippedByCap = 0;
     let skippedByBudget = 0;
     let taggerFailures = 0;
+    let skippedKinds = 0;
     const failedFeeds: string[] = [];
     const anomalies: string[] = [];
 
@@ -401,8 +446,19 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
 
     try {
       runId = deps.store.startRun(startedAt);
-      const tasks = buildTasks(options.only);
-      deps.log(`run ${runId}: ${tasks.length} feeds`);
+      const built = buildTasks(options.only);
+      const { tasks, skippedKindCounts } = built;
+      skippedKinds = built.skippedKinds;
+      // R20: named explicitly in the run's own first log line -- the whole
+      // point of counting these separately is that they must never be read
+      // as silence, a failure or an anomaly.
+      const skippedKindsNote =
+        skippedKinds > 0
+          ? ` (skippedKinds: ${Object.entries(skippedKindCounts)
+              .map(([kind, count]) => `${kind}=${count}`)
+              .join(", ")})`
+          : "";
+      deps.log(`run ${runId}: ${tasks.length} feeds${skippedKindsNote}`);
 
       for (const task of tasks) {
         try {
@@ -609,8 +665,8 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
         });
         deps.log(
           `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
-            `skippedByCap=${skippedByCap} skippedByBudget=${skippedByBudget} taggerFailures=${taggerFailures} ` +
-            `failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
+            `skippedByCap=${skippedByCap} skippedByBudget=${skippedByBudget} skippedKinds=${skippedKinds} ` +
+            `taggerFailures=${taggerFailures} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
         );
       }
     }
@@ -625,6 +681,7 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
       taggerFailures,
       failedFeeds,
       anomalies,
+      skippedKinds,
       runId,
     };
   };
