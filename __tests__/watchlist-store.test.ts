@@ -181,6 +181,66 @@ describe("watchlist store", () => {
     expect(item?.urls.sort()).toEqual(["https://a/dup-sighting-1", "https://news/dup-sighting"]);
   });
 
+  // R13/R15: the cross-source title-key lookup Task 7's orchestrator uses as
+  // its third and last dedupe step.
+  describe("findByTitleKey", () => {
+    it("finds an item with the same title key from a different source kind inside the window", () => {
+      store.insertItem({
+        ...base,
+        urlCanonical: "https://a/tk-1",
+        contentHash: "c-tk-1",
+        titleKey: "roche picks a cloud",
+        sourceKind: "rss",
+        publishedAt: "2026-09-16T00:00:00.000Z",
+      });
+
+      const found = store.findByTitleKey(
+        "roche picks a cloud",
+        "2026-09-15T00:00:00.000Z",
+        "2026-09-21T00:00:00.000Z",
+        "news",
+      );
+      expect(found?.contentHash).toBe("c-tk-1");
+      expect(found?.titleKey).toBe("roche picks a cloud");
+    });
+
+    it("never matches an item from the same source kind", () => {
+      store.insertItem({
+        ...base,
+        urlCanonical: "https://a/tk-2",
+        contentHash: "c-tk-2",
+        titleKey: "roche results",
+        sourceKind: "rss",
+        publishedAt: "2026-09-16T00:00:00.000Z",
+      });
+
+      expect(
+        store.findByTitleKey("roche results", "2026-09-15T00:00:00.000Z", "2026-09-21T00:00:00.000Z", "rss"),
+      ).toBeNull();
+    });
+
+    it("never matches outside the published-at window", () => {
+      store.insertItem({
+        ...base,
+        urlCanonical: "https://a/tk-3",
+        contentHash: "c-tk-3",
+        titleKey: "roche opens a site",
+        sourceKind: "rss",
+        publishedAt: "2026-09-01T00:00:00.000Z",
+      });
+
+      expect(
+        store.findByTitleKey("roche opens a site", "2026-09-15T00:00:00.000Z", "2026-09-21T00:00:00.000Z", "news"),
+      ).toBeNull();
+    });
+
+    it("never matches an item stored without a title key", () => {
+      store.insertItem({ ...base, urlCanonical: "https://a/tk-4", contentHash: "c-tk-4", sourceKind: "rss" });
+
+      expect(store.findByTitleKey("", "2000-01-01T00:00:00.000Z", "2100-01-01T00:00:00.000Z", "news")).toBeNull();
+    });
+  });
+
   // R6: the join tables declare ON DELETE CASCADE, but that constraint is a
   // no-op unless the deleting connection has foreign_keys enabled. Uses a
   // temp file (not :memory:) so a second raw connection can see the store's

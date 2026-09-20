@@ -33,6 +33,9 @@ export interface StoredItem {
   id: number;
   urlCanonical: string;
   contentHash: string;
+  // R13/R15: the cross-source dedupe key (watchlist-sources.ts's titleKey).
+  // Empty for a row stored without one; an empty key never matches.
+  titleKey: string;
   sourceKind: string;
   sourceName: string;
   title: string;
@@ -51,6 +54,9 @@ export interface StoredItem {
 export interface NewItem {
   urlCanonical: string;
   contentHash: string;
+  // Optional so callers that have no key (or predate R13) keep working; it is
+  // stored as "" and findByTitleKey never matches an empty key.
+  titleKey?: string;
   sourceKind: string;
   sourceName: string;
   title: string;
@@ -93,6 +99,13 @@ export interface WatchlistStore {
   findByHash(contentHash: string): StoredItem | null;
   findByUrl(urlCanonical: string): StoredItem | null;
   addSource(itemId: number, sourceKind: string, url: string): void;
+  // R13/R15: the third and last cross-source dedupe step. Returns the oldest
+  // item with this exact title_key, published within [fromIso, toIso] and
+  // stored under a source kind OTHER than excludeSourceKind -- titleKey strips
+  // a trailing dash clause, so two different releases from one company can
+  // share a key and a same-source-kind match would wrongly collapse them.
+  // An empty titleKey never matches.
+  findByTitleKey(titleKey: string, fromIso: string, toIso: string, excludeSourceKind: string): StoredItem | null;
   itemsInPeriod(from: string, to: string, options?: { entities?: string[]; domains?: Domain[] }): StoredItem[];
   countsByEntity(from: string, to: string): Array<{ entityId: string; items: number; maxImportance: number }>;
   getFeedState(feedId: string): FeedState;
@@ -109,6 +122,7 @@ interface ItemRow {
   id: number;
   url_canonical: string;
   content_hash: string;
+  title_key: string;
   source_kind: string;
   source_name: string;
   title: string;
@@ -141,6 +155,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       url_canonical TEXT NOT NULL UNIQUE,
       content_hash TEXT NOT NULL UNIQUE,
+      title_key TEXT NOT NULL DEFAULT '',
       source_kind TEXT NOT NULL,
       source_name TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -156,6 +171,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     CREATE INDEX IF NOT EXISTS idx_items_published_at ON items(published_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_items_content_hash ON items(content_hash);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_items_url_canonical ON items(url_canonical);
+    CREATE INDEX IF NOT EXISTS idx_items_title_key ON items(title_key);
 
     CREATE TABLE IF NOT EXISTS item_entities (
       item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -203,8 +219,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
   // making the insert idempotent (R5) -- see insertItemTxn below for how a
   // no-op insert is resolved back to the existing row's id.
   const insertItemStmt = db.prepare(`
-    INSERT INTO items (url_canonical, content_hash, source_kind, source_name, title, summary, signal, importance, facts, published_at, fetched_at, flagged)
-    VALUES (@urlCanonical, @contentHash, @sourceKind, @sourceName, @title, @summary, @signal, @importance, @facts, @publishedAt, @fetchedAt, @flagged)
+    INSERT INTO items (url_canonical, content_hash, title_key, source_kind, source_name, title, summary, signal, importance, facts, published_at, fetched_at, flagged)
+    VALUES (@urlCanonical, @contentHash, @titleKey, @sourceKind, @sourceName, @title, @summary, @signal, @importance, @facts, @publishedAt, @fetchedAt, @flagged)
     ON CONFLICT DO NOTHING
   `);
   const insertEntityStmt = db.prepare(`INSERT OR IGNORE INTO item_entities (item_id, entity_id) VALUES (?, ?)`);
@@ -213,6 +229,14 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
   const selectItemByHashStmt = db.prepare(`SELECT * FROM items WHERE content_hash = ?`);
   const selectItemByUrlStmt = db.prepare(`SELECT * FROM items WHERE url_canonical = ?`);
+  const selectItemByTitleKeyStmt = db.prepare(`
+    SELECT * FROM items
+    WHERE title_key = ? AND title_key <> ''
+      AND published_at >= ? AND published_at <= ?
+      AND source_kind <> ?
+    ORDER BY id ASC
+    LIMIT 1
+  `);
   const selectEntitiesStmt = db.prepare(`SELECT entity_id FROM item_entities WHERE item_id = ?`);
   const selectDomainsStmt = db.prepare(`SELECT domain FROM item_domains WHERE item_id = ?`);
   const selectUrlsStmt = db.prepare(`
@@ -265,6 +289,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       id: row.id,
       urlCanonical: row.url_canonical,
       contentHash: row.content_hash,
+      titleKey: row.title_key,
       sourceKind: row.source_kind,
       sourceName: row.source_name,
       title: row.title,
@@ -306,6 +331,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     const result = insertItemStmt.run({
       urlCanonical: item.urlCanonical,
       contentHash: item.contentHash,
+      titleKey: item.titleKey ?? "",
       sourceKind: item.sourceKind,
       sourceName: item.sourceName,
       title: item.title,
@@ -368,6 +394,12 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
     addSource(itemId: number, sourceKind: string, url: string): void {
       insertSourceStmt.run(itemId, sourceKind, url);
+    },
+
+    findByTitleKey(titleKey: string, fromIso: string, toIso: string, excludeSourceKind: string): StoredItem | null {
+      if (titleKey.length === 0) return null;
+      const row = selectItemByTitleKeyStmt.get(titleKey, fromIso, toIso, excludeSourceKind) as ItemRow | undefined;
+      return row === undefined ? null : hydrateItem(row);
     },
 
     itemsInPeriod(from: string, to: string, options?: { entities?: string[]; domains?: Domain[] }): StoredItem[] {
