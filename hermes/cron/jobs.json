@@ -22,5 +22,13 @@
     "schedule": "0 8 * * 1",
     "deliver": "telegram",
     "prompt": "Scheduled job: weekly feedback digest. Call feedback_report with kind weekly_digest, then feedback_report with kind low_rated. Reply with at most 15 lines: rating trends for the week and the worst-rated answers with the question and what went wrong."
+  },
+  {
+    "name": "pharmallm-watchlist-ingest",
+    "schedule": "30 2 * * *",
+    "type": "script",
+    "command": "npx tsx scripts/watchlist.ts ingest",
+    "deliver": "telegram",
+    "notifyOn": "failure"
   }
 ]

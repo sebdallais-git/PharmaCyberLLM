@@ -943,4 +943,24 @@ describe("watchlist ingest", () => {
     expect(harness.store.getFeedState(feedIdFor(roche, rssFeed)).lastSeenAt).toBeNull();
     harness.store.close();
   });
+
+  // Task 8 fix (c): startRun (and buildTasks/the initial log call) used to
+  // sit outside the guarded try/finally, so a throw from either of them left
+  // an unfinished `runs` row -- indistinguishable from a run still in
+  // flight. deps.log is made to throw on its very first call (right after
+  // buildTasks, before any per-feed work) to exercise exactly that window.
+  it("still finishes the run row when the initial log call throws before the per-feed loop", async () => {
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [] });
+    const harness = makeHarness({ watchlist: makeWatchlist([roche]) });
+    harness.deps.log = () => {
+      throw new Error("logger exploded");
+    };
+
+    await expect(createIngestRun(harness.deps)()).rejects.toThrow("logger exploded");
+
+    const lastRun = harness.store.lastRun();
+    expect(lastRun).not.toBeNull();
+    expect(lastRun?.finishedAt).not.toBeNull();
+    harness.store.close();
+  });
 });

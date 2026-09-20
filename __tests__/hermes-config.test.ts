@@ -23,7 +23,13 @@ interface CronJob {
   name: string;
   schedule: string;
   deliver: string;
-  prompt: string;
+  // Prompt-mode jobs (an LLM agent using MCP tools) carry `prompt`. Task 8's
+  // watchlist ingest is script-mode: no agent step, just a command and a
+  // failure-only notification policy.
+  prompt?: string;
+  type?: "script";
+  command?: string;
+  notifyOn?: "always" | "failure";
 }
 
 const jobs = JSON.parse(readFileSync(join(hermesDir, "cron", "jobs.json"), "utf-8")) as CronJob[];
@@ -125,23 +131,46 @@ describe("hermes/config.template.yaml", () => {
 });
 
 describe("hermes/cron/jobs.json", () => {
-  it("defines the four scheduled jobs delivered to Telegram", () => {
+  it("defines the five scheduled jobs delivered to Telegram", () => {
     expect(jobs.map((job) => job.name)).toEqual([
       "pharmallm-news-digest",
       "pharmallm-gap-resolution",
       "pharmallm-health-watch",
       "pharmallm-feedback-digest",
+      "pharmallm-watchlist-ingest",
     ]);
     // Two health runs a day, not three: every Hermes step is a full cold prefill (~160 s of GPU)
-    expect(jobs.map((job) => job.schedule)).toEqual(["0 6 * * *", "0 7 * * *", "0 9,19 * * *", "0 8 * * 1"]);
+    expect(jobs.map((job) => job.schedule)).toEqual([
+      "0 6 * * *",
+      "0 7 * * *",
+      "0 9,19 * * *",
+      "0 8 * * 1",
+      "30 2 * * *",
+    ]);
     for (const job of jobs) {
       expect(job.schedule.split(" ")).toHaveLength(5);
       expect(job.deliver).toBe("telegram");
-      expect(job.prompt.length).toBeGreaterThan(40);
+    }
+    // Only the prompt-mode (LLM agent) jobs carry a prompt; the watchlist
+    // ingest job is checked on its own terms below.
+    for (const job of jobs.filter((job) => job.type !== "script")) {
+      expect(job.prompt?.length ?? 0).toBeGreaterThan(40);
       expect(job.prompt).not.toContain("start_reindex");
     }
     expect(jobs[2].prompt).toContain("[SILENT]");
     expect(jobs[1].prompt).toContain("at most 3");
+  });
+
+  it("runs the watchlist ingest nightly at 02:30, clear of the news/gap/health/feedback windows, alerting only on failure", () => {
+    const watchlistJob = jobs.find((job) => job.name === "pharmallm-watchlist-ingest");
+    expect(watchlistJob).toBeDefined();
+    expect(watchlistJob?.schedule).toBe("30 2 * * *");
+    expect(watchlistJob?.type).toBe("script");
+    expect(watchlistJob?.command).toContain("scripts/watchlist.ts ingest");
+    expect(watchlistJob?.notifyOn).toBe("failure");
+
+    const otherSchedules = jobs.filter((job) => job.name !== "pharmallm-watchlist-ingest").map((job) => job.schedule);
+    expect(otherSchedules).not.toContain(watchlistJob?.schedule);
   });
 
   it("asks for the gap status the detector actually writes and forbids adding knowledge", () => {

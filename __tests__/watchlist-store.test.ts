@@ -303,4 +303,106 @@ describe("watchlist store", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Task 8 fix (a): recordFeedSuccess's doc comment promises that passing
+  // null "leaves the watermark alone", but the plain UPDATE used to write
+  // NULL straight over the column -- ingest only survived because it always
+  // passed the previous value back itself. COALESCE(?, last_seen_at) (and
+  // the same for the hash) makes the contract true independent of the
+  // caller.
+  it("keeps a previous watermark when a later success call passes null (COALESCE, not overwrite)", () => {
+    store.recordFeedSuccess("f-keep", "2026-09-18T00:00:00.000Z", "h-keep");
+    // e.g. a later run that fetched cleanly but resolved nothing new
+    store.recordFeedSuccess("f-keep", null, null);
+
+    expect(store.getFeedState("f-keep")).toEqual({
+      feedId: "f-keep",
+      lastSeenAt: "2026-09-18T00:00:00.000Z",
+      lastItemHash: "h-keep",
+      consecutiveFailures: 0,
+    });
+  });
+
+  // Task 8 fix (b): the `runs`/`title_key` schema additions went straight
+  // into CREATE TABLE IF NOT EXISTS with no migration path, so a
+  // pre-existing data/watchlist.db (items/feed_state only, no title_key
+  // column) would throw at open -- CREATE INDEX IF NOT EXISTS on a
+  // nonexistent column fails immediately. A PRAGMA user_version migration
+  // must upgrade such a database in place instead.
+  describe("schema migration (PRAGMA user_version)", () => {
+    it("opens cleanly, survives a write, and keeps the row after closing and reopening", () => {
+      const dir = mkdtempSync(join(tmpdir(), "watchlist-store-migrate-fresh-"));
+      const dbPath = join(dir, "watchlist.db");
+      try {
+        const first = openWatchlistStore(dbPath);
+        first.insertItem({ ...base, urlCanonical: "https://a/reopen", contentHash: "c-reopen" });
+        first.close();
+
+        const second = openWatchlistStore(dbPath);
+        expect(second.findByHash("c-reopen")?.urlCanonical).toBe("https://a/reopen");
+        second.close();
+
+        const raw = new Database(dbPath);
+        expect(raw.pragma("user_version", { simple: true })).toBe(1);
+        raw.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("upgrades a pre-Task-7 database (items without title_key, no runs table) without throwing at open", () => {
+      const dir = mkdtempSync(join(tmpdir(), "watchlist-store-migrate-legacy-"));
+      const dbPath = join(dir, "watchlist.db");
+      try {
+        // A schema as it existed before Task 7 added title_key and runs.
+        const legacy = new Database(dbPath);
+        legacy.exec(`
+          CREATE TABLE items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url_canonical TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL UNIQUE,
+            source_kind TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            signal TEXT,
+            importance INTEGER,
+            facts TEXT,
+            published_at TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            flagged INTEGER NOT NULL DEFAULT 0
+          );
+          CREATE TABLE item_entities (item_id INTEGER NOT NULL, entity_id TEXT NOT NULL, PRIMARY KEY (item_id, entity_id));
+          CREATE TABLE item_domains (item_id INTEGER NOT NULL, domain TEXT NOT NULL, PRIMARY KEY (item_id, domain));
+          CREATE TABLE item_sources (item_id INTEGER NOT NULL, source_kind TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY (item_id, url));
+          CREATE TABLE feed_state (feed_id TEXT PRIMARY KEY, last_seen_at TEXT, last_item_hash TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0);
+          INSERT INTO items (url_canonical, content_hash, source_kind, source_name, title, summary, signal, importance, published_at, fetched_at)
+          VALUES ('https://a/legacy', 'legacy-hash', 'rss', 'Legacy Feed', 'Legacy title', 'Legacy summary', 'it_move', 3, '2026-01-01T00:00:00.000Z', '2026-01-01T01:00:00.000Z');
+        `);
+        legacy.close();
+
+        expect(() => openWatchlistStore(dbPath)).not.toThrow();
+
+        const migrated = openWatchlistStore(dbPath);
+        const legacyItem = migrated.findByHash("legacy-hash");
+        expect(legacyItem?.title).toBe("Legacy title");
+        expect(legacyItem?.titleKey).toBe(""); // backfilled default, never matches findByTitleKey
+        migrated.insertItem({ ...base, urlCanonical: "https://a/post-migration", contentHash: "post-migration" });
+        migrated.startRun("2026-09-20T02:30:00.000Z"); // the runs table must now exist
+        migrated.close();
+
+        const raw = new Database(dbPath);
+        expect(raw.pragma("user_version", { simple: true })).toBe(1);
+        raw.close();
+
+        // Reopening an already-migrated database must be a no-op, not a second migration attempt.
+        const reopened = openWatchlistStore(dbPath);
+        expect(reopened.findByHash("legacy-hash")?.title).toBe("Legacy title");
+        expect(reopened.findByHash("post-migration")).not.toBeNull();
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

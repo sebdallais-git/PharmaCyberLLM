@@ -210,7 +210,19 @@ if os.path.exists(store_path):
             existing[job["name"]] = job["id"]
 
 for job in definitions:
-    name, schedule, prompt, deliver = job["name"], job["schedule"], job["prompt"], job["deliver"]
+    name = job["name"]
+    if job.get("type") == "script":
+        # Task 8's watchlist ingest runs a plain script with no LLM agent step
+        # (delivering only on failure) -- installing it needs a real
+        # scheduling mechanism (launchd/cron invoking the script directly, or
+        # whatever Hermes' own script-job support turns out to require), not
+        # the prompt-based `hermes cron create <schedule> <prompt>` this loop
+        # drives everything else through. That wiring is out of this task's
+        # scope, so the job is left in jobs.json for the record and skipped
+        # here rather than guessed at.
+        print(f"[hermes-setup] Skipping script-mode job {name}: install separately (command: {job.get('command')})")
+        continue
+    schedule, prompt, deliver = job["schedule"], job["prompt"], job["deliver"]
     if name in existing:
         command = [hermes, "cron", "edit", existing[name], "--schedule", schedule, "--prompt", prompt, "--deliver", deliver]
         action = "Updated"

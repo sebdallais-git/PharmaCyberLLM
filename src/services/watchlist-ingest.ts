@@ -314,7 +314,6 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
 
   return async function run(options: IngestOptions = {}): Promise<IngestResult> {
     const startedAt = deps.now().toISOString();
-    const runId = deps.store.startRun(startedAt);
 
     let fetched = 0;
     let deduped = 0;
@@ -324,10 +323,19 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
     const failedFeeds: string[] = [];
     const anomalies: string[] = [];
 
-    const tasks = buildTasks(options.only);
-    deps.log(`run ${runId}: ${tasks.length} feeds`);
+    // Task 8 fix (c): startRun/buildTasks/the initial log call used to sit
+    // outside this try/finally, so a throw from any of them (a locked store,
+    // a broken watchlist, a logger that throws) left an unfinished `runs`
+    // row -- indistinguishable from a run still in flight. -1 is a sentinel
+    // meaning "no run row exists yet"; the finally below only finishes a run
+    // it actually started.
+    let runId = -1;
 
     try {
+      runId = deps.store.startRun(startedAt);
+      const tasks = buildTasks(options.only);
+      deps.log(`run ${runId}: ${tasks.length} feeds`);
+
       for (const task of tasks) {
         try {
           // Inside the try on purpose: a store read that throws (a locked
@@ -484,21 +492,25 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
         }
       }
     } finally {
-      // Always closed out, even if the loop itself dies: an unfinished `runs`
-      // row is indistinguishable from a run still in flight, and cron would
-      // have no way to tell a crash from a quiet night.
-      deps.store.finishRun(runId, deps.now().toISOString(), {
-        fetched,
-        deduped,
-        tagged,
-        failedFeeds: failedFeeds.length,
-        skippedByCap,
-        anomalies: anomalies.length,
-      });
-      deps.log(
-        `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
-          `skippedByCap=${skippedByCap} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
-      );
+      // Always closed out, even if the loop itself dies (or buildTasks/the
+      // initial log call did, before the loop ever started): an unfinished
+      // `runs` row is indistinguishable from a run still in flight, and cron
+      // would have no way to tell a crash from a quiet night. Skipped only
+      // when startRun itself never returned a row to finish.
+      if (runId !== -1) {
+        deps.store.finishRun(runId, deps.now().toISOString(), {
+          fetched,
+          deduped,
+          tagged,
+          failedFeeds: failedFeeds.length,
+          skippedByCap,
+          anomalies: anomalies.length,
+        });
+        deps.log(
+          `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
+            `skippedByCap=${skippedByCap} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
+        );
+      }
     }
 
     return { fetched, deduped, tagged, stored, skippedByCap, failedFeeds, anomalies, runId };

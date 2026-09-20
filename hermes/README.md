@@ -6,7 +6,7 @@ Everything needed to run [Hermes Agent](https://hermes-agent.nousresearch.com/) 
 |---|---|
 | `config.template.yaml` | Hermes config: PharmaLLM `/v1` model with 64k context, `pharmallm` MCP server (15 tools, no `start_reindex`), a `pharmallm_cron` server for scheduled runs (14 tools, also no `add_knowledge`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
 | `SOUL.md` | Assistant role and tool policy |
-| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00 |
+| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00, watchlist ingest 02:30 (script mode, `scripts/watchlist.ts ingest`, alerts only on failure -- see the root `README.md`; `install-cron` skips it, install it as a plain launchd/cron job) |
 | `com.pharmallm.mcp.plist.template` | launchd service for `pharmallm-mcp` |
 
 ## 1. Install Hermes (once)
@@ -88,7 +88,7 @@ The sandbox is sized for a small VM (`container_cpu: 1`, `container_memory: 512`
 
 If `docker pull` hangs with no output, the daemon is wedged: `colima restart` clears it. That also restarts Neo4j and SearXNG, so PharmaLLM's graph and web search are briefly unavailable.
 
-**Speed and GPU budget (measured).** Every Hermes step is a full cold prefill of about 160 s: Hermes' prompt prefix changes from request to request, so the prompt cache never hits. A Telegram answer with 3–4 tool calls therefore takes about 10–20 minutes, and the four scheduled jobs on this branch's schedule cost about 45–55 minutes of GPU per day. A PharmaLLM web chat between two Hermes steps evicts the shared Ollama prompt cache, so nothing is saved even when a prefix would have matched.
+**Speed and GPU budget (measured).** Every Hermes step is a full cold prefill of about 160 s: Hermes' prompt prefix changes from request to request, so the prompt cache never hits. A Telegram answer with 3–4 tool calls therefore takes about 10–20 minutes, and the four LLM-agent scheduled jobs on this branch's schedule cost about 45–55 minutes of GPU per day. The watchlist ingest job (02:30) is script mode -- it never goes through a Hermes agent step, so this prefill math doesn't apply to it; its own GPU cost is one local-model tagging call per new item, sequential, capped at 250 items a night (see the root `README.md`). A PharmaLLM web chat between two Hermes steps evicts the shared Ollama prompt cache, so nothing is saved even when a prefix would have matched.
 
 **Stack switches and benchmarks.** Hermes always uses the active stack. During a switch or a benchmark, PharmaLLM is unavailable or answers 503, and Hermes says so.
 

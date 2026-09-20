@@ -432,6 +432,27 @@ Neo4j stores **14 entity types** (Company, Subsidiary, Drug, TherapeuticArea, Ma
 
 ---
 
+## Watchlist (IT scene tracking, Phase 1)
+
+A second, more targeted news pipeline sits alongside the general news agent: it watches a named list of pharma customers, their competitive peer sets and their IT/security vendors for moves in specific domains (cyber, AI, cloud, infrastructure, SAP, data, and more), plus a set of entity-less topic queries covering the same ground the news agent's Google searches already did. Every item is deduplicated across sources (IR RSS, Google News, EDGAR filings) *before* it reaches the local model, tagged with entities/domains/a signal/an importance score, and stored in its own SQLite database plus ChromaDB.
+
+- **Config:** [`config/watchlist.yaml`](config/watchlist.yaml) is the single definition of who is watched (`customers`, `peers`, `vendors`, grouped by domain) and what topic queries run with no named entity (`topics`, grouped the same way). Editing this file is how an entity, feed or topic is added or retired — nothing else needs to change.
+- **Store:** `data/watchlist.db` (SQLite, gitignored) — items, their entities/domains/sources, per-feed fetch watermarks, and a row per run with its stats.
+- **CLI (`scripts/watchlist.ts`, also runnable as `npm run watchlist -- <command>`):**
+
+  | Command | What it does |
+  |---|---|
+  | `verify-feeds` | Fetches every configured RSS/Atom feed once and reports which parse cleanly, without writing anything |
+  | `ingest [--limit N] [--since ISO] [--only id,id]` | Runs one nightly pass: fetch every due feed in priority order (customers → peers → vendors → topics), dedupe, tag with the local model, store and embed. `--only` runs just the named entities' feeds (rejecting an unknown id rather than silently running zero feeds); `--since` overrides every feed's own watermark; `--limit` overrides the default per-run cap. Prints which LLM stack it tagged with and the run's counts, and exits non-zero if every attempted feed failed |
+  | `status [--days N]` | Prints the last recorded run's stats and per-entity item counts for a trailing window (default 7 days), read-only |
+
+  `ingest` resolves the LLM stack the same way the rest of the app does: `LLM_PROVIDER` if set, otherwise whatever `data/run/active-stack` (written by `scripts/switch-stack.sh`) currently says, falling back to `ollama` if neither exists.
+
+- **Schedule:** a Hermes cron job (`hermes/cron/jobs.json`, `pharmallm-watchlist-ingest`) runs `ingest` nightly at **02:30**, clear of the news digest/gap-resolution/health-watch windows. It is script mode — a plain command, not an LLM agent step — and delivers a message only on failure. `scripts/hermes-setup.sh install-cron` currently skips installing it (it drives Hermes' prompt-based `cron create` only); it needs a real launchd/cron entry pointing at `npx tsx scripts/watchlist.ts ingest`.
+- **Not built yet:** Phase 2's digests (`build_digest`, weekly/monthly/quarterly email delivery, `search_watchlist`, `compare_entities`) are designed (see `docs/superpowers/specs/2026-09-20-it-scene-watchlist-design.md`) but not implemented — the nightly `ingest` populates `data/watchlist.db` and ChromaDB, and nothing reads them into a report yet.
+
+---
+
 ## Agents, MCP and the Model Gateway
 
 PharmaLLM serves AI agents in two ways: as a set of tools, and as a model provider.
@@ -487,6 +508,7 @@ scripts/hermes-setup.sh check           # read-only status; prints variable name
 | `pharmallm-gap-resolution` | 07:00 daily | Re-checks at most 3 triggered gaps, oldest first |
 | `pharmallm-health-watch` | 09:00 and 19:00 | Reports failing checks; replies `[SILENT]` and delivers nothing while healthy |
 | `pharmallm-feedback-digest` | Monday 08:00 | Weekly rating trends and the worst-rated answers |
+| `pharmallm-watchlist-ingest` | 02:30 daily | Script mode (no LLM agent step): runs `scripts/watchlist.ts ingest`; delivers only on failure. See [Watchlist](#watchlist-it-scene-tracking-phase-1) |
 
 - **Tool scope:** Telegram and CLI runs get 15 of the 16 MCP tools (no `start_reindex`). Scheduled runs connect to a separate, write-limited `pharmallm_cron` server with 14 tools: no `start_reindex` and no `add_knowledge`. MCP calls are never approval-gated, so the tool list is the control. Scheduled runs also get no web, memory, terminal or file toolsets.
 - **Sandbox:** shell commands run in a Docker container with `--network=none`, 512 MB and 1 CPU, no host project or home directory mounted. Verified live: `/Users` is not visible, `host.docker.internal` does not resolve and the app is unreachable from inside.
@@ -721,7 +743,13 @@ PharmaCyberLLM/
 │   │   ├── chromadb-store.ts   # ChromaDB client
 │   │   ├── graph-store.ts      # Neo4j queries and entity writes
 │   │   ├── gap-detector.ts     # Confidence check, cooldown, n8n webhook
-│   │   ├── news-agent.ts       # 188-topic Google News agent
+│   │   ├── news-agent.ts       # Google News agent; topics read from config/watchlist.yaml
+│   │   ├── watchlist-config.ts # Loads/validates config/watchlist.yaml (entities, feeds, topics)
+│   │   ├── watchlist-store.ts  # SQLite store for watchlist items, feed watermarks and runs
+│   │   ├── watchlist-sources.ts # RSS/Atom + Google News adapters, canonicalization, dedupe keys
+│   │   ├── watchlist-edgar.ts  # EDGAR filings adapter, IR page adapter
+│   │   ├── watchlist-tagger.ts # Local-model tagging against the closed vocabulary
+│   │   ├── watchlist-ingest.ts # Nightly orchestrator: fetch, dedupe, tag, store, embed
 │   │   ├── stack-switch.ts     # Pending-switch state machine (confirm tokens, refusal reasons)
 │   │   ├── telegram-notify.ts  # Sends the switch buttons and the completion message
 │   │   ├── hermes-readiness.ts # Can Hermes receive the switch buttons? (gateway socket + plugin ready file)
@@ -734,11 +762,13 @@ PharmaCyberLLM/
 │   └── __tests__/              # against a fake PharmaLLM server
 ├── hermes/                     # Telegram assistant: config template, SOUL.md, cron jobs, plist template
 │   └── plugins/pharmallm-switch/ # Hermes plugin: handles the Switch / Cancel buttons
+├── config/watchlist.yaml       # Watchlist: customers, peers, vendors and topic queries
 ├── scripts/
 │   ├── switch-stack.sh         # prepare | ollama | mlx | omlx | status | token | telegram | mcp-token | mcp | ollama-ctx
 │   ├── start-services.sh       # npm run dev: ChromaDB + active stack + dev server
 │   ├── run-mcp.sh              # launchd entry point for pharmallm-mcp
 │   ├── hermes-setup.sh         # check | install-config | install-services | install-cron | all
+│   ├── watchlist.ts            # verify-feeds | ingest | status (see Watchlist)
 │   ├── reindex-stack.ts        # Rebuild, --check or --status for the active stack
 │   ├── benchmark-stack.ts      # Benchmark the active stack through the app
 │   ├── compare-benchmarks.ts   # Comparison report + blind A/B page

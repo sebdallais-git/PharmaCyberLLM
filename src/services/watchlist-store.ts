@@ -119,9 +119,10 @@ export interface WatchlistStore {
   // resolved nothing it is allowed to move past (an empty feed, or one whose
   // whole first batch was dropped by an ingest cap) has no watermark to
   // record. Passing null clears the failure streak while leaving the
-  // watermark alone, so the next run still backfills that feed -- stamping a
-  // made-up watermark would push its unseen backlog behind an exclusive
-  // `since` permanently.
+  // watermark alone (the SQL COALESCEs a null argument onto the existing
+  // column rather than overwriting it), so the next run still backfills
+  // that feed -- stamping a made-up watermark would push its unseen backlog
+  // behind an exclusive `since` permanently.
   recordFeedSuccess(feedId: string, lastSeenAt: string | null, lastItemHash: string | null): void;
   recordFeedFailure(feedId: string): number; // returns consecutiveFailures after increment
   startRun(startedAt: string): number;
@@ -166,6 +167,33 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
   // SQLite disables foreign key enforcement per connection by default; the
   // join tables' ON DELETE CASCADE (R6) is a no-op unless this is set here.
   db.pragma("foreign_keys = ON");
+
+  // Task 8 fix (b): the `runs` table and `items.title_key` column were added
+  // straight into CREATE TABLE IF NOT EXISTS with no migration path -- fine
+  // for a brand-new database, but a pre-existing data/watchlist.db (from
+  // before Task 7) already has an `items` table without title_key, and
+  // CREATE INDEX IF NOT EXISTS on that column below would throw immediately.
+  // PRAGMA user_version tracks which schema a database is on (0 for any
+  // database this module has never stamped, current or legacy alike) so a
+  // one-time ALTER can backfill what's missing BEFORE the schema below runs,
+  // and Phase 2 can add its own columns the same way behind `< 2`, `< 3`, etc.
+  const schemaVersion = db.pragma("user_version", { simple: true }) as number;
+  if (schemaVersion < 1) {
+    const hasItemsTable =
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'items'`).get() !== undefined;
+    if (hasItemsTable) {
+      const itemsColumns = (db.prepare(`PRAGMA table_info(items)`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      if (!itemsColumns.includes("title_key")) {
+        db.exec(`ALTER TABLE items ADD COLUMN title_key TEXT NOT NULL DEFAULT ''`);
+      }
+    }
+    // A wholly missing table (e.g. `runs`, on a database old enough to
+    // predate it) needs no ALTER: CREATE TABLE IF NOT EXISTS below creates
+    // it fresh, with title_key-dependent objects now safe to create too.
+    db.pragma("user_version = 1");
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS items (
@@ -270,8 +298,15 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
   const getFeedStateStmt = db.prepare(`SELECT * FROM feed_state WHERE feed_id = ?`);
   const insertFeedStateStmt = db.prepare(`INSERT OR IGNORE INTO feed_state (feed_id, last_seen_at, last_item_hash, consecutive_failures) VALUES (?, NULL, NULL, 0)`);
+  // COALESCE(?, last_seen_at/last_item_hash): a null argument leaves the
+  // existing column untouched instead of overwriting it with NULL (Task 8
+  // fix (a) -- the doc comment on recordFeedSuccess promised this, but the
+  // plain UPDATE used to write NULL over a real watermark whenever a caller
+  // passed null).
   const recordFeedSuccessStmt = db.prepare(`
-    UPDATE feed_state SET last_seen_at = ?, last_item_hash = ?, consecutive_failures = 0 WHERE feed_id = ?
+    UPDATE feed_state
+    SET last_seen_at = COALESCE(?, last_seen_at), last_item_hash = COALESCE(?, last_item_hash), consecutive_failures = 0
+    WHERE feed_id = ?
   `);
   const incrementFeedFailureStmt = db.prepare(`
     UPDATE feed_state SET consecutive_failures = consecutive_failures + 1 WHERE feed_id = ?
