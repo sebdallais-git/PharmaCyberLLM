@@ -4,13 +4,15 @@
 
 import type { Entity, Feed } from "../src/services/watchlist-config.js";
 import { loadWatchlist } from "../src/services/watchlist-config.js";
-import { createFetch, DEFAULT_USER_AGENT, verifyFeed } from "../src/services/watchlist-sources.js";
+import { createFetch, DEFAULT_FEED_TIMEOUT_MS, DEFAULT_USER_AGENT, verifyFeed } from "../src/services/watchlist-sources.js";
 
 // R9: DEFAULT_USER_AGENT is honest about who we are, in the form sites'
 // bot rules accept -- EDGAR's stricter declared-UA requirement is Task 5's
 // concern, not this CLI's.
 const USER_AGENT = DEFAULT_USER_AGENT;
-const FEED_TIMEOUT_MS = 10_000;
+// Shared with verifyFeed's own default (fix round 1) so the CLI and the
+// library default don't drift apart as two separate "10 seconds" literals.
+const FEED_TIMEOUT_MS = DEFAULT_FEED_TIMEOUT_MS;
 const MAX_CONCURRENT_REQUESTS = 2;
 
 // Runs fn over items with at most `limit` in flight at once, preserving no

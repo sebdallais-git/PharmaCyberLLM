@@ -1,5 +1,5 @@
-import { describe, expect, it } from "@jest/globals";
-import { parseFeed, verifyFeed, type FetchLike } from "../src/services/watchlist-sources.js";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
+import { createFetch, DEFAULT_FEED_TIMEOUT_MS, parseFeed, verifyFeed, type FetchLike } from "../src/services/watchlist-sources.js";
 import type { Feed } from "../src/services/watchlist-config.js";
 
 // A valid RSS 2.0 body: two items, RFC-822 pubDate, a CDATA title and an
@@ -106,5 +106,85 @@ describe("parseFeed", () => {
     const items = parseFeed(ATOM_VALID);
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ title: "Atom item one", link: "https://example.com/atom/a" });
+  });
+});
+
+// Fix round 1: these exercise createFetch (and, through it, verifyFeed's own
+// default fetchImpl) rather than the hand-rolled FetchLike fake used above --
+// the earlier bugs (no default timeout at all; a timeout that only covered
+// the fetch() call, not the body read) were invisible to a fake that never
+// goes through createFetch. No real network call is made: global fetch is
+// replaced with a mock that mimics the one behavior these tests depend on --
+// a signal passed to fetch also governs a still-pending body read, exactly
+// as the real Fetch API/undici contract works -- so aborting on timeout can
+// actually interrupt a stalled response the way it would against a real host.
+describe("createFetch (fix round 1: one deadline covers the whole request)", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    jest.useRealTimers();
+  });
+
+  it("bounds a hung connection using verifyFeed's own default timeout, with no fetchImpl supplied", async () => {
+    jest.useFakeTimers();
+    // Simulates a connection that never gets a response at all: only settles
+    // if its signal is aborted, exactly like a real hung fetch() would.
+    globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      })) as unknown as typeof fetch;
+
+    const resultPromise = verifyFeed({ kind: "rss", url: "https://example.com/feed.xml" });
+    await jest.advanceTimersByTimeAsync(DEFAULT_FEED_TIMEOUT_MS);
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("bounds a stalled body read (headers arrive, text() never resolves) by the same deadline", async () => {
+    jest.useFakeTimers();
+    // Headers arrive immediately (fetch() resolves), but the body stream
+    // stalls -- text() only settles if the SAME signal from the fetch()
+    // call is aborted, mirroring how a real fetch ties one signal to both
+    // phases. Before the fix, createFetch cleared its timer as soon as
+    // fetch() resolved, so this signal would never fire and this test
+    // would hang forever.
+    globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+          }),
+      })) as unknown as typeof fetch;
+
+    const fetchImpl = createFetch({ timeoutMs: 5_000 });
+    const resultPromise = verifyFeed({ kind: "rss", url: "https://example.com/feed.xml" }, fetchImpl);
+    await jest.advanceTimersByTimeAsync(5_000);
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("clears its timer after a normal response completes, leaving nothing pending", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(RSS_VALID),
+      })) as unknown as typeof fetch;
+    const clearTimeoutSpy = jest.spyOn(global, "clearTimeout");
+
+    const fetchImpl = createFetch({ timeoutMs: 5_000 });
+    const result = await verifyFeed({ kind: "rss", url: "https://example.com/feed.xml" }, fetchImpl);
+
+    expect(result.ok).toBe(true);
+    // The timer set up for this call must have been cleared once the body
+    // was read -- otherwise it would sit armed for the full 5s, which is
+    // exactly the leaked-timer/open-handle failure mode this guards against.
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
   });
 });

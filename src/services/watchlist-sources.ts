@@ -22,6 +22,14 @@ export interface FetchLike {
 
 export const DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; PharmaLLM/1.0; +sebdallais@gmail.com)";
 
+// The bound verifyFeed's default fetchImpl uses when a caller doesn't supply
+// its own timeoutMs (fix round 1: a bare verifyFeed(feed) used to have no
+// timeout at all, since createFetch()'s default options carry no
+// timeoutMs -- see verifyFeed below). Shared with scripts/watchlist.ts so
+// the CLI and the library default don't drift apart as two separate "10
+// seconds" literals.
+export const DEFAULT_FEED_TIMEOUT_MS = 10_000;
+
 export interface CreateFetchOptions {
   userAgent?: string;
   timeoutMs?: number;
@@ -31,22 +39,56 @@ export interface CreateFetchOptions {
 // CLI passes its own; callers that don't care get DEFAULT_USER_AGENT) and an
 // optional abort-on-timeout. verifyFeed's fetchImpl parameter exists so
 // tests never call this -- they inject a fake instead.
+//
+// Fix round 1: the deadline used to only cover the fetch() call itself --
+// clearTimeout ran in a finally around fetch(), i.e. the instant headers
+// arrived, well before a caller ever reads the body. A host that returns
+// 200 + headers and then stalls mid-body was therefore unbounded: the timer
+// had already been cleared, so controller.abort() could never fire to
+// interrupt a hung response.text(). Now the SAME timer/controller stays
+// armed until the returned object's text() has actually been read (or the
+// initial fetch() itself throws), so one deadline covers the whole
+// request -- headers and body both -- since aborting the controller while a
+// fetch()'s body is still being consumed aborts that read too. If the
+// caller never calls text() at all (e.g. verifyFeed short-circuits on a
+// non-2xx status), the timer is unref'd so it can still fire later to
+// release the underlying response, but never blocks the process or a test
+// run from exiting while pending.
 export function createFetch(options: CreateFetchOptions = {}): FetchLike {
   const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   const timeoutMs = options.timeoutMs;
 
   return async (url, init) => {
     const controller = timeoutMs !== undefined ? new AbortController() : undefined;
-    const timer = controller !== undefined ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (controller !== undefined) {
+      timer = setTimeout(() => controller.abort(), timeoutMs);
+      timer.unref?.();
+    }
+
+    let response: Awaited<ReturnType<typeof fetch>>;
     try {
-      return await fetch(url, {
+      response = await fetch(url, {
         ...init,
         headers: { "User-Agent": userAgent, ...(init?.headers ?? {}) },
         signal: controller?.signal ?? init?.signal,
       });
-    } finally {
+    } catch (err) {
       if (timer !== undefined) clearTimeout(timer);
+      throw err;
     }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      async text(): Promise<string> {
+        try {
+          return await response.text();
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
+      },
+    };
   };
 }
 
@@ -157,8 +199,18 @@ export interface VerifyFeedResult {
 // Fetches a feed and reports whether it is usable: valid RSS/Atom, at least
 // one item, and at least one item with a date the parser can normalize.
 // Never throws -- every failure mode (network error, HTTP error, non-XML
-// body, no dated items) comes back as { ok: false, error }.
-export async function verifyFeed(feed: Feed, fetchImpl: FetchLike = createFetch()): Promise<VerifyFeedResult> {
+// body, no dated items, a body read that times out) comes back as
+// { ok: false, error }.
+//
+// Fix round 1: the default fetchImpl used to be createFetch() with no
+// options, so timeoutMs was undefined and a bare verifyFeed(feed) could
+// hang forever on an unresponsive host. DEFAULT_FEED_TIMEOUT_MS makes a
+// call safe by default rather than safe only if the caller remembers to
+// pass one.
+export async function verifyFeed(
+  feed: Feed,
+  fetchImpl: FetchLike = createFetch({ timeoutMs: DEFAULT_FEED_TIMEOUT_MS }),
+): Promise<VerifyFeedResult> {
   if (feed.url === undefined) {
     return { ok: false, items: 0, error: `feed kind "${feed.kind}" has no url to verify` };
   }
@@ -174,7 +226,15 @@ export async function verifyFeed(feed: Feed, fetchImpl: FetchLike = createFetch(
     return { ok: false, items: 0, error: `HTTP ${response.status}` };
   }
 
-  const body = await response.text();
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (err) {
+    // A body read that stalls past createFetch's deadline lands here (the
+    // shared timer aborts it) -- treated the same as any other fetch
+    // failure rather than left to reject out of verifyFeed.
+    return { ok: false, items: 0, error: err instanceof Error ? err.message : String(err) };
+  }
   if (!/<(rss|feed)\b/i.test(body)) {
     return { ok: false, items: 0, error: "response is not an RSS or Atom feed" };
   }
