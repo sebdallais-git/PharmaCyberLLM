@@ -363,14 +363,31 @@ export interface AdapterDeps {
 // trusting whatever fetchImpl a later task injects to bound itself. The
 // timer is cleared on every exit path (success, thrown error, and a body
 // read that itself fails) so nothing is left armed once the call settles.
-async function fetchBody(deps: AdapterDeps, url: string, label: string): Promise<string> {
+//
+// Task 5 fix round 1 (Important 2): exported, and given an optional
+// `userAgentOverride`, so watchlist-edgar.ts's adapters can reuse this exact
+// abort/timer logic instead of maintaining a second, near-identical copy --
+// EDGAR needs a stricter declared User-Agent than deps.userAgent (the
+// general feed default), everything else about the request is identical.
+// The override defaults to undefined, so rssAdapter/newsAdapter below (which
+// never pass a third argument) are unaffected: they keep using
+// deps.userAgent exactly as before.
+export async function fetchBody(
+  deps: AdapterDeps,
+  url: string,
+  label: string,
+  userAgentOverride?: string,
+): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_ADAPTER_TIMEOUT_MS);
   timer.unref?.();
 
   let response: { ok: boolean; status: number; text(): Promise<string> };
   try {
-    response = await deps.fetchImpl(url, { headers: { "User-Agent": deps.userAgent }, signal: controller.signal });
+    response = await deps.fetchImpl(url, {
+      headers: { "User-Agent": userAgentOverride ?? deps.userAgent },
+      signal: controller.signal,
+    });
   } catch (err) {
     clearTimeout(timer);
     throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);

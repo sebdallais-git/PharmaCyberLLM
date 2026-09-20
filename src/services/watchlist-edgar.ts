@@ -8,48 +8,7 @@
 // watchlist-sources.ts and are imported, not re-implemented.
 
 import type { Entity } from "./watchlist-config.js";
-import { DEFAULT_ADAPTER_TIMEOUT_MS, titleKey, type AdapterDeps, type FetchLike, type RawItem } from "./watchlist-sources.js";
-
-// ---- shared self-armed-timeout fetch ---------------------------------------
-
-// Mirrors watchlist-sources.ts's fetchBody (R12): arms its own
-// AbortController + DEFAULT_ADAPTER_TIMEOUT_MS via init.signal, cleared on
-// every exit path, so the deadline holds regardless of the injected
-// fetchImpl. Not exported from watchlist-sources.ts, so mirrored here rather
-// than duplicated blindly -- the two copies differ only in which
-// User-Agent header the caller supplies (EDGAR's is stricter than the feed
-// default; see EDGAR_USER_AGENT below).
-async function fetchWithTimeout(
-  fetchImpl: FetchLike,
-  url: string,
-  userAgent: string,
-  label: string,
-): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_ADAPTER_TIMEOUT_MS);
-  timer.unref?.();
-
-  let response: { ok: boolean; status: number; text(): Promise<string> };
-  try {
-    response = await fetchImpl(url, { headers: { "User-Agent": userAgent }, signal: controller.signal });
-  } catch (err) {
-    clearTimeout(timer);
-    throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (!response.ok) {
-    clearTimeout(timer);
-    throw new Error(`${label} failed: HTTP ${response.status}`);
-  }
-
-  try {
-    return await response.text();
-  } catch (err) {
-    throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+import { fetchBody, MAX_ITEM_BODY_LENGTH, titleKey, type AdapterDeps, type RawItem } from "./watchlist-sources.js";
 
 // ---- EDGAR submissions adapter ----------------------------------------------
 
@@ -118,6 +77,25 @@ function parseSubmissions(body: string, label: string): EdgarSubmissions {
     }
   }
 
+  // Fix round 1 (Important 1): the five arrays are documented as parallel --
+  // index i of one describes the same filing as index i of every other --
+  // but nothing in the payload actually guarantees they're the same length.
+  // A ragged payload used to zip by form.length and silently back-fill
+  // missing entries with "" (an empty accession/document in the built URL,
+  // an empty filing date falling back to deps.now() so the item looks
+  // brand-new on every run and `since` can never filter it out again).
+  // Rejecting here turns that into a per-source error result instead of a
+  // garbage item nobody notices.
+  const expectedLength = (recent.form as string[]).length;
+  for (const key of requiredArrays) {
+    const length = (recent[key] as string[]).length;
+    if (length !== expectedLength) {
+      throw new Error(
+        `${label}: filings.recent arrays have mismatched lengths (form has ${expectedLength}, ${key} has ${length})`,
+      );
+    }
+  }
+
   return {
     recent: {
       form: recent.form as string[],
@@ -135,6 +113,19 @@ function parseSubmissions(body: string, label: string): EdgarSubmissions {
 export function edgarSubmissionsUrl(cik: string): string {
   const padded = cik.padStart(10, "0");
   return `https://data.sec.gov/submissions/CIK${padded}.json`;
+}
+
+// Fix round 1 (Minor): filingUrl used to build cikNoZeros via
+// String(Number(cik)) unconditionally -- a malformed CIK (empty string,
+// something with letters) turns Number(cik) into NaN, and String(NaN) is
+// the literal string "NaN", which would then be silently embedded in every
+// filing URL built for that entity. Checked once, before any URL is built
+// or any request is made, so a bad CIK fails fast as a clear per-source
+// error instead of producing a URL that looks plausible but 404s.
+function assertValidCik(cik: string): void {
+  if (!/^\d+$/.test(cik)) {
+    throw new Error(`invalid CIK "${cik}": expected a string of digits`);
+  }
 }
 
 // Builds a filing's document URL:
@@ -158,9 +149,10 @@ export function edgarAdapter(
   deps: AdapterDeps,
 ): (cik: string, entity: Entity, since: string | null) => Promise<RawItem[]> {
   return async (cik, entity, since) => {
+    assertValidCik(cik);
     const label = `EDGAR submissions for "${entity.name}"`;
     const url = edgarSubmissionsUrl(cik);
-    const body = await fetchWithTimeout(deps.fetchImpl, url, EDGAR_USER_AGENT, label);
+    const body = await fetchBody(deps, url, label, EDGAR_USER_AGENT);
     const submissions = parseSubmissions(body, label);
     const { form, filingDate, reportDate, accessionNumber, primaryDocument } = submissions.recent;
 
@@ -201,6 +193,22 @@ export function edgarAdapter(
 }
 
 // ---- IR page adapter --------------------------------------------------------
+
+// Fix round 1 (Important 3, R16): irPageAdapter used to return a bare
+// RawItem[], so "zero items" was ambiguous between "checked the page,
+// nothing new since last run" and "this page's markup isn't one this
+// heuristic understands, so no date was ever recognized". linksScanned
+// (anchors with a resolvable href and non-empty text -- i.e. plausible
+// content links, not nav chrome) and datedLinks (of those, how many had a
+// recognizable nearby date) let Task 7's orchestrator tell the two apart:
+// linksScanned > 0 && datedLinks === 0 is a markup/coverage anomaly worth
+// flagging; datedLinks > 0 && items.length === 0 (because `since` filtered
+// everything, or the cap did) is just "nothing new".
+export interface IrPageResult {
+  items: RawItem[];
+  linksScanned: number;
+  datedLinks: number;
+}
 
 // Not a general HTML parser (same philosophy as parseFeed in
 // watchlist-sources.ts): IR "reports & results" pages vary wildly in
@@ -274,6 +282,19 @@ function extractNearbyDate(blockText: string): string | undefined {
   return parsed.toISOString();
 }
 
+// Fix round 1 (Important 4): body used to just equal the title, but Task 6's
+// tagger only ever sees `RawItem.body` -- a title-only body throws away the
+// enclosing block's own text (the same text findEnclosingBlock/
+// extractNearbyDate already extracted to find the date), which is real
+// context (surrounding blurb, date, sometimes a document type) an IR page
+// row usually carries. Falls back to the title alone when the block yields
+// nothing beyond the anchor itself, and caps at MAX_ITEM_BODY_LENGTH like
+// parseFeed's own body extraction (R11) does for feed items.
+function buildIrItemBody(title: string, blockText: string): string {
+  const combined = blockText.length > 0 ? `${title} ${blockText}`.replace(/\s+/g, " ").trim() : title;
+  return combined.length > MAX_ITEM_BODY_LENGTH ? combined.slice(0, MAX_ITEM_BODY_LENGTH) : combined;
+}
+
 // Resolves an href against the page's own URL. Returns undefined for an
 // empty/missing href or one the URL constructor can't resolve (e.g. a
 // "javascript:" pseudo-link), rather than throwing.
@@ -291,23 +312,31 @@ const ANCHOR_PATTERN = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
 
 // Fetches an IR results page and extracts dated links: title = the anchor's
 // own text, url = its href resolved against the page URL, publishedAt = the
-// nearest date found in the anchor's enclosing block. Undated links are
-// dropped. `since` is exclusive, matching rssAdapter/newsAdapter. Uses the
-// general feed User-Agent (deps.userAgent) -- unlike EDGAR, an IR page is an
-// ordinary corporate web page with no special User-Agent requirement.
+// nearest date found in the anchor's enclosing block, body = title plus that
+// block's own text. Undated links are dropped. `since` is exclusive,
+// matching rssAdapter/newsAdapter. Uses the general feed User-Agent
+// (deps.userAgent) -- unlike EDGAR, an IR page is an ordinary corporate web
+// page with no special User-Agent requirement.
+//
+// Fix round 1 (Important 3, R16): scanning no longer stops the instant 20
+// items have been collected -- it keeps examining every anchor on the page
+// so linksScanned/datedLinks reflect the whole page, and only the resulting
+// `items` list is capped at MAX_IR_LINKS. A page with, say, 200 real dated
+// links now correctly reports datedLinks: 200 with items capped at 20,
+// rather than silently under-counting because scanning quit early.
 export function irPageAdapter(
   deps: AdapterDeps,
-): (url: string, entity: Entity, since: string | null) => Promise<RawItem[]> {
+): (url: string, entity: Entity, since: string | null) => Promise<IrPageResult> {
   return async (url, entity, since) => {
     const label = `IR page for "${entity.name}"`;
-    const html = await fetchWithTimeout(deps.fetchImpl, url, deps.userAgent, label);
+    const html = await fetchBody(deps, url, label);
 
     const items: RawItem[] = [];
+    let linksScanned = 0;
+    let datedLinks = 0;
     let match: RegExpExecArray | null;
     ANCHOR_PATTERN.lastIndex = 0;
     while ((match = ANCHOR_PATTERN.exec(html)) !== null) {
-      if (items.length >= MAX_IR_LINKS) break;
-
       const attrs = match[1];
       const hrefMatch = attrs.match(/href\s*=\s*["']([^"']*)["']/i);
       const resolvedUrl = resolveHref(hrefMatch?.[1], url);
@@ -316,6 +345,10 @@ export function irPageAdapter(
       const title = stripTagsAndDecode(match[2]);
       if (title.length === 0) continue;
 
+      // A plausible content link: real href, non-empty text. Counted here,
+      // before we even know whether it carries a date.
+      linksScanned++;
+
       const anchorStart = match.index;
       const anchorEnd = match.index + match[0].length;
       const { start, end } = findEnclosingBlock(html, anchorStart, anchorEnd);
@@ -323,19 +356,22 @@ export function irPageAdapter(
       const publishedAt = extractNearbyDate(blockText);
       if (publishedAt === undefined) continue;
 
+      datedLinks++;
+
       if (since !== null && publishedAt <= since) continue;
+      if (items.length >= MAX_IR_LINKS) continue;
 
       items.push({
         title,
         url: resolvedUrl,
         publishedAt,
-        body: title,
+        body: buildIrItemBody(title, blockText),
         sourceKind: "ir_page",
         sourceName: entity.name,
         titleKey: titleKey(title),
       });
     }
 
-    return items;
+    return { items, linksScanned, datedLinks };
   };
 }

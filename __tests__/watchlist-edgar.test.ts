@@ -138,6 +138,31 @@ describe("edgarAdapter", () => {
     await expect(adapter("1114448", NOVARTIS, null)).rejects.toThrow();
   });
 
+  // Fix round 1 (Important 1): a ragged payload (arrays of different
+  // lengths) used to zip by form.length and silently back-fill missing
+  // entries with "" -- an empty accession/document in the built URL and an
+  // empty filing date falling back to deps.now(), so the bogus item looked
+  // brand-new on every run and `since` could never filter it out.
+  it("rejects with a descriptive error on a payload whose parallel arrays have mismatched lengths, producing zero items", async () => {
+    const raggedFixture = JSON.stringify({
+      cik: "1114448",
+      name: "Novartis AG",
+      filings: {
+        recent: {
+          form: ["6-K", "8-K"],
+          filingDate: ["2026-09-16"], // one short of form.length
+          reportDate: ["2026-06-30", "2026-08-01"],
+          accessionNumber: ["0001114448-26-000123", "0001114448-26-000099"],
+          primaryDocument: ["nvs-20260916.htm", "nvs-20260801-8k.htm"],
+        },
+        files: [],
+      },
+    });
+    const adapter = edgarAdapter(testDeps(fakeFetch(200, raggedFixture)));
+
+    await expect(adapter("1114448", NOVARTIS, null)).rejects.toThrow(/mismatched length/i);
+  });
+
   it("sends the EDGAR-specific declared User-Agent, not the general feed one", async () => {
     let seenHeaders: Record<string, string> | undefined;
     const fetchImpl: FetchLike = async (_url, init) => {
@@ -160,6 +185,15 @@ describe("edgarAdapter", () => {
     await adapter("1114448", NOVARTIS, null);
 
     expect(seenUrl).toBe("https://data.sec.gov/submissions/CIK0001114448.json");
+  });
+
+  // Fix round 1 (Minor): filingUrl used to build cikNoZeros via
+  // String(Number(cik)) unconditionally, so a malformed CIK silently became
+  // the literal string "NaN" in every filing URL. Guarded up front instead.
+  it("rejects a malformed CIK with a clear error instead of embedding \"NaN\" in the filing URL", async () => {
+    const adapter = edgarAdapter(testDeps(fakeFetch(200, SUBMISSIONS_FIXTURE)));
+
+    await expect(adapter("not-a-cik", NOVARTIS, null)).rejects.toThrow(/invalid CIK/i);
   });
 });
 
@@ -209,7 +243,7 @@ const IR_PAGE_HTML = `<!DOCTYPE html>
 describe("irPageAdapter", () => {
   it("extracts dated links and resolves relative hrefs against the page URL", async () => {
     const adapter = irPageAdapter(testDeps(fakeFetch(200, IR_PAGE_HTML)));
-    const items = await adapter(IR_PAGE_URL, NOVARTIS, null);
+    const { items } = await adapter(IR_PAGE_URL, NOVARTIS, null);
 
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({
@@ -226,14 +260,14 @@ describe("irPageAdapter", () => {
 
   it("drops links with no nearby date", async () => {
     const adapter = irPageAdapter(testDeps(fakeFetch(200, IR_PAGE_HTML)));
-    const items = await adapter(IR_PAGE_URL, NOVARTIS, null);
+    const { items } = await adapter(IR_PAGE_URL, NOVARTIS, null);
 
     expect(items.some((item) => item.title === "Undated flyer")).toBe(false);
   });
 
   it("drops items older than since", async () => {
     const adapter = irPageAdapter(testDeps(fakeFetch(200, IR_PAGE_HTML)));
-    const items = await adapter(IR_PAGE_URL, NOVARTIS, "2026-09-01T00:00:00.000Z");
+    const { items } = await adapter(IR_PAGE_URL, NOVARTIS, "2026-09-01T00:00:00.000Z");
 
     expect(items).toHaveLength(1);
     expect(items[0].title).toBe("Q3 2026 Results");
@@ -247,7 +281,7 @@ describe("irPageAdapter", () => {
     const html = `<html><body><ul>${manyLinks}</ul></body></html>`;
 
     const adapter = irPageAdapter(testDeps(fakeFetch(200, html)));
-    const items = await adapter(IR_PAGE_URL, NOVARTIS, null);
+    const { items } = await adapter(IR_PAGE_URL, NOVARTIS, null);
 
     expect(items).toHaveLength(20);
   });
@@ -268,5 +302,65 @@ describe("irPageAdapter", () => {
     const adapter = irPageAdapter(testDeps(fakeFetch(503, "unavailable")));
 
     await expect(adapter(IR_PAGE_URL, NOVARTIS, null)).rejects.toThrow(/503/);
+  });
+
+  // Fix round 1 (Important 3, R16): distinguishes "nothing new since last
+  // run" from "this page's markup isn't understood" for Task 7's
+  // orchestrator.
+  describe("coverage counters (R16)", () => {
+    it("reports linksScanned and datedLinks alongside items", async () => {
+      const adapter = irPageAdapter(testDeps(fakeFetch(200, IR_PAGE_HTML)));
+      const result = await adapter(IR_PAGE_URL, NOVARTIS, null);
+
+      // 3 anchors with a resolvable href and non-empty text; 2 of them sit
+      // in a block with a recognizable date, 1 (the undated flyer) doesn't.
+      expect(result.linksScanned).toBe(3);
+      expect(result.datedLinks).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it("counts every dated link even past the 20-item cap, not just the capped items", async () => {
+      const manyLinks = Array.from({ length: 25 }, (_, i) => {
+        const day = String((i % 27) + 1).padStart(2, "0");
+        return `<li><span class="date">2026-01-${day}</span><a href="/r/${i}.pdf">Report ${i}</a></li>`;
+      }).join("\n");
+      const html = `<html><body><ul>${manyLinks}</ul></body></html>`;
+
+      const adapter = irPageAdapter(testDeps(fakeFetch(200, html)));
+      const result = await adapter(IR_PAGE_URL, NOVARTIS, null);
+
+      expect(result.linksScanned).toBe(25);
+      expect(result.datedLinks).toBe(25);
+      expect(result.items).toHaveLength(20);
+    });
+
+    it("reports linksScanned > 0 and datedLinks 0 when links exist but no date is recognized (markup not understood)", async () => {
+      const html = `<html><body>
+        <ul>
+          <li><a href="/r/1.pdf">Report one, no date anywhere nearby</a></li>
+          <li><a href="/r/2.pdf">Report two, also undated</a></li>
+        </ul>
+      </body></html>`;
+
+      const adapter = irPageAdapter(testDeps(fakeFetch(200, html)));
+      const result = await adapter(IR_PAGE_URL, NOVARTIS, null);
+
+      expect(result.linksScanned).toBe(2);
+      expect(result.datedLinks).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  // Fix round 1 (Important 4): body used to just equal the title.
+  describe("item body (Important 4)", () => {
+    it("builds the body from the title plus the enclosing block's own text, not just the title", async () => {
+      const adapter = irPageAdapter(testDeps(fakeFetch(200, IR_PAGE_HTML)));
+      const { items } = await adapter(IR_PAGE_URL, NOVARTIS, null);
+
+      const q3 = items.find((item) => item.title === "Q3 2026 Results");
+      expect(q3?.body).not.toBe(q3?.title);
+      expect(q3?.body).toContain("Q3 2026 Results");
+      expect(q3?.body).toContain("September 16, 2026");
+    });
   });
 });
