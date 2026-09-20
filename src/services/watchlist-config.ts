@@ -215,8 +215,7 @@ export function parseWatchlist(raw: unknown): Watchlist {
 
   const errors: string[] = [];
   // Notes about entities that had to be inferred (e.g. a peer with no
-  // separate definition). These never fail a parse on their own; they are
-  // only surfaced alongside real errors, for debugging context.
+  // separate definition) -- see Watchlist.notes for what callers get.
   const notes: string[] = [];
 
   const entities = new Map<string, Entity>();
