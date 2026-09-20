@@ -6,7 +6,14 @@
 
 import { describe, expect, it } from "@jest/globals";
 import type { Entity, Feed, TopicQuery, Watchlist } from "../src/services/watchlist-config.js";
-import { canonicalUrl, contentHash, titleKey, type RawItem } from "../src/services/watchlist-sources.js";
+import {
+  canonicalUrl,
+  contentHash,
+  rssAdapter,
+  titleKey,
+  type FetchLike,
+  type RawItem,
+} from "../src/services/watchlist-sources.js";
 import type { IrPageResult } from "../src/services/watchlist-edgar.js";
 import type { Tagging } from "../src/services/watchlist-tagger.js";
 import { openWatchlistStore, type WatchlistStore } from "../src/services/watchlist-store.js";
@@ -533,6 +540,56 @@ describe("watchlist ingest", () => {
     expect(run?.skippedByCap).toBe(1);
     expect(run?.anomalies).toBe(1);
     harness.store.close();
+  });
+
+  // ---- C2: a same-date sibling of the watermark ---------------------------
+
+  // The real adapter is wired in here, with an injected fetch and no network:
+  // the cutoff being tested lives in the adapter, but what matters is the
+  // whole path -- the second item of the watermark's own day must survive the
+  // cutoff, be recognised as new, and be tagged exactly once while the item
+  // already stored is deduped away before the model.
+  it("stores the second item of the watermark's own day and never re-tags the first", async () => {
+    const feedUrl = "https://roche.com/feed.xml";
+    const rssFeed: Feed = { kind: "rss", url: feedUrl };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const store = openWatchlistStore(":memory:");
+    const watchlist = makeWatchlist([roche]);
+
+    // Both items carry the same day-precision timestamp, the way an IR page
+    // or an EDGAR filing list dates everything it published that day.
+    const item = (title: string, slug: string): string => `
+    <item>
+      <title>${title}</title>
+      <link>https://roche.com/${slug}</link>
+      <pubDate>Wed, 16 Sep 2026 00:00:00 GMT</pubDate>
+    </item>`;
+    const feedBody = (items: string): string =>
+      `<?xml version="1.0"?><rss version="2.0"><channel>${items}</channel></rss>`;
+
+    let body = feedBody(item("First of the day", "first"));
+    const fetchImpl: FetchLike = async () => ({ ok: true, status: 200, text: async () => body });
+    const rss = rssAdapter({ fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaLLM-Test/1.0" });
+
+    const firstRun = makeHarness({ watchlist, store, rss });
+    await firstRun.run();
+    expect(store.getFeedState(feedIdFor(roche, rssFeed)).lastSeenAt).toBe("2026-09-16T00:00:00.000Z");
+
+    // The next night the feed also lists a sibling published the same day.
+    body = feedBody(item("First of the day", "first") + item("Second of the day", "second"));
+    const secondRun = makeHarness({ watchlist, store, rss });
+    const result = await secondRun.run();
+
+    expect(result.fetched).toBe(2); // the watermark's own item is re-offered, not filtered out
+    expect(result.deduped).toBe(1); // ...and recognised by url, before the cap and before the model
+    expect(result.stored).toBe(1);
+    // Exactly one model call in this run, for the new item only.
+    expect(secondRun.tagCalls.map((call) => call.item.title)).toEqual(["Second of the day"]);
+    expect(store.itemsInPeriod(ALL_TIME.from, ALL_TIME.to).map((i) => i.title).sort()).toEqual([
+      "First of the day",
+      "Second of the day",
+    ]);
+    store.close();
   });
 
   // ---- C1: the run's wall-clock budget ------------------------------------

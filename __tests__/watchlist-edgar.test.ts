@@ -92,6 +92,35 @@ describe("edgarAdapter", () => {
     expect(items.map((item) => item.title)).toEqual(["6-K 2026-06-30", "8-K 2026-08-01"]);
   });
 
+  // C2: filingDate is a bare day, so every filing of one day carries exactly
+  // midnight. With an exclusive cutoff, the moment a watermark landed on day
+  // D every other filing of day D was dropped forever -- and a company
+  // routinely files several 8-Ks on one day.
+  it("keeps every filing of the watermark's own day, not just the one already seen", async () => {
+    const sameDay = JSON.stringify({
+      cik: "1114448",
+      name: "Novartis AG",
+      filings: {
+        recent: {
+          form: ["8-K", "8-K"],
+          filingDate: ["2026-09-16", "2026-09-16"],
+          reportDate: ["2026-09-16", "2026-09-16"],
+          accessionNumber: ["0001114448-26-000201", "0001114448-26-000202"],
+          primaryDocument: ["nvs-first.htm", "nvs-second.htm"],
+        },
+        files: [],
+      },
+    });
+    const adapter = edgarAdapter(testDeps(fakeFetch(200, sameDay)));
+
+    const items = await adapter("1114448", NOVARTIS, "2026-09-16T00:00:00.000Z");
+
+    expect(items.map((item) => item.url)).toEqual([
+      "https://www.sec.gov/Archives/edgar/data/1114448/000111444826000201/nvs-first.htm",
+      "https://www.sec.gov/Archives/edgar/data/1114448/000111444826000202/nvs-second.htm",
+    ]);
+  });
+
   it("builds the filing URL from cik (no leading zeros), accession (no dashes) and primaryDocument", async () => {
     const adapter = edgarAdapter(testDeps(fakeFetch(200, SUBMISSIONS_FIXTURE)));
     const items = await adapter("0001114448", NOVARTIS, null);
@@ -271,6 +300,38 @@ describe("irPageAdapter", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].title).toBe("Q3 2026 Results");
+  });
+
+  // C2, the IR-page half: a page date is a bare day too, so every item
+  // published that day carries the same instant. The watermark here is taken
+  // from the adapter's own output -- exactly what the store would hold after
+  // the previous run -- rather than restated as a literal.
+  it("keeps every dated link of the watermark's own day", async () => {
+    const twoOnOneDay = `<!DOCTYPE html>
+<html>
+<body>
+  <ul class="press-releases">
+    <li>
+      <span class="date">September 16, 2026</span>
+      <a href="/investors/reports/first.pdf">First of the day</a>
+    </li>
+    <li>
+      <span class="date">September 16, 2026</span>
+      <a href="/investors/reports/second.pdf">Second of the day</a>
+    </li>
+  </ul>
+</body>
+</html>`;
+    const adapter = irPageAdapter(testDeps(fakeFetch(200, twoOnOneDay)));
+
+    const first = await adapter(IR_PAGE_URL, NOVARTIS, null);
+    expect(first.items).toHaveLength(2);
+    const watermark = first.items[0].publishedAt;
+    expect(first.items[1].publishedAt).toBe(watermark); // same day, same instant
+
+    const second = await adapter(IR_PAGE_URL, NOVARTIS, watermark);
+
+    expect(second.items.map((item) => item.title)).toEqual(["First of the day", "Second of the day"]);
   });
 
   it("caps at 20 links per page", async () => {

@@ -139,8 +139,10 @@ function filingUrl(cik: string, accessionNumber: string, primaryDocument: string
 // Fetches an entity's EDGAR submissions, filters to forms of interest
 // (8-K/10-Q/10-K/6-K/20-F -- everything else, e.g. SC 13G/A ownership
 // filings or 424B5 prospectus supplements, is noise for a watchlist), and
-// returns one RawItem per filing newer than `since` (exclusive, same
-// convention as rssAdapter/newsAdapter). Never throws synchronously for a
+// returns one RawItem per filing not older than `since` (inclusive of its
+// own instant, same convention as rssAdapter/newsAdapter -- filingDate is a
+// bare day, so an exclusive cutoff lost every other filing of the day a
+// watermark landed on; C2). Never throws synchronously for a
 // per-feed problem (a non-200, a malformed payload, a timeout): every
 // failure mode instead rejects the returned promise with a descriptive
 // Error, exactly like fetchBody in watchlist-sources.ts, so the orchestrator
@@ -165,7 +167,7 @@ export function edgarAdapter(
       const filedOn = filingDate[i] ?? "";
       const reportedOn = reportDate[i] ?? "";
       const publishedAt = filedOn.length > 0 ? new Date(filedOn).toISOString() : deps.now().toISOString();
-      if (since !== null && publishedAt <= since) continue;
+      if (since !== null && publishedAt < since) continue;
 
       const docUrl = filingUrl(cik, accessionNumber[i] ?? "", primaryDocument[i] ?? "");
       // The filing's title is form + reportDate (falling back to the filing
@@ -313,8 +315,10 @@ const ANCHOR_PATTERN = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
 // Fetches an IR results page and extracts dated links: title = the anchor's
 // own text, url = its href resolved against the page URL, publishedAt = the
 // nearest date found in the anchor's enclosing block, body = title plus that
-// block's own text. Undated links are dropped. `since` is exclusive,
-// matching rssAdapter/newsAdapter. Uses the general feed User-Agent
+// block's own text. Undated links are dropped. `since` is inclusive of its
+// own instant, matching rssAdapter/newsAdapter -- a parsed IR date is a bare
+// day, so an exclusive cutoff lost every other item of the day a watermark
+// landed on (C2). Uses the general feed User-Agent
 // (deps.userAgent) -- unlike EDGAR, an IR page is an ordinary corporate web
 // page with no special User-Agent requirement.
 //
@@ -358,7 +362,7 @@ export function irPageAdapter(
 
       datedLinks++;
 
-      if (since !== null && publishedAt <= since) continue;
+      if (since !== null && publishedAt < since) continue;
       if (items.length >= MAX_IR_LINKS) continue;
 
       items.push({

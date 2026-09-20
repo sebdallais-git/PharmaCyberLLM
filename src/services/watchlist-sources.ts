@@ -409,9 +409,15 @@ export async function fetchBody(
 
 // Shared by rssAdapter and newsAdapter: turns parsed feed items into
 // RawItems, applying the since cutoff and the "no date" fallback, and
-// computing each item's cross-source titleKey (R13). An item exactly at
-// `since` is treated as already seen and dropped -- `since` is exclusive --
-// on the assumption it's the high-water mark of the previous run.
+// computing each item's cross-source titleKey (R13).
+//
+// `since` is INCLUSIVE of its own instant: only items strictly older than it
+// are dropped (C2). EDGAR filing dates and IR-page dates are day-precision,
+// so every item published on day D carries exactly midnight of D; with an
+// exclusive cutoff, the moment a watermark reached D every other item of
+// that same day was dropped forever. Re-seeing an item costs nothing: the
+// orchestrator's findByUrl/contentHash dedupe runs before the cap and before
+// the model.
 //
 // cleanTitle lets a caller rewrite the title actually stored (only
 // newsAdapter needs this, to drop Google News' " - <Publisher>" suffix)
@@ -428,7 +434,7 @@ function toRawItems(
   const items: RawItem[] = [];
   for (const item of parsed) {
     const publishedAt = item.publishedAt ?? now().toISOString();
-    if (since !== null && publishedAt <= since) continue;
+    if (since !== null && publishedAt < since) continue;
     const title = cleanTitle(item.title);
     items.push({
       title,
@@ -445,8 +451,8 @@ function toRawItems(
 
 // Fetches and parses one entity's feed (rss or ir_page: both are just an XML
 // URL to GET). Reuses parseFeed rather than a second parser, per the brief.
-// `since` is exclusive: an item published at exactly `since` is dropped as
-// already seen (see toRawItems).
+// `since` is inclusive of its own instant: only strictly older items are
+// dropped (C2, see toRawItems).
 export function rssAdapter(
   deps: AdapterDeps,
 ): (feed: Feed, entity: Entity, since: string | null) => Promise<RawItem[]> {
@@ -462,7 +468,7 @@ export function rssAdapter(
 // Fetches Google News' RSS search for a query -- same URL shape as
 // src/services/web-search.ts's searchWeb (q/hl/gl/ceid), so the two never
 // drift into fetching subtly different result sets for the same text.
-// `since` is exclusive, as in rssAdapter. Titles have Google News' own
+// `since` is inclusive of its own instant, as in rssAdapter. Titles have Google News' own
 // " - <Publisher>" suffix stripped (R13) before being stored or hashed into
 // titleKey.
 export function newsAdapter(deps: AdapterDeps): (query: string, since: string | null) => Promise<RawItem[]> {

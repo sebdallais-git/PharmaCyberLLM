@@ -121,14 +121,42 @@ describe("rssAdapter", () => {
     expect(items[0].title).toBe("Roche announces cloud migration");
   });
 
-  // Minor fix round 1 item: since is exclusive (an item exactly at the
-  // cutoff is treated as already seen from the previous run), documented on
-  // rssAdapter/newsAdapter's own doc comments, not just the shared helper.
-  it("drops an item published at exactly since (since is exclusive)", async () => {
+  // C2: `since` used to be exclusive, so an item published at exactly the
+  // watermark was dropped as already seen. EDGAR filing dates and IR-page
+  // dates are day-precision -- always midnight -- so once a watermark reached
+  // day D, every OTHER item bearing day D was dropped forever. The cutoff is
+  // now inclusive of its own instant; the item already seen is caught by the
+  // orchestrator's findByUrl dedupe, before the cap and before the model.
+  it("still returns an item published at exactly since, so same-day siblings are not lost", async () => {
     const adapter = rssAdapter(testDeps(fakeFetch(200, RSS_BODY)));
     const items = await adapter(RSS_FEED, ENTITY, "2026-09-16T09:30:00.000Z");
 
-    expect(items.map((item) => item.title)).not.toContain("Roche announces cloud migration");
+    expect(items.map((item) => item.title)).toContain("Roche announces cloud migration");
+  });
+
+  it("returns every item of the watermark's own day, not just the one already seen", async () => {
+    // Two items with the identical day-precision timestamp a watermark can
+    // hold -- the exact shape an IR page or an EDGAR filing list produces.
+    const sameDay = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>First of the day</title>
+      <link>https://example.com/first</link>
+      <pubDate>Wed, 16 Sep 2026 00:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Second of the day</title>
+      <link>https://example.com/second</link>
+      <pubDate>Wed, 16 Sep 2026 00:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`;
+    const adapter = rssAdapter(testDeps(fakeFetch(200, sameDay)));
+
+    const items = await adapter(RSS_FEED, ENTITY, "2026-09-16T00:00:00.000Z");
+
+    expect(items.map((item) => item.title)).toEqual(["First of the day", "Second of the day"]);
   });
 
   it("rejects on a non-200 response, naming the status but never the url's query string", async () => {

@@ -429,11 +429,12 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           fetched += outcome.items.length;
           // The watermark only ever moves over items this run actually
           // RESOLVED -- stored, or recognised as a duplicate. Items the cap
-          // dropped are deferred, not lost, and `since` is a single exclusive
-          // timestamp, not a set: the watermark must therefore stay strictly
-          // BELOW the oldest dropped item, whatever order the feed listed them
-          // in. Feeds are conventionally newest-first, so the cap usually bites
-          // part-way down the list and nothing may move at all.
+          // or the budget dropped are deferred, not lost, and `since` is a
+          // single timestamp, not a set: the watermark must therefore stay
+          // BELOW the oldest deferred item, whatever order the feed listed
+          // them in (strictly below, which is safe under C2's inclusive
+          // cutoff too). Feeds are conventionally newest-first, so the cap
+          // usually bites part-way down the list and nothing may move at all.
           const resolved: Array<{ publishedAt: string; hash: string }> = [];
           // Items this run fetched but deliberately did not process: dropped
           // by the cap, or left untagged when the wall-clock budget ran out
@@ -554,9 +555,9 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           // or a first batch the cap ate whole -- the previous watermark is
           // rewritten unchanged, which is null for a feed never seen before.
           // Never a stand-in like the run's start: that would push a feed's
-          // entire unseen backlog behind an exclusive `since` permanently, and
-          // the FIRST production run is exactly the one that blows the cap,
-          // since every feed backfills with since === null. Recording the
+          // entire unseen backlog behind `since` permanently, and the FIRST
+          // production run is exactly the one that blows the cap, since every
+          // feed backfills over I1's 30-day window at once. Recording the
           // success (even a null one) still clears the failure streak.
           const deferredFloor =
             deferredAt.length === 0 ? null : deferredAt.reduce((oldest, at) => (at < oldest ? at : oldest));
