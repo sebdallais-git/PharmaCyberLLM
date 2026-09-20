@@ -181,9 +181,14 @@ The quarterly digest additionally compares `facts_json` aggregates against the p
 
 - Three new cron jobs (weekly Monday, monthly on the 1st, quarterly after quarter end) call
   `build_digest` through the MCP server and deliver the result by email.
-- Delivery uses Hermes' email platform adapter (IMAP in, SMTP out, `EMAIL_*` credentials). Accepting
-  its inbound side is a consequence of this choice: the account Hermes uses can also receive mail,
-  so it should be a dedicated address, not a personal mailbox.
+- Delivery uses Hermes' email platform adapter (IMAP in, SMTP out, `EMAIL_*` credentials).
+  **Recipient:** `sebdallais@gmail.com` (`EMAIL_HOME_ADDRESS`). **Identity:** a separate account
+  (e.g. `pharmallm.digest@gmail.com`) with a Gmail app password, because the adapter has no
+  send-only mode: `check_email_requirements` demands `EMAIL_IMAP_HOST`, and the poll loop reads
+  INBOX every 15 s, marking unseen mail as seen before the sender allowlist drops it. Signing in as
+  the owner's personal account would therefore mark his unread mail read and feed it to the agent.
+  `EMAIL_ALLOWED_USERS` is set to the owner's address so inbound replies from him reach the agent
+  and nothing else does.
 - The MCP server gains `build_digest`, `search_watchlist` and `compare_entities`. Per the existing
   payload rule, tool results carry summaries and metadata, never embeddings.
 
@@ -202,8 +207,22 @@ over rather than raw chunks.
 | 2 | `build_digest`, cron jobs, email delivery | Yes: digests arrive |
 | 3 | `search_watchlist` / `compare_entities`, UI entity filters | Yes: ad-hoc comparisons |
 
-Phase 1 must run for one to two weeks before Phase 2's digests are meaningful, because "what changed
-this period" needs history.
+Phase 1 must run for one to two weeks before Phase 2's digests read as real intelligence, because
+"what changed this period" needs history. Phase 2 does not wait for that, though: as soon as
+`build_digest` exists it produces a **validation digest** over whatever the store holds — seeded by
+an initial backfill that pulls each feed's last 30 days on first run. The point of that early digest
+is to check structure and mechanics (sections, grouping, peer comparison, source links, the mail
+itself), not to be worth reading.
+
+## Finding the feeds
+
+Feed URLs are not given up front: discovery is the first task of Phase 1. For each entity, in order:
+its IR/newsroom page for an RSS or Atom link; the vendor's blog feed; EDGAR's company search for a
+CIK where the entity files. Each candidate feed is then **verified before it enters the config** —
+fetched once, parsed, and required to yield at least one dated item — and recorded with the date it
+was verified. Feeds that cannot be verified are listed in the config as `unverified:` with a note,
+so a gap is visible rather than silent. The owner's own sources, when he names them, take precedence
+over discovered ones.
 
 ## Risks and limits
 
