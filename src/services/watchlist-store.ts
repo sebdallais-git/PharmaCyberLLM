@@ -91,6 +91,10 @@ export interface RunRecord {
   // is the only place "the vendors have been starved for six nights" can be
   // told apart from "the vendors were quiet".
   skippedByCap: number;
+  // Items the run fetched but had no time left to tag (C1's wall-clock
+  // budget). Kept apart from skippedByCap: "the model is too slow for this
+  // feed list" and "the cap is too small" call for different answers.
+  skippedByBudget: number;
   anomalies: number;
 }
 
@@ -129,7 +133,15 @@ export interface WatchlistStore {
   finishRun(
     runId: number,
     finishedAt: string,
-    stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number; skippedByCap: number; anomalies: number },
+    stats: {
+      fetched: number;
+      deduped: number;
+      tagged: number;
+      failedFeeds: number;
+      skippedByCap: number;
+      skippedByBudget: number;
+      anomalies: number;
+    },
   ): void;
   lastRun(): RunRecord | null;
   close(): void;
@@ -194,6 +206,23 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     // it fresh, with title_key-dependent objects now safe to create too.
     db.pragma("user_version = 1");
   }
+  if (schemaVersion < 2) {
+    // The nightly run's wall-clock budget (C1) defers items it had no time
+    // to tag. That pressure has to be tellable from cap pressure tomorrow,
+    // not only in tonight's stdout, so it gets its own column rather than
+    // being folded into skipped_by_cap.
+    const hasRunsTable =
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runs'`).get() !== undefined;
+    if (hasRunsTable) {
+      const runsColumns = (db.prepare(`PRAGMA table_info(runs)`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      if (!runsColumns.includes("skipped_by_budget")) {
+        db.exec(`ALTER TABLE runs ADD COLUMN skipped_by_budget INTEGER`);
+      }
+    }
+    db.pragma("user_version = 2");
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS items (
@@ -255,6 +284,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       tagged INTEGER,
       failed_feeds INTEGER,
       skipped_by_cap INTEGER,
+      skipped_by_budget INTEGER,
       anomalies INTEGER
     );
   `);
@@ -315,7 +345,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
   const startRunStmt = db.prepare(`INSERT INTO runs (started_at) VALUES (?)`);
   const finishRunStmt = db.prepare(`
     UPDATE runs
-    SET finished_at = ?, fetched = ?, deduped = ?, tagged = ?, failed_feeds = ?, skipped_by_cap = ?, anomalies = ?
+    SET finished_at = ?, fetched = ?, deduped = ?, tagged = ?, failed_feeds = ?, skipped_by_cap = ?,
+        skipped_by_budget = ?, anomalies = ?
     WHERE id = ?
   `);
   const lastRunStmt = db.prepare(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`);
@@ -514,7 +545,15 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     finishRun(
       runId: number,
       finishedAt: string,
-      stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number; skippedByCap: number; anomalies: number },
+      stats: {
+        fetched: number;
+        deduped: number;
+        tagged: number;
+        failedFeeds: number;
+        skippedByCap: number;
+        skippedByBudget: number;
+        anomalies: number;
+      },
     ): void {
       finishRunStmt.run(
         finishedAt,
@@ -523,6 +562,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
         stats.tagged,
         stats.failedFeeds,
         stats.skippedByCap,
+        stats.skippedByBudget,
         stats.anomalies,
         runId,
       );
@@ -539,6 +579,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
             tagged: number | null;
             failed_feeds: number | null;
             skipped_by_cap: number | null;
+            skipped_by_budget: number | null;
             anomalies: number | null;
           }
         | undefined;
@@ -552,6 +593,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
         tagged: row.tagged ?? 0,
         failedFeeds: row.failed_feeds ?? 0,
         skippedByCap: row.skipped_by_cap ?? 0,
+        skippedByBudget: row.skipped_by_budget ?? 0,
         anomalies: row.anomalies ?? 0,
       };
     },

@@ -22,6 +22,7 @@ import {
   runStatus,
   validateOnlyIds,
   WatchlistCliError,
+  type RunIngestDeps,
 } from "../scripts/watchlist.js";
 
 // ---- fixtures ---------------------------------------------------------------
@@ -216,7 +217,11 @@ interface IngestHarness {
   run(argv: string[]): Promise<number>;
 }
 
-function makeIngestHarness(options: { watchlist: Watchlist; rss?: IngestAdapters["rss"] }): IngestHarness {
+function makeIngestHarness(options: {
+  watchlist: Watchlist;
+  rss?: IngestAdapters["rss"];
+  tag?: RunIngestDeps["tag"];
+}): IngestHarness {
   const store = openWatchlistStore(":memory:");
   const logs: string[] = [];
   let rssCalls = 0;
@@ -240,7 +245,7 @@ function makeIngestHarness(options: { watchlist: Watchlist; rss?: IngestAdapters
         watchlist: options.watchlist,
         store,
         adapters,
-        tag: async () => defaultTagging,
+        tag: options.tag ?? (async () => defaultTagging),
         embed: async (texts) => texts.length,
         now: () => new Date("2026-09-20T02:30:00.000Z"),
         log: (line) => logs.push(line),
@@ -319,6 +324,43 @@ describe("runIngest", () => {
     const exitCode = await harness.run([]);
 
     expect(exitCode).toBe(0);
+    harness.store.close();
+  });
+
+  // I4: a feed that fetches fine and yields nothing new never calls the
+  // tagger, so a total tagging outage fails only the few feeds that DID have
+  // items -- never all of them. Under the old "every feed failed" rule the
+  // run exited 0 and the Hermes wrapper, which speaks up only on a non-zero
+  // exit, stayed silent all night.
+  it("exits non-zero when the tagger fails, even though most feeds succeeded", async () => {
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [{ kind: "rss", url: "https://roche/feed.xml" }] });
+    const quiet = makeEntity({ id: "novartis", feeds: [{ kind: "rss", url: "https://novartis/feed.xml" }] });
+    const harness = makeIngestHarness({
+      watchlist: makeWatchlist([roche, quiet]),
+      rss: async (_feed, entity) =>
+        entity.id === "roche"
+          ? [
+              {
+                title: "Roche picks a cloud",
+                url: "https://roche/a",
+                publishedAt: "2026-09-19T00:00:00.000Z",
+                body: "body",
+                sourceKind: "rss",
+                sourceName: "Roche",
+                titleKey: "roche picks a cloud",
+              },
+            ]
+          : [],
+      tag: async () => {
+        throw new Error("model is not answering");
+      },
+    });
+
+    const exitCode = await harness.run([]);
+
+    expect(exitCode).toBe(1);
+    expect(harness.logs.some((line) => line.includes("taggerFailures=1"))).toBe(true);
+    expect(harness.logs.some((line) => line.includes("the model is not answering"))).toBe(true);
     harness.store.close();
   });
 
@@ -430,6 +472,7 @@ describe("runStatus", () => {
       tagged: 8,
       failedFeeds: 0,
       skippedByCap: 0,
+      skippedByBudget: 0,
       anomalies: 0,
     });
     const logs: string[] = [];

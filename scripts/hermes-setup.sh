@@ -237,6 +237,29 @@ for job in definitions:
     name, schedule, deliver = job["name"], job["schedule"], job["deliver"]
     if job.get("kind") == "script":
         install_script(job["script"])
+        # C1(b): Hermes SIGTERMs then SIGKILLs a --no-agent script's whole
+        # process group at cron.script_timeout_seconds (3600 s by default --
+        # hermes_cli/config_defaults.py, enforced in cron/scheduler_script.py's
+        # _run_job_script). The nightly ingest tags 15-23 s per item, so the
+        # default cap is well inside a normal night's work and the kill would
+        # land mid-run: no `finally`, no finishRun, an unfinished run row and a
+        # failure alert every night. The ingest stops itself at its own budget
+        # (DEFAULT_INGEST_BUDGET_MS); this raises the external deadline far
+        # above it so it only ever fires on a genuinely wedged process.
+        # HERMES_CRON_SCRIPT_TIMEOUT would be read from the *scheduler's* own
+        # environment, not the job's, so exporting it in the wrapper does
+        # nothing -- the config key is the one that works. It is read fresh on
+        # every script run (_get_script_timeout -> load_config), so no gateway
+        # restart is needed. The key is global to no-agent cron scripts; this
+        # is the only such job.
+        timeout_seconds = job.get("script_timeout_seconds")
+        if timeout_seconds is not None:
+            subprocess.run(
+                [hermes, "config", "set", "cron.script_timeout_seconds", str(timeout_seconds)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            print(f"[hermes-setup] Set cron.script_timeout_seconds to {timeout_seconds}")
         # --deliver local (this job's own default) keeps run state visible in
         # `hermes cron list` without pushing anything on a quiet night;
         # --failure-deliver overrides the target for failure notices only.

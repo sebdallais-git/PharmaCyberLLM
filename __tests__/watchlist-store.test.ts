@@ -116,6 +116,7 @@ describe("watchlist store", () => {
       tagged: 28,
       failedFeeds: 1,
       skippedByCap: 7,
+      skippedByBudget: 3,
       anomalies: 2,
     });
 
@@ -126,6 +127,7 @@ describe("watchlist store", () => {
       tagged: 28,
       failedFeeds: 1,
       skippedByCap: 7,
+      skippedByBudget: 3,
       anomalies: 2,
       finishedAt: "2026-09-19T03:10:00.000Z",
     });
@@ -343,7 +345,7 @@ describe("watchlist store", () => {
         second.close();
 
         const raw = new Database(dbPath);
-        expect(raw.pragma("user_version", { simple: true })).toBe(1);
+        expect(raw.pragma("user_version", { simple: true })).toBe(2);
         raw.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -392,7 +394,7 @@ describe("watchlist store", () => {
         migrated.close();
 
         const raw = new Database(dbPath);
-        expect(raw.pragma("user_version", { simple: true })).toBe(1);
+        expect(raw.pragma("user_version", { simple: true })).toBe(2);
         raw.close();
 
         // Reopening an already-migrated database must be a no-op, not a second migration attempt.
@@ -400,6 +402,61 @@ describe("watchlist store", () => {
         expect(reopened.findByHash("legacy-hash")?.title).toBe("Legacy title");
         expect(reopened.findByHash("post-migration")).not.toBeNull();
         reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // C1: the run's wall-clock budget needs its own runs column, so a
+    // database written by the Task 8 code (user_version 1, runs table with
+    // no skipped_by_budget) must be upgraded in place rather than throwing
+    // on the first finishRun of the night.
+    it("adds skipped_by_budget to a version-1 runs table instead of failing the next run", () => {
+      const dir = mkdtempSync(join(tmpdir(), "watchlist-store-migrate-v1-"));
+      const dbPath = join(dir, "watchlist.db");
+      try {
+        const legacy = new Database(dbPath);
+        legacy.exec(`
+          CREATE TABLE runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            fetched INTEGER,
+            deduped INTEGER,
+            tagged INTEGER,
+            failed_feeds INTEGER,
+            skipped_by_cap INTEGER,
+            anomalies INTEGER
+          );
+          INSERT INTO runs (started_at, finished_at, fetched, deduped, tagged, failed_feeds, skipped_by_cap, anomalies)
+          VALUES ('2026-09-19T02:30:00.000Z', '2026-09-19T02:50:00.000Z', 5, 1, 4, 0, 0, 0);
+        `);
+        legacy.pragma("user_version = 1");
+        legacy.close();
+
+        expect(() => openWatchlistStore(dbPath)).not.toThrow();
+
+        const migrated = openWatchlistStore(dbPath);
+        // The pre-existing row has no value for the new column: it reads 0,
+        // it does not crash the hydration.
+        expect(migrated.lastRun()?.skippedByBudget).toBe(0);
+
+        const runId = migrated.startRun("2026-09-20T02:30:00.000Z");
+        migrated.finishRun(runId, "2026-09-20T03:15:00.000Z", {
+          fetched: 90,
+          deduped: 4,
+          tagged: 60,
+          failedFeeds: 0,
+          skippedByCap: 0,
+          skippedByBudget: 26,
+          anomalies: 0,
+        });
+        expect(migrated.lastRun()?.skippedByBudget).toBe(26);
+        migrated.close();
+
+        const raw = new Database(dbPath);
+        expect(raw.pragma("user_version", { simple: true })).toBe(2);
+        raw.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -440,7 +497,7 @@ describe("watchlist store", () => {
         reopened.close();
 
         const rawAfter = new Database(dbPath);
-        expect(rawAfter.pragma("user_version", { simple: true })).toBe(1);
+        expect(rawAfter.pragma("user_version", { simple: true })).toBe(2);
         rawAfter.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });

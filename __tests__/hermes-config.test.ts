@@ -2,6 +2,7 @@ import { describe, expect, it } from "@jest/globals";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { DEFAULT_INGEST_BUDGET_MS } from "../src/services/watchlist-ingest.js";
 
 const hermesDir = join(process.cwd(), "hermes");
 const configText = readFileSync(join(hermesDir, "config.template.yaml"), "utf-8");
@@ -34,6 +35,9 @@ interface CronJob {
   script?: string;
   no_agent?: boolean;
   failure_deliver?: string;
+  // C1(b): what install-cron writes into ~/.hermes/config.yaml as
+  // cron.script_timeout_seconds before creating this job.
+  script_timeout_seconds?: number;
 }
 
 const jobs = JSON.parse(readFileSync(join(hermesDir, "cron", "jobs.json"), "utf-8")) as CronJob[];
@@ -181,6 +185,21 @@ describe("hermes/cron/jobs.json", () => {
 
     const otherSchedules = jobs.filter((job) => job.name !== "pharmallm-watchlist-ingest").map((job) => job.schedule);
     expect(otherSchedules).not.toContain(watchlistJob?.schedule);
+  });
+
+  // C1: Hermes' own no-agent script timeout defaults to 3600 s and kills the
+  // script's whole process group, so the run would never reach finishRun --
+  // an unfinished run row and a failure alert every night. The job therefore
+  // declares a timeout of its own, and it must stay well above the budget the
+  // run stops itself at, or the external kill wins again.
+  it("asks Hermes for a script timeout far above the ingest's own wall-clock budget", () => {
+    const watchlistJob = jobs.find((job) => job.name === "pharmallm-watchlist-ingest");
+    const timeoutMs = (watchlistJob?.script_timeout_seconds ?? 0) * 1000;
+
+    expect(timeoutMs).toBeGreaterThan(DEFAULT_INGEST_BUDGET_MS);
+    // Not merely greater: the run still fetches ~150 feeds around its tagging
+    // budget, and the fetching is not what the budget measures.
+    expect(timeoutMs).toBeGreaterThanOrEqual(DEFAULT_INGEST_BUDGET_MS * 2);
   });
 
   it("ships the watchlist ingest's wrapper script next to jobs.json", () => {

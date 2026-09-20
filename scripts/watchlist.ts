@@ -258,7 +258,8 @@ export async function runIngest(argv: string[], deps: RunIngestDeps): Promise<nu
 
   deps.log(
     `Ingest run #${result.runId}: fetched=${result.fetched} deduped=${result.deduped} tagged=${result.tagged} ` +
-      `stored=${result.stored} skippedByCap=${result.skippedByCap} failedFeeds=${result.failedFeeds.length} ` +
+      `stored=${result.stored} skippedByCap=${result.skippedByCap} skippedByBudget=${result.skippedByBudget} ` +
+      `taggerFailures=${result.taggerFailures} failedFeeds=${result.failedFeeds.length} ` +
       `anomalies=${result.anomalies.length}`,
   );
   if (result.failedFeeds.length > 0) {
@@ -270,6 +271,20 @@ export async function runIngest(argv: string[], deps: RunIngestDeps): Promise<nu
 
   if (totalFeeds > 0 && result.failedFeeds.length === totalFeeds) {
     deps.log(`Every feed failed (${totalFeeds}/${totalFeeds}) -- treating this run as a failure.`);
+    return 1;
+  }
+
+  // I4: a dead model must not look like a quiet night. Only feeds that
+  // actually had new items ever call the tagger, so a total tagging outage
+  // typically fails a handful of feeds out of ~150 and would otherwise exit
+  // 0 -- and the Hermes wrapper only speaks up on a non-zero exit. Any
+  // tagger error at all is worth waking the owner for: the local model is
+  // either down, out of memory or answering unparseable JSON, and every one
+  // of those costs the whole night's tagging.
+  if (result.taggerFailures > 0) {
+    deps.log(
+      `Tagging failed ${result.taggerFailures} time(s) -- the model is not answering, treating this run as a failure.`,
+    );
     return 1;
   }
 
@@ -395,7 +410,8 @@ export function runStatus(argv: string[], deps: RunStatusDeps): number {
     deps.log(
       `Last run #${lastRun.id}: started ${lastRun.startedAt}, finished ${lastRun.finishedAt ?? "in progress"} -- ` +
         `fetched=${lastRun.fetched} deduped=${lastRun.deduped} tagged=${lastRun.tagged} ` +
-        `failedFeeds=${lastRun.failedFeeds} skippedByCap=${lastRun.skippedByCap} anomalies=${lastRun.anomalies}`,
+        `failedFeeds=${lastRun.failedFeeds} skippedByCap=${lastRun.skippedByCap} ` +
+        `skippedByBudget=${lastRun.skippedByBudget} anomalies=${lastRun.anomalies}`,
     );
   }
 

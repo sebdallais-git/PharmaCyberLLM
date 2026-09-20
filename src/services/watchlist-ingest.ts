@@ -42,6 +42,27 @@ export const EDGAR_MIN_INTERVAL_MS = 100;
 // skippedByCap, never silently dropped.
 export const DEFAULT_INGEST_LIMIT = 250;
 
+// C1: a wall-clock budget for the whole run, checked before each new item's
+// tagging. Measured tagging cost is 15-23 s/item, so the 250-item cap alone
+// is 64-104 minutes of model time -- comfortably past Hermes' no-agent
+// script timeout (cron.script_timeout_seconds, 3600 s by default), which
+// SIGTERMs then SIGKILLs the whole process group. A killed process never
+// reaches the `finally` below, so finishRun never fires, the `runs` row
+// stays unfinished and the job alerts every night. Stopping ourselves first
+// turns "killed mid-run" into "a normal run that deferred the tail": the
+// deferred items are counted, the watermarks stay behind them, and the next
+// run picks them up. 45 minutes leaves the external timeout far above our
+// own deadline plus the fetching either side of it.
+export const DEFAULT_INGEST_BUDGET_MS = 45 * 60 * 1000;
+
+// I1: the spec's first-run backfill. `options.since ?? state.lastSeenAt` is
+// null for a feed that has never been seen, which asks every adapter for its
+// entire history -- unbounded, and on the very first production run that is
+// every feed at once. The spec fixes the window at 30 days; exported so
+// Task 9 can tune it from the live run's numbers.
+export const FIRST_RUN_BACKFILL_DAYS = 30;
+export const FIRST_RUN_BACKFILL_MS = FIRST_RUN_BACKFILL_DAYS * 24 * 60 * 60 * 1000;
+
 // R13/R15: the title-key dedupe only looks this far either side of an item's
 // published-at. A title key is a weak key (it strips punctuation and a
 // trailing dash clause), so matching it across an unbounded history would
@@ -84,6 +105,14 @@ export interface IngestDeps {
   // R17's gate interval, overridable only so tests can pace three calls in
   // milliseconds instead of hundreds. Defaults to EDGAR_MIN_INTERVAL_MS.
   edgarMinIntervalMs?: number;
+  // C1's wall-clock budget for the whole run. Defaults to
+  // DEFAULT_INGEST_BUDGET_MS; a non-positive value means "unset", like
+  // `limit`. Measured with deps.now() rather than Date.now() -- unlike the
+  // EDGAR gate (which paces real outbound requests against the SEC's real
+  // rate limit and must stay on a real clock), this deadline only decides
+  // how much of OUR work to do, so an injected clock is exactly right and
+  // lets a test spend an hour of budget in a millisecond.
+  budgetMs?: number;
 }
 
 export interface IngestResult {
@@ -92,6 +121,16 @@ export interface IngestResult {
   tagged: number;
   stored: number;
   skippedByCap: number;
+  // C1: items fetched but left untagged because the run's wall-clock budget
+  // ran out. Deferred exactly like a capped item -- counted, never silently
+  // dropped, and the feed's watermark stays strictly behind them.
+  skippedByBudget: number;
+  // I4: tagger calls that threw. A feed whose fetch works but whose tagging
+  // fails is NOT the same as a quiet feed, and "every feed failed" cannot
+  // see the difference: a feed that fetched fine and had nothing new never
+  // calls the tagger at all, so a dead model can otherwise look exactly like
+  // a quiet night and exit 0.
+  taggerFailures: number;
   failedFeeds: string[];
   // R16: things that are not failures but are not normal either -- an IR page
   // whose links yielded no recognizable date, an embedding write that did not
@@ -226,6 +265,8 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
   const edgarGate = createMinIntervalGate(
     edgarInterval !== undefined && edgarInterval > 0 ? edgarInterval : EDGAR_MIN_INTERVAL_MS,
   );
+  // Same "non-positive means unset" rule as `limit` and the EDGAR interval.
+  const budgetMs = deps.budgetMs !== undefined && deps.budgetMs > 0 ? deps.budgetMs : DEFAULT_INGEST_BUDGET_MS;
 
   function buildTasks(only: string[] | undefined): FeedTask[] {
     const wanted = only === undefined ? null : new Set(only);
@@ -318,15 +359,37 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
   }
 
   return async function run(options: IngestOptions = {}): Promise<IngestResult> {
-    const startedAt = deps.now().toISOString();
+    // One reading of the clock: startedAt stamps the run row and every item's
+    // fetchedAt, startedAtMs is the origin of C1's budget and of I1's
+    // first-run backfill window.
+    const startedAtDate = deps.now();
+    const startedAt = startedAtDate.toISOString();
+    const startedAtMs = startedAtDate.getTime();
 
     let fetched = 0;
     let deduped = 0;
     let tagged = 0;
     let stored = 0;
     let skippedByCap = 0;
+    let skippedByBudget = 0;
+    let taggerFailures = 0;
     const failedFeeds: string[] = [];
     const anomalies: string[] = [];
+
+    // C1: true once the run has spent its wall-clock budget. Latched (and
+    // logged exactly once) so the remaining items are deferred without
+    // re-reading the clock or repeating the message per item.
+    let budgetSpent = false;
+    const budgetIsSpent = (): boolean => {
+      if (budgetSpent) return true;
+      if (deps.now().getTime() - startedAtMs < budgetMs) return false;
+      budgetSpent = true;
+      deps.log(
+        `budget spent after ${budgetMs} ms and ${tagged} tagged items: tagging stops here, ` +
+          `the rest of this run's items are deferred to the next run`,
+      );
+      return true;
+    };
 
     // Task 8 fix (c): startRun/buildTasks/the initial log call used to sit
     // outside this try/finally, so a throw from any of them (a locked store,
@@ -348,7 +411,14 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           // Outside it, one bad read would take the whole run down -- the
           // exact thing "a feed never aborts the run" exists to prevent.
           const state = deps.store.getFeedState(task.feedId);
-          const since = options.since ?? state.lastSeenAt;
+          // I1: an explicit --since always wins; then the feed's own
+          // watermark; then, for a feed this store has never seen, the
+          // spec's 30-day backfill rather than `null`, which asks the
+          // adapter for the feed's entire history.
+          const since =
+            options.since ??
+            state.lastSeenAt ??
+            new Date(startedAtMs - FIRST_RUN_BACKFILL_MS).toISOString();
 
           const outcome = await task.fetch(since);
           if (outcome.anomaly !== undefined) {
@@ -365,12 +435,16 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           // in. Feeds are conventionally newest-first, so the cap usually bites
           // part-way down the list and nothing may move at all.
           const resolved: Array<{ publishedAt: string; hash: string }> = [];
-          const cappedAt: string[] = [];
+          // Items this run fetched but deliberately did not process: dropped
+          // by the cap, or left untagged when the wall-clock budget ran out
+          // (C1). Both are deferred to the next run, so both hold the
+          // watermark back in exactly the same way.
+          const deferredAt: string[] = [];
           const markResolved = (publishedAt: string, hash: string): void => {
             resolved.push({ publishedAt, hash });
           };
-          const markCapped = (publishedAt: string): void => {
-            cappedAt.push(publishedAt);
+          const markDeferred = (publishedAt: string): void => {
+            deferredAt.push(publishedAt);
           };
 
           for (const item of outcome.items) {
@@ -391,7 +465,17 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
               // The cap bites in priority order, because tasks are already in
               // priority order. Counted, not silently lost.
               skippedByCap += 1;
-              markCapped(item.publishedAt);
+              markDeferred(item.publishedAt);
+              continue; // deliberately NOT resolved: the watermark stays behind it
+            }
+
+            // C1: checked here, immediately before the one expensive step --
+            // an item we have no time to tag is deferred exactly like a
+            // capped one, so the same "never advance past a dropped item"
+            // clamp below covers it unchanged.
+            if (budgetIsSpent()) {
+              skippedByBudget += 1;
+              markDeferred(item.publishedAt);
               continue; // deliberately NOT resolved: the watermark stays behind it
             }
 
@@ -399,7 +483,17 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
             // below: the feed is marked failed and its watermark stays put, so
             // the next run re-fetches these items rather than losing them.
             const candidateIds = computeCandidateIds(item, deps.watchlist, task.entity?.id ?? null);
-            const tagging = await deps.tag(item, candidateIds);
+            let tagging: Tagging;
+            try {
+              tagging = await deps.tag(item, candidateIds);
+            } catch (err) {
+              // I4: counted separately, then rethrown so the feed fails
+              // exactly as before. A dead model fails every feed it reaches,
+              // but feeds with nothing new never reach it at all -- without
+              // this counter that outage is indistinguishable from silence.
+              taggerFailures += 1;
+              throw err;
+            }
             tagged += 1;
 
             // The feed's own entity is always attached: an item pulled from
@@ -464,10 +558,10 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           // the FIRST production run is exactly the one that blows the cap,
           // since every feed backfills with since === null. Recording the
           // success (even a null one) still clears the failure streak.
-          const cappedFloor =
-            cappedAt.length === 0 ? null : cappedAt.reduce((oldest, at) => (at < oldest ? at : oldest));
+          const deferredFloor =
+            deferredAt.length === 0 ? null : deferredAt.reduce((oldest, at) => (at < oldest ? at : oldest));
           const eligible =
-            cappedFloor === null ? resolved : resolved.filter((entry) => entry.publishedAt < cappedFloor);
+            deferredFloor === null ? resolved : resolved.filter((entry) => entry.publishedAt < deferredFloor);
           const newest = eligible.reduce<{ publishedAt: string; hash: string } | null>(
             (best, entry) => (best === null || entry.publishedAt > best.publishedAt ? entry : best),
             null,
@@ -509,16 +603,29 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           tagged,
           failedFeeds: failedFeeds.length,
           skippedByCap,
+          skippedByBudget,
           anomalies: anomalies.length,
         });
         deps.log(
           `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
-            `skippedByCap=${skippedByCap} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
+            `skippedByCap=${skippedByCap} skippedByBudget=${skippedByBudget} taggerFailures=${taggerFailures} ` +
+            `failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
         );
       }
     }
 
-    return { fetched, deduped, tagged, stored, skippedByCap, failedFeeds, anomalies, runId };
+    return {
+      fetched,
+      deduped,
+      tagged,
+      stored,
+      skippedByCap,
+      skippedByBudget,
+      taggerFailures,
+      failedFeeds,
+      anomalies,
+      runId,
+    };
   };
 }
 

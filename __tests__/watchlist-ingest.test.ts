@@ -13,7 +13,9 @@ import { openWatchlistStore, type WatchlistStore } from "../src/services/watchli
 import {
   computeCandidateIds,
   createIngestRun,
+  DEFAULT_INGEST_BUDGET_MS,
   feedIdFor,
+  FIRST_RUN_BACKFILL_MS,
   topicFeedId,
   type IngestDeps,
   type IngestResult,
@@ -90,6 +92,10 @@ interface HarnessOptions {
   tag?(item: RawItem, candidateIds: string[]): Promise<Tagging>;
   edgarMinIntervalMs?: number;
   now?: Date;
+  // An advancing clock, for the tests that need wall-clock time to pass
+  // (C1's budget). Takes precedence over the fixed `now` above.
+  clock?(): Date;
+  budgetMs?: number;
 }
 
 function makeHarness(options: HarnessOptions): Harness {
@@ -131,10 +137,11 @@ function makeHarness(options: HarnessOptions): Harness {
       embedCalls.push({ texts, metadatas });
       return texts.length;
     },
-    now: () => options.now ?? new Date("2026-09-20T06:00:00.000Z"),
+    now: () => options.clock?.() ?? options.now ?? FIXED_NOW,
     limit: options.limit ?? 250,
     log: (line) => logs.push(line),
     edgarMinIntervalMs: options.edgarMinIntervalMs,
+    budgetMs: options.budgetMs,
   };
 
   return {
@@ -151,6 +158,12 @@ function makeHarness(options: HarnessOptions): Harness {
 }
 
 const ALL_TIME = { from: "2000-01-01T00:00:00.000Z", to: "2100-01-01T00:00:00.000Z" };
+
+// The clock every harness runs on unless a test injects its own, and the
+// `since` I1's 30-day first-run backfill derives from it for a feed this
+// store has never seen.
+const FIXED_NOW = new Date("2026-09-20T06:00:00.000Z");
+const BACKFILL_SINCE = new Date(FIXED_NOW.getTime() - FIRST_RUN_BACKFILL_MS).toISOString();
 
 // ---- tests ------------------------------------------------------------------
 
@@ -453,8 +466,8 @@ describe("watchlist ingest", () => {
 
   it("leaves a never-seen feed's watermark null when the cap ate its whole first batch", async () => {
     // The first production run is exactly the one that blows the cap: every
-    // feed backfills with since === null. A feed that resolved nothing must
-    // stay unstamped so the next run backfills it again.
+    // feed backfills over I1's 30-day window. A feed that resolved nothing
+    // must stay unstamped so the next run backfills it again.
     const rocheFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
     const awsFeed: Feed = { kind: "rss", url: "https://aws.example/feed.xml" };
     const roche = makeEntity({ id: "roche", name: "Roche", kind: "customer", feeds: [rocheFeed] });
@@ -483,7 +496,7 @@ describe("watchlist ingest", () => {
 
     // The customer's feed resolved its item and advanced; the starved
     // vendor's is still backfilling from scratch.
-    expect(roomy.rssCalls.map((call) => call.since)).toEqual(["2026-09-19T00:00:00.000Z", null]);
+    expect(roomy.rssCalls.map((call) => call.since)).toEqual(["2026-09-19T00:00:00.000Z", BACKFILL_SINCE]);
     expect(second.stored + second.deduped).toBe(2);
     expect(store.itemsInPeriod(ALL_TIME.from, ALL_TIME.to).map((item) => item.title).sort()).toEqual([
       "Amazon Web Services does a thing",
@@ -519,6 +532,181 @@ describe("watchlist ingest", () => {
     expect(result.skippedByCap).toBe(1);
     expect(run?.skippedByCap).toBe(1);
     expect(run?.anomalies).toBe(1);
+    harness.store.close();
+  });
+
+  // ---- C1: the run's wall-clock budget ------------------------------------
+
+  it("stops tagging when the wall-clock budget is spent, defers the rest and finishes the run", async () => {
+    // Hermes SIGKILLs a no-agent script at cron.script_timeout_seconds and
+    // the `finally` that calls finishRun never runs, so the run row stays
+    // unfinished and the job alerts every night. The run has to stop itself
+    // first. Here each tagging costs 20 minutes of the 45-minute budget.
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    let nowMs = FIXED_NOW.getTime();
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      budgetMs: 45 * 60 * 1000,
+      clock: () => new Date(nowMs),
+      async rss() {
+        // Newest first, exactly as a real feed lists them.
+        return [1, 2, 3, 4, 5].map((n) =>
+          rawItem({
+            title: `Item ${n}`,
+            url: `https://roche.com/${n}`,
+            publishedAt: `2026-09-${19 - n}T00:00:00.000Z`,
+          }),
+        );
+      },
+      async tag() {
+        nowMs += 20 * 60 * 1000;
+        return defaultTagging;
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.tagged).toBe(3);
+    expect(result.stored).toBe(3);
+    expect(result.skippedByBudget).toBe(2);
+    expect(result.skippedByCap).toBe(0);
+    // The run closed out normally: a finished row, not the unfinished one an
+    // external kill would have left behind.
+    const run = harness.store.lastRun();
+    expect(run?.id).toBe(result.runId);
+    expect(run?.finishedAt).not.toBeNull();
+    expect(run?.skippedByBudget).toBe(2);
+    expect(harness.logs.some((line) => line.includes("budget spent"))).toBe(true);
+    harness.store.close();
+  });
+
+  it("never advances a watermark past an item the budget deferred", async () => {
+    // An item left untagged because time ran out is exactly like one the cap
+    // dropped: the same clamp has to hold, or the deferred tail disappears
+    // behind an exclusive `since` for good.
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    let nowMs = FIXED_NOW.getTime();
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      budgetMs: 10 * 60 * 1000,
+      clock: () => new Date(nowMs),
+      async rss() {
+        return [
+          rawItem({ title: "Newest", url: "https://roche.com/c", publishedAt: "2026-09-19T00:00:00.000Z" }),
+          rawItem({ title: "Middle", url: "https://roche.com/b", publishedAt: "2026-09-18T00:00:00.000Z" }),
+          rawItem({ title: "Oldest", url: "https://roche.com/a", publishedAt: "2026-09-17T00:00:00.000Z" }),
+        ];
+      },
+      async tag() {
+        nowMs += 10 * 60 * 1000;
+        return defaultTagging;
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.tagged).toBe(1);
+    expect(result.skippedByBudget).toBe(2);
+    // "Newest" was stored, but the two older items were deferred: the
+    // watermark must stay strictly below the oldest of them, which here
+    // means it never moves at all.
+    expect(harness.store.getFeedState(feedIdFor(roche, rssFeed)).lastSeenAt).toBeNull();
+    harness.store.close();
+  });
+
+  it("treats a non-positive budget as the default, never as 'no time at all'", async () => {
+    // Same rule as `limit` and the EDGAR interval: 0 means unset. Read
+    // literally it would defer every item of every run forever.
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      budgetMs: 0,
+      async rss() {
+        return [
+          rawItem({ title: "One", url: "https://roche.com/a" }),
+          rawItem({ title: "Two", url: "https://roche.com/b" }),
+        ];
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(DEFAULT_INGEST_BUDGET_MS).toBeGreaterThan(0);
+    expect(result.tagged).toBe(2);
+    expect(result.skippedByBudget).toBe(0);
+    harness.store.close();
+  });
+
+  // ---- I1: the spec's 30-day first-run backfill ----------------------------
+
+  it("asks a never-seen feed for the last 30 days, not its entire history", async () => {
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({ watchlist: makeWatchlist([roche]) });
+
+    await harness.run();
+
+    expect(harness.rssCalls.map((call) => call.since)).toEqual([
+      new Date(FIXED_NOW.getTime() - FIRST_RUN_BACKFILL_MS).toISOString(),
+    ]);
+    harness.store.close();
+  });
+
+  it("lets an explicit since win over the first-run backfill", async () => {
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({ watchlist: makeWatchlist([roche]) });
+
+    await harness.run({ since: "2025-01-01T00:00:00.000Z" });
+
+    expect(harness.rssCalls.map((call) => call.since)).toEqual(["2025-01-01T00:00:00.000Z"]);
+    harness.store.close();
+  });
+
+  // ---- I4: a dead model is not a quiet night -------------------------------
+
+  it("counts tagger failures separately from the feeds they fail", async () => {
+    // Only feeds that actually have new items ever call the tagger, so a
+    // total tagging outage fails a handful of feeds out of ~150 -- which
+    // "every feed failed" cannot see. The count is what makes it visible.
+    const rocheFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const quietFeed: Feed = { kind: "rss", url: "https://novartis.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rocheFeed] });
+    const novartis = makeEntity({ id: "novartis", name: "Novartis", feeds: [quietFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche, novartis]),
+      async rss(_feed, entity) {
+        return entity.id === "roche" ? [rawItem({ title: "One", url: "https://roche.com/a" })] : [];
+      },
+      async tag() {
+        throw new Error("model is not answering");
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.taggerFailures).toBe(1);
+    expect(result.failedFeeds).toEqual([feedIdFor(roche, rocheFeed)]);
+    expect(result.stored).toBe(0);
+    harness.store.close();
+  });
+
+  it("reports no tagger failures on an ordinary run", async () => {
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      async rss() {
+        return [rawItem({ title: "One", url: "https://roche.com/a" })];
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.taggerFailures).toBe(0);
     harness.store.close();
   });
 
@@ -609,7 +797,7 @@ describe("watchlist ingest", () => {
     await harness.run();
     await harness.run();
 
-    expect(harness.rssCalls.map((call) => call.since)).toEqual([null, "2026-09-18T00:00:00.000Z"]);
+    expect(harness.rssCalls.map((call) => call.since)).toEqual([BACKFILL_SINCE, "2026-09-18T00:00:00.000Z"]);
     harness.store.close();
   });
 
@@ -826,7 +1014,7 @@ describe("watchlist ingest", () => {
 
     const result = await harness.run();
 
-    expect(harness.newsCalls).toEqual([{ query: "pharma ransomware breach", since: null }]);
+    expect(harness.newsCalls).toEqual([{ query: "pharma ransomware breach", since: BACKFILL_SINCE }]);
     expect(result.stored).toBe(1);
     expect(harness.store.getFeedState(topicFeedId("pharma ransomware breach")).lastSeenAt).toBe(
       "2026-09-19T00:00:00.000Z",

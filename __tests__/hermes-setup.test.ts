@@ -3,8 +3,17 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_INGEST_BUDGET_MS } from "../src/services/watchlist-ingest.js";
 
 const projectDir = process.cwd();
+// The timeout hermes/cron/jobs.json asks Hermes for, read from the file
+// rather than restated, so the two can never drift.
+const WATCHLIST_SCRIPT_TIMEOUT_SECONDS = (
+  JSON.parse(readFileSync(join(projectDir, "hermes", "cron", "jobs.json"), "utf-8")) as Array<{
+    name: string;
+    script_timeout_seconds?: number;
+  }>
+).find((job) => job.name === "pharmallm-watchlist-ingest")?.script_timeout_seconds ?? 0;
 const dirs: string[] = [];
 const API_TOKEN = "api-token-value-1111";
 const MCP_TOKEN = "mcp-token-value-2222";
@@ -178,7 +187,8 @@ describe("hermes-setup.sh install-cron", () => {
 
     expect(result.status).toBe(0);
     const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
-    expect(calls).toHaveLength(5);
+    // 5 jobs plus the one `config set` the script-mode job needs (C1(b)).
+    expect(calls).toHaveLength(6);
     expect(calls[0]).toContain("hermes [cron] [create] [0 6 * * *] [Scheduled job: morning news digest.");
     expect(calls[0]).toContain("[--name] [pharmallm-news-digest] [--deliver] [telegram]");
     expect(calls[2]).toContain("[--name] [pharmallm-health-watch]");
@@ -222,10 +232,29 @@ describe("hermes-setup.sh install-cron", () => {
     // No positional prompt, no LLM agent step: --no-agent plus --script,
     // --deliver local (quiet on a normal night) and --failure-deliver
     // telegram (the only case this job should ever speak up).
-    expect(calls[4]).toBe(
+    expect(calls[5]).toBe(
       "hermes [cron] [create] [30 2 * * *] [--name] [pharmallm-watchlist-ingest] " +
         "[--script] [pharmallm-watchlist-ingest.sh] [--no-agent] [--deliver] [local] [--failure-deliver] [telegram]",
     );
+  });
+
+  // C1(b): Hermes kills a --no-agent script's process group at
+  // cron.script_timeout_seconds (3600 s by default), which is inside the
+  // nightly ingest's own working range -- the kill would land mid-run, skip
+  // finishRun and leave an unfinished run row plus a nightly failure alert.
+  // The config key is the mechanism that works: HERMES_CRON_SCRIPT_TIMEOUT is
+  // read from the scheduler's environment, not the job's.
+  it("raises Hermes' no-agent script timeout before installing the job, so the external kill sits far above our own budget", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-cron"]);
+
+    expect(result.status).toBe(0);
+    const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
+    expect(calls[4]).toBe(`hermes [config] [set] [cron.script_timeout_seconds] [${WATCHLIST_SCRIPT_TIMEOUT_SECONDS}]`);
+    // Set before the job is created, so the job never exists under the 3600 s default.
+    expect(calls[5]).toContain("[--name] [pharmallm-watchlist-ingest]");
+    expect(WATCHLIST_SCRIPT_TIMEOUT_SECONDS * 1000).toBeGreaterThan(DEFAULT_INGEST_BUDGET_MS);
   });
 });
 
