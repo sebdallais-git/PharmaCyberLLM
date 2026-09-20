@@ -187,9 +187,18 @@ export function parseIngestArgs(argv: string[]): IngestArgs {
   return args;
 }
 
+// A feed only ever becomes a task in createIngestRun's buildTasks when it
+// carries the field its kind actually fetches with: url for rss/ir_page/news,
+// cik for edgar. A feed missing that field is skipped there (logged, never
+// attempted), so it must never be counted here either -- a count that can
+// disagree with what actually ran would be worse than no count at all.
+function isRunnableFeed(feed: Feed): boolean {
+  return feed.kind === "edgar" ? feed.cik !== undefined : feed.url !== undefined;
+}
+
 // The number of feeds this run will actually attempt, mirroring
 // createIngestRun's own buildTasks (customers/peers/vendors filtered by
-// --only, plus every topic query when --only is not given) closely enough
+// --only, plus every topic query when --only is not given) exactly enough
 // to tell "every feed failed" apart from "nothing was ever attempted".
 export function countPlannedFeeds(watchlist: Watchlist, only: string[] | undefined): number {
   const wanted = only === undefined ? null : new Set(only);
@@ -198,7 +207,7 @@ export function countPlannedFeeds(watchlist: Watchlist, only: string[] | undefin
     if (wanted !== null && !wanted.has(id)) continue;
     const entity = watchlist.entities.get(id);
     if (entity === undefined) continue;
-    total += entity.feeds.length;
+    total += entity.feeds.filter(isRunnableFeed).length;
   }
   if (wanted === null) total += watchlist.topics.length;
   return total;

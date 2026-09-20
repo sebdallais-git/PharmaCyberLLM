@@ -171,14 +171,14 @@ describe("hermes-setup.sh install-config", () => {
 });
 
 describe("hermes-setup.sh install-cron", () => {
-  it("creates all four jobs when none exist", () => {
+  it("creates all five jobs when none exist", () => {
     const box = sandbox();
 
     const result = setup(box, ["install-cron"]);
 
     expect(result.status).toBe(0);
     const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     expect(calls[0]).toContain("hermes [cron] [create] [0 6 * * *] [Scheduled job: morning news digest.");
     expect(calls[0]).toContain("[--name] [pharmallm-news-digest] [--deliver] [telegram]");
     expect(calls[2]).toContain("[--name] [pharmallm-health-watch]");
@@ -197,7 +197,35 @@ describe("hermes-setup.sh install-cron", () => {
     expect(result.status).toBe(0);
     const calls = readFileSync(box.calls, "utf-8");
     expect(calls).toContain("hermes [cron] [edit] [abc123] [--schedule] [0 9,19 * * *] [--prompt]");
-    expect(calls.match(/\[create\]/g)).toHaveLength(3);
+    // 5 defined, 1 (health-watch) already exists and is edited: the other
+    // 3 prompt-mode jobs plus the script-mode watchlist ingest are created.
+    expect(calls.match(/\[create\]/g)).toHaveLength(4);
+  });
+
+  it("installs the watchlist ingest as a script-mode job: wrapper copied, no LLM step, --deliver local with a Telegram failure override", () => {
+    const box = sandbox();
+
+    const result = setup(box, ["install-cron"]);
+
+    expect(result.status).toBe(0);
+
+    // The wrapper is installed into ~/.hermes/scripts (not run from the repo
+    // checkout: this file has no other way to find the repo once it lives
+    // there), with __PROJECT_DIR__ baked in.
+    const scriptPath = join(box.home, "scripts", "pharmallm-watchlist-ingest.sh");
+    const installed = readFileSync(scriptPath, "utf-8");
+    expect(installed).toContain(`PROJECT_DIR="${projectDir}"`);
+    expect(installed).not.toContain("__PROJECT_DIR__");
+    expect(statSync(scriptPath).mode & 0o111).toBeTruthy(); // executable
+
+    const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
+    // No positional prompt, no LLM agent step: --no-agent plus --script,
+    // --deliver local (quiet on a normal night) and --failure-deliver
+    // telegram (the only case this job should ever speak up).
+    expect(calls[4]).toBe(
+      "hermes [cron] [create] [30 2 * * *] [--name] [pharmallm-watchlist-ingest] " +
+        "[--script] [pharmallm-watchlist-ingest.sh] [--no-agent] [--deliver] [local] [--failure-deliver] [telegram]",
+    );
   });
 });
 

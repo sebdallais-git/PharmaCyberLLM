@@ -26,9 +26,10 @@
   {
     "name": "pharmallm-watchlist-ingest",
     "schedule": "30 2 * * *",
-    "type": "script",
-    "command": "npx tsx scripts/watchlist.ts ingest",
-    "deliver": "telegram",
-    "notifyOn": "failure"
+    "kind": "script",
+    "script": "pharmallm-watchlist-ingest.sh",
+    "no_agent": true,
+    "deliver": "local",
+    "failure_deliver": "telegram"
   }
 ]

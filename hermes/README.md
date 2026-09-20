@@ -6,7 +6,8 @@ Everything needed to run [Hermes Agent](https://hermes-agent.nousresearch.com/) 
 |---|---|
 | `config.template.yaml` | Hermes config: PharmaLLM `/v1` model with 64k context, `pharmallm` MCP server (15 tools, no `start_reindex`), a `pharmallm_cron` server for scheduled runs (14 tools, also no `add_knowledge`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
 | `SOUL.md` | Assistant role and tool policy |
-| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00, watchlist ingest 02:30 (script mode, `scripts/watchlist.ts ingest`, alerts only on failure -- see the root `README.md`; `install-cron` skips it, install it as a plain launchd/cron job) |
+| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00, watchlist ingest 02:30 (Hermes `--no-agent` script mode -- no LLM step -- running `scripts/pharmallm-watchlist-ingest.sh`, `--deliver local --failure-deliver telegram`; see the root `README.md`) |
+| `scripts/pharmallm-watchlist-ingest.sh` | The watchlist ingest job's script body (Task 8); `install-cron` copies it into `~/.hermes/scripts/` with the repo's path baked in |
 | `com.pharmallm.mcp.plist.template` | launchd service for `pharmallm-mcp` |
 
 ## 1. Install Hermes (once)

@@ -23,13 +23,17 @@ interface CronJob {
   name: string;
   schedule: string;
   deliver: string;
-  // Prompt-mode jobs (an LLM agent using MCP tools) carry `prompt`. Task 8's
-  // watchlist ingest is script-mode: no agent step, just a command and a
-  // failure-only notification policy.
+  // Prompt-mode jobs (an LLM agent using MCP tools, the default when `kind`
+  // is absent) carry `prompt`. Task 8's watchlist ingest is `kind: "script"`
+  // -- Hermes' own --no-agent cron mode (verified against
+  // ~/.hermes/hermes-agent/hermes_cli/subcommands/cron.py, R19): no LLM
+  // step, a script under ~/.hermes/scripts/ instead of a prompt, and its own
+  // delivery target for failures only.
   prompt?: string;
-  type?: "script";
-  command?: string;
-  notifyOn?: "always" | "failure";
+  kind?: "script";
+  script?: string;
+  no_agent?: boolean;
+  failure_deliver?: string;
 }
 
 const jobs = JSON.parse(readFileSync(join(hermesDir, "cron", "jobs.json"), "utf-8")) as CronJob[];
@@ -149,11 +153,12 @@ describe("hermes/cron/jobs.json", () => {
     ]);
     for (const job of jobs) {
       expect(job.schedule.split(" ")).toHaveLength(5);
-      expect(job.deliver).toBe("telegram");
     }
-    // Only the prompt-mode (LLM agent) jobs carry a prompt; the watchlist
-    // ingest job is checked on its own terms below.
-    for (const job of jobs.filter((job) => job.type !== "script")) {
+    // Only the prompt-mode (LLM agent) jobs are delivered straight to
+    // Telegram and carry a prompt; the watchlist ingest job is checked on
+    // its own terms below.
+    for (const job of jobs.filter((job) => job.kind !== "script")) {
+      expect(job.deliver).toBe("telegram");
       expect(job.prompt?.length ?? 0).toBeGreaterThan(40);
       expect(job.prompt).not.toContain("start_reindex");
     }
@@ -161,16 +166,29 @@ describe("hermes/cron/jobs.json", () => {
     expect(jobs[1].prompt).toContain("at most 3");
   });
 
-  it("runs the watchlist ingest nightly at 02:30, clear of the news/gap/health/feedback windows, alerting only on failure", () => {
+  it("runs the watchlist ingest nightly at 02:30 as a script-mode job (Hermes --no-agent), clear of the news/gap/health/feedback windows, alerting only on failure", () => {
     const watchlistJob = jobs.find((job) => job.name === "pharmallm-watchlist-ingest");
     expect(watchlistJob).toBeDefined();
     expect(watchlistJob?.schedule).toBe("30 2 * * *");
-    expect(watchlistJob?.type).toBe("script");
-    expect(watchlistJob?.command).toContain("scripts/watchlist.ts ingest");
-    expect(watchlistJob?.notifyOn).toBe("failure");
+    expect(watchlistJob?.kind).toBe("script");
+    expect(watchlistJob?.script).toBe("pharmallm-watchlist-ingest.sh");
+    expect(watchlistJob?.no_agent).toBe(true);
+    // `deliver: local` keeps run state visible in `hermes cron list` without
+    // pushing anything on a quiet night; `failure_deliver` overrides the
+    // target for failure notices only (R19).
+    expect(watchlistJob?.deliver).toBe("local");
+    expect(watchlistJob?.failure_deliver).toBe("telegram");
 
     const otherSchedules = jobs.filter((job) => job.name !== "pharmallm-watchlist-ingest").map((job) => job.schedule);
     expect(otherSchedules).not.toContain(watchlistJob?.schedule);
+  });
+
+  it("ships the watchlist ingest's wrapper script next to jobs.json", () => {
+    const scriptPath = join(hermesDir, "scripts", "pharmallm-watchlist-ingest.sh");
+    const script = readFileSync(scriptPath, "utf-8");
+    expect(script).toContain("__PROJECT_DIR__");
+    expect(script).toContain("scripts/watchlist.ts ingest");
+    expect(script).toContain("data/run/active-stack");
   });
 
   it("asks for the gap status the detector actually writes and forbids adding knowledge", () => {

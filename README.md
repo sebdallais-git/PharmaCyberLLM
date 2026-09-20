@@ -448,7 +448,7 @@ A second, more targeted news pipeline sits alongside the general news agent: it 
 
   `ingest` resolves the LLM stack the same way the rest of the app does: `LLM_PROVIDER` if set, otherwise whatever `data/run/active-stack` (written by `scripts/switch-stack.sh`) currently says, falling back to `ollama` if neither exists.
 
-- **Schedule:** a Hermes cron job (`hermes/cron/jobs.json`, `pharmallm-watchlist-ingest`) runs `ingest` nightly at **02:30**, clear of the news digest/gap-resolution/health-watch windows. It is script mode — a plain command, not an LLM agent step — and delivers a message only on failure. `scripts/hermes-setup.sh install-cron` currently skips installing it (it drives Hermes' prompt-based `cron create` only); it needs a real launchd/cron entry pointing at `npx tsx scripts/watchlist.ts ingest`.
+- **Schedule:** a Hermes cron job (`hermes/cron/jobs.json`, `pharmallm-watchlist-ingest`) runs `ingest` nightly at **02:30**, clear of the news digest/gap-resolution/health-watch windows. It runs through Hermes' own `--no-agent` script mode (no LLM step): `scripts/hermes-setup.sh install-cron` installs `hermes/scripts/pharmallm-watchlist-ingest.sh` into `~/.hermes/scripts/` (with the repo's absolute path baked in) and creates the job with `--script … --no-agent --deliver local --failure-deliver telegram` — quiet on a normal night (the wrapper prints nothing on success), a Telegram message only when the run fails.
 - **Not built yet:** Phase 2's digests (`build_digest`, weekly/monthly/quarterly email delivery, `search_watchlist`, `compare_entities`) are designed (see `docs/superpowers/specs/2026-09-20-it-scene-watchlist-design.md`) but not implemented — the nightly `ingest` populates `data/watchlist.db` and ChromaDB, and nothing reads them into a report yet.
 
 ---
@@ -508,7 +508,7 @@ scripts/hermes-setup.sh check           # read-only status; prints variable name
 | `pharmallm-gap-resolution` | 07:00 daily | Re-checks at most 3 triggered gaps, oldest first |
 | `pharmallm-health-watch` | 09:00 and 19:00 | Reports failing checks; replies `[SILENT]` and delivers nothing while healthy |
 | `pharmallm-feedback-digest` | Monday 08:00 | Weekly rating trends and the worst-rated answers |
-| `pharmallm-watchlist-ingest` | 02:30 daily | Script mode (no LLM agent step): runs `scripts/watchlist.ts ingest`; delivers only on failure. See [Watchlist](#watchlist-it-scene-tracking-phase-1) |
+| `pharmallm-watchlist-ingest` | 02:30 daily | Hermes `--no-agent` script mode (no LLM step): runs `hermes/scripts/pharmallm-watchlist-ingest.sh` → `scripts/watchlist.ts ingest`; silent on success, Telegram only on failure. See [Watchlist](#watchlist-it-scene-tracking-phase-1) |
 
 - **Tool scope:** Telegram and CLI runs get 15 of the 16 MCP tools (no `start_reindex`). Scheduled runs connect to a separate, write-limited `pharmallm_cron` server with 14 tools: no `start_reindex` and no `add_knowledge`. MCP calls are never approval-gated, so the tool list is the control. Scheduled runs also get no web, memory, terminal or file toolsets.
 - **Sandbox:** shell commands run in a Docker container with `--network=none`, 512 MB and 1 CPU, no host project or home directory mounted. Verified live: `/Users` is not visible, `host.docker.internal` does not resolve and the app is unreachable from inside.
@@ -761,6 +761,7 @@ PharmaCyberLLM/
 │   ├── src/http.ts             # auth middleware, /mcp, /healthz
 │   └── __tests__/              # against a fake PharmaLLM server
 ├── hermes/                     # Telegram assistant: config template, SOUL.md, cron jobs, plist template
+│   ├── scripts/pharmallm-watchlist-ingest.sh # Hermes --no-agent script-mode cron job body
 │   └── plugins/pharmallm-switch/ # Hermes plugin: handles the Switch / Cancel buttons
 ├── config/watchlist.yaml       # Watchlist: customers, peers, vendors and topic queries
 ├── scripts/

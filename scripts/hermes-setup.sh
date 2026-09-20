@@ -189,11 +189,16 @@ install_plugin() {
 
 install_cron() {
   require_hermes
-  HERMES_BIN="$HERMES_BIN" python3 - "$TEMPLATE_DIR/cron/jobs.json" "$HERMES_HOME/cron/jobs.json" <<'PY'
+  HERMES_BIN="$HERMES_BIN" TEMPLATE_DIR="$TEMPLATE_DIR" HERMES_HOME="$HERMES_HOME" PROJECT_DIR="$PROJECT_DIR" \
+    python3 - "$TEMPLATE_DIR/cron/jobs.json" "$HERMES_HOME/cron/jobs.json" <<'PY'
 import json, os, subprocess, sys
 
 definitions_path, store_path = sys.argv[1], sys.argv[2]
 hermes = os.environ["HERMES_BIN"]
+template_dir = os.environ["TEMPLATE_DIR"]
+hermes_home = os.environ["HERMES_HOME"]
+project_dir = os.environ["PROJECT_DIR"]
+
 with open(definitions_path, encoding="utf-8") as handle:
     definitions = json.load(handle)
 
@@ -209,26 +214,51 @@ if os.path.exists(store_path):
         if isinstance(job, dict) and job.get("name") and job.get("id"):
             existing[job["name"]] = job["id"]
 
+# R19: a script-mode job (Task 8's watchlist ingest) runs through Hermes'
+# --no-agent path -- no LLM step, no positional prompt -- so it needs its own
+# branch here rather than forcing it through the prompt-based
+# `cron create <schedule> <prompt>` shape every other job uses.
+def install_script(script_name):
+    # __PROJECT_DIR__ is baked in at install time (same idea as
+    # com.pharmallm.mcp.plist.template's __PROJECT_DIR__): once this file
+    # lives under ~/.hermes/scripts it has no other way to find the repo.
+    src = os.path.join(template_dir, "scripts", script_name)
+    with open(src, encoding="utf-8") as handle:
+        content = handle.read().replace("__PROJECT_DIR__", project_dir)
+    scripts_dir = os.path.join(hermes_home, "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+    dest = os.path.join(scripts_dir, script_name)
+    with open(dest, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(dest, 0o755)
+    print(f"[hermes-setup] Installed {script_name} into {scripts_dir}")
+
 for job in definitions:
-    name = job["name"]
-    if job.get("type") == "script":
-        # Task 8's watchlist ingest runs a plain script with no LLM agent step
-        # (delivering only on failure) -- installing it needs a real
-        # scheduling mechanism (launchd/cron invoking the script directly, or
-        # whatever Hermes' own script-job support turns out to require), not
-        # the prompt-based `hermes cron create <schedule> <prompt>` this loop
-        # drives everything else through. That wiring is out of this task's
-        # scope, so the job is left in jobs.json for the record and skipped
-        # here rather than guessed at.
-        print(f"[hermes-setup] Skipping script-mode job {name}: install separately (command: {job.get('command')})")
-        continue
-    schedule, prompt, deliver = job["schedule"], job["prompt"], job["deliver"]
-    if name in existing:
-        command = [hermes, "cron", "edit", existing[name], "--schedule", schedule, "--prompt", prompt, "--deliver", deliver]
-        action = "Updated"
+    name, schedule, deliver = job["name"], job["schedule"], job["deliver"]
+    if job.get("kind") == "script":
+        install_script(job["script"])
+        # --deliver local (this job's own default) keeps run state visible in
+        # `hermes cron list` without pushing anything on a quiet night;
+        # --failure-deliver overrides the target for failure notices only.
+        failure_deliver = job.get("failure_deliver", deliver)
+        script_args = [
+            "--script", job["script"], "--no-agent",
+            "--deliver", deliver, "--failure-deliver", failure_deliver,
+        ]
+        if name in existing:
+            command = [hermes, "cron", "edit", existing[name], "--schedule", schedule, *script_args]
+            action = "Updated"
+        else:
+            command = [hermes, "cron", "create", schedule, "--name", name, *script_args]
+            action = "Created"
     else:
-        command = [hermes, "cron", "create", schedule, prompt, "--name", name, "--deliver", deliver]
-        action = "Created"
+        prompt = job["prompt"]
+        if name in existing:
+            command = [hermes, "cron", "edit", existing[name], "--schedule", schedule, "--prompt", prompt, "--deliver", deliver]
+            action = "Updated"
+        else:
+            command = [hermes, "cron", "create", schedule, prompt, "--name", name, "--deliver", deliver]
+            action = "Created"
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
     print(f"[hermes-setup] {action} cron job {name}")
 PY

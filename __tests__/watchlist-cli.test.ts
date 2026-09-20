@@ -140,6 +140,25 @@ describe("countPlannedFeeds", () => {
   it("counts only the named entities' feeds, excluding topics, when --only is given", () => {
     expect(countPlannedFeeds(watchlist, ["roche"])).toBe(2);
   });
+
+  // Fix round 1, concern (2): buildTasks (watchlist-ingest.ts) never turns a
+  // feed missing the field its kind fetches with into a task -- it logs
+  // "skipping ... no url/cik" and moves on. countPlannedFeeds must agree,
+  // or "every feed failed" could disagree with what actually ran.
+  it("excludes a feed missing the field its kind needs (url for rss/news/ir_page, cik for edgar), exactly like buildTasks skips it", () => {
+    const misconfigured = makeEntity({
+      id: "misconfigured",
+      feeds: [
+        { kind: "rss", url: undefined },
+        { kind: "news", url: undefined },
+        { kind: "ir_page", url: undefined },
+        { kind: "edgar", cik: undefined },
+        { kind: "edgar", cik: "0001114448" },
+      ],
+    });
+
+    expect(countPlannedFeeds(makeWatchlist([misconfigured]), undefined)).toBe(1);
+  });
 });
 
 // ---- runIngest ----------------------------------------------------------------
