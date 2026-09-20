@@ -55,6 +55,12 @@ export interface Watchlist {
   entities: Map<string, Entity>;
   topics: TopicQuery[];
   priority: string[];
+  // Informational notes collected while parsing (e.g. a peer with no separate
+  // definition, auto-created from a customer's peer list). These never cause
+  // a parse to fail; they are returned on every successful parse so callers
+  // can see what was inferred, and are also folded into a thrown
+  // WatchlistError's message when the parse fails for an unrelated reason.
+  notes: string[];
 }
 
 export class WatchlistError extends Error {
@@ -208,10 +214,16 @@ export function parseWatchlist(raw: unknown): Watchlist {
       if (existing !== undefined) {
         // A vendor spanning several domains (e.g. Databricks: both "ai" and
         // "data") is listed once per domain group by design; merge domains
-        // instead of treating the repeat as a duplicate id. Any other kind
+        // instead of treating the repeat as a duplicate id. But the same id
+        // twice within the SAME group's array is a config typo (R4), not a
+        // multi-domain vendor, and is a hard error. Any other entity kind
         // reusing this id is a genuine cross-section collision.
         if (existing.kind === "vendor") {
-          if (!existing.domains.includes(groupKey)) existing.domains.push(groupKey);
+          if (existing.domains.includes(groupKey)) {
+            errors.push(`duplicate id "${vendorId}" within vendor group "${groupKey}"`);
+          } else {
+            existing.domains.push(groupKey);
+          }
         } else {
           errors.push(`duplicate id "${vendorId}"`);
         }
@@ -280,6 +292,7 @@ export function parseWatchlist(raw: unknown): Watchlist {
     entities,
     topics,
     priority: [...customerIds, ...peerIds, ...vendorIds],
+    notes,
   };
 }
 

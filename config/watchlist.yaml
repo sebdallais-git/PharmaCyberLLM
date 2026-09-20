@@ -8,7 +8,8 @@
 # except the literal "none" key: those are the pharma business/science/pipeline and
 # supply-chain-geopolitics strings from the old SEARCH_TOPICS list that fit no domain
 # in the closed set. No topic string from SEARCH_TOPICS was dropped in this move; every
-# one lives under topics.cyber, topics.storage or topics.none.
+# one lives under topics.cyber, topics.storage, topics.ai, topics.cloud, topics.data,
+# topics.infrastructure, topics.sap or topics.none.
 
 customers:
   roche:
@@ -266,6 +267,26 @@ topics:
     - HPE Zerto cyber recovery
     - VAST Data cybersecurity data protection
     - WEKA data platform life sciences
+  ai:
+    - AI drug discovery pharmaceutical
+    - NVIDIA Clara BioNeMo drug discovery
+    - NVIDIA DGX pharmaceutical AI
+    - NVIDIA H100 H200 Blackwell AI training life sciences
+    - NVIDIA NIM inference microservices healthcare
+    - NVIDIA digital twin molecular simulation drug discovery
+    - NVIDIA partnership pharmaceutical AI research
+    - GPU cluster HPC pharmaceutical drug discovery
+    - NVIDIA AI Enterprise healthcare deployment
+    - NVIDIA Parabricks genomics sequencing pharmaceutical
+  cloud:
+    - cloud migration pharmaceutical compliance GxP
+  data:
+    - Snowflake healthcare data sharing pharmaceutical compliance
+    - Databricks lakehouse life sciences pharmaceutical
+  infrastructure:
+    - IT infrastructure modernization pharmaceutical
+  sap:
+    - SAP GRC governance risk compliance pharmaceutical
   none:
     - pharmaceutical merger acquisition
     - pharma FDA approval
@@ -281,27 +302,12 @@ topics:
     - CRISPR gene therapy approval
     - antibody drug conjugate ADC
     - GLP-1 obesity diabetes pharmaceutical
-    - AI drug discovery pharmaceutical
     - cell gene therapy pharmaceutical
-    - NVIDIA Clara BioNeMo drug discovery
-    - NVIDIA DGX pharmaceutical AI
-    - NVIDIA H100 H200 Blackwell AI training life sciences
-    - NVIDIA NIM inference microservices healthcare
-    - NVIDIA digital twin molecular simulation drug discovery
-    - NVIDIA partnership pharmaceutical AI research
-    - GPU cluster HPC pharmaceutical drug discovery
-    - NVIDIA AI Enterprise healthcare deployment
-    - NVIDIA Parabricks genomics sequencing pharmaceutical
-    - Snowflake healthcare data sharing pharmaceutical compliance
-    - Databricks lakehouse life sciences pharmaceutical
     - GxP compliance pharmaceutical IT validation
     - 21 CFR Part 11 electronic records pharmaceutical
     - HIPAA compliance pharmaceutical data protection
     - pharmaceutical IT audit regulatory inspection
-    - cloud migration pharmaceutical compliance GxP
     - ITSM IT service management pharmaceutical healthcare
-    - IT infrastructure modernization pharmaceutical
-    - SAP GRC governance risk compliance pharmaceutical
     - pharmaceutical stock manipulation social media
     - China API active pharmaceutical ingredient supply chain risk
     - India pharmaceutical manufacturing supply chain disruption
