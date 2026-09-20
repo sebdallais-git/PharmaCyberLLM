@@ -102,6 +102,37 @@ describe("buildTaggingPrompt", () => {
     expect(text).not.toContain("Roche");
     expect(text).not.toContain("AWS");
   });
+
+  it("shows a filled-in example reply, not a type signature, using this item's own candidate ids", () => {
+    const messages = buildTaggingPrompt(ITEM, WATCHLIST, ["roche", "aws"]);
+    const text = messages.map((m) => m.content).join("\n");
+
+    // A real, parseable example object is present...
+    expect(text).toContain('{"summary"');
+    expect(text).toContain('"entities":["roche","aws"]');
+
+    // ...and the old type-grammar phrasing is gone.
+    expect(text).not.toContain("string | null");
+    expect(text).not.toContain('"importance": number');
+  });
+
+  it("states anchors for all five importance values", () => {
+    const messages = buildTaggingPrompt(ITEM, WATCHLIST, ["roche", "aws"]);
+    const text = messages.map((m) => m.content).join("\n");
+
+    expect(text).toContain("5 =");
+    expect(text).toContain("4 =");
+    expect(text).toContain("3 =");
+    expect(text).toContain("2 =");
+    expect(text).toContain("1 =");
+  });
+
+  it("phrases the signal rule as 'pick exactly one of: ..., or null'", () => {
+    const messages = buildTaggingPrompt(ITEM, WATCHLIST, ["roche", "aws"]);
+    const text = messages.map((m) => m.content).join("\n");
+
+    expect(text).toContain("pick exactly one of: it_move, financial, cyber, corporate, or null");
+  });
 });
 
 describe("parseTagging", () => {
@@ -174,6 +205,38 @@ describe("parseTagging", () => {
     const tagging = parseTagging(raw, WATCHLIST);
     expect(tagging?.entities).toEqual([]);
     expect(tagging?.domains).toEqual(["cyber"]);
+  });
+
+  it("dedupes repeated entity ids", () => {
+    const raw = JSON.stringify({
+      summary: "s",
+      entities: ["roche", "aws", "roche"],
+      domains: [],
+      signal: null,
+      importance: null,
+    });
+    const tagging = parseTagging(raw, WATCHLIST);
+    expect(tagging?.entities).toEqual(["roche", "aws"]);
+  });
+
+  it("caps an oversized summary at MAX_SUMMARY_LENGTH", () => {
+    const longSummary = "x".repeat(2000);
+    const raw = JSON.stringify({ summary: longSummary, entities: [], domains: [], signal: null, importance: null });
+    const tagging = parseTagging(raw, WATCHLIST);
+    expect(tagging?.summary.length).toBe(1200);
+    expect(tagging?.summary).toBe(longSummary.slice(0, 1200));
+  });
+
+  it("treats facts arriving as a string as absent (null)", () => {
+    const raw = JSON.stringify({ summary: "s", entities: [], domains: [], signal: null, importance: null, facts: "vendor: aws" });
+    const tagging = parseTagging(raw, WATCHLIST);
+    expect(tagging?.facts).toBeNull();
+  });
+
+  it("treats facts arriving as an array as absent (null)", () => {
+    const raw = JSON.stringify({ summary: "s", entities: [], domains: [], signal: null, importance: null, facts: ["aws", "cloud"] });
+    const tagging = parseTagging(raw, WATCHLIST);
+    expect(tagging?.facts).toBeNull();
   });
 });
 

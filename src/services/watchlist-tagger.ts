@@ -38,6 +38,11 @@ function isValidImportance(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 5;
 }
 
+// A digest sentence never needs more than a couple of paragraphs; caps a
+// runaway summary (the local model occasionally rambles) rather than
+// storing an unbounded string all the way into watchlist-store.ts.
+export const MAX_SUMMARY_LENGTH = 1200;
+
 export interface Tagging {
   summary: string;
   entities: string[];
@@ -63,6 +68,29 @@ function describeCandidate(entity: Entity): string {
   return `- ${entity.id} (${entity.name}${aliasSuffix})`;
 }
 
+// Builds a filled-in example reply, not a type signature. A 27B model
+// follows a concrete example far more reliably than a TypeScript-flavoured
+// grammar (an earlier version literally showed `"signal": string | null,
+// "importance": number` and invited the model to echo those placeholder
+// tokens back). The example draws its entity ids from this item's own
+// candidates when there are any, so it never has to hardcode a real
+// customer name into the static prompt text (that leak was fixed once
+// already and must not come back through the example). With no candidates
+// for this item, the example truthfully shows the "no match" shape instead
+// of inventing a fake id.
+function buildExampleReply(candidates: Entity[]): string {
+  const exampleEntities = candidates.slice(0, 2).map((entity) => entity.id);
+  const example = {
+    summary: "Example: a candidate entity made a notable IT-related move.",
+    entities: exampleEntities,
+    domains: ["cloud"],
+    signal: "it_move",
+    importance: 4,
+    facts: { vendor: "example-vendor" },
+  };
+  return JSON.stringify(example);
+}
+
 // Builds the two-message chat prompt for one item. `candidateIds` is the
 // caller's job to compute (the entities whose name or an alias appears in
 // the item, plus the feed's own entity) -- this function only renders
@@ -83,8 +111,9 @@ export function buildTaggingPrompt(item: RawItem, watchlist: Watchlist, candidat
   const system = [
     "You are a tagging engine for a pharma IT-watchlist digest. You read one news item and return ONE JSON object, nothing else.",
     "",
-    "Return exactly this shape, with no extra keys:",
-    '{"summary": string, "entities": string[], "domains": string[], "signal": string | null, "importance": number, "facts": object | null}',
+    "Required keys: summary, entities, domains, signal, importance, facts. signal and facts may be null; the others are never omitted. No extra keys.",
+    "Example reply (illustrative values only -- this is not this item's actual answer):",
+    buildExampleReply(candidates),
     "",
     "Rules (closed vocabularies -- any value outside these lists is invalid and will be discarded):",
     "- entities: pick ZERO OR MORE ids ONLY from the candidate list below. Never invent an id, and never return an id that is not in this list, even if the company is mentioned elsewhere.",
@@ -92,12 +121,14 @@ export function buildTaggingPrompt(item: RawItem, watchlist: Watchlist, candidat
     entityList,
     "",
     `- domains: pick zero or more values ONLY from: ${DOMAINS.join(", ")}.`,
-    `- signal: pick exactly one value from: ${SIGNALS.join(", ")}, or null if none applies.`,
+    `- signal: pick exactly one of: ${SIGNALS.join(", ")}, or null.`,
     "- importance: an integer from 1 to 5, rating how much this item matters to the watchlist:",
     "  5 = a named customer's strategic IT or financial move (a platform switch, a major outage, an acquisition, a large contract).",
+    "  4 = a significant move by a peer or a major vendor that affects a customer's market position.",
     "  3 = a named customer or vendor has a smaller, still concrete IT-relevant development.",
+    "  2 = incremental product or partnership news with no named customer impact.",
     "  1 = routine vendor noise (a minor product update, a generic press release) with no clear link to a watched entity's strategy.",
-    "  Use the full range between those anchors; never omit importance.",
+    "  Use the anchor that best matches; never omit importance.",
     "- facts: a small object of structured details worth keeping (e.g. {\"vendor\": \"aws\", \"dealSize\": \"multi-year\"}), or null if there is nothing structured to extract.",
     "- summary: one or two plain-English sentences, no markdown.",
     "",
@@ -181,10 +212,15 @@ export function parseTagging(raw: string, watchlist: Watchlist): Tagging | null 
   }
   if (!isRecord(parsed)) return null;
 
-  const summary = typeof parsed.summary === "string" ? parsed.summary : "";
+  const rawSummary = typeof parsed.summary === "string" ? parsed.summary : "";
+  const summary = rawSummary.length > MAX_SUMMARY_LENGTH ? rawSummary.slice(0, MAX_SUMMARY_LENGTH) : rawSummary;
 
   const entities = Array.isArray(parsed.entities)
-    ? parsed.entities.filter((value): value is string => typeof value === "string" && watchlist.entities.has(value))
+    ? [
+        ...new Set(
+          parsed.entities.filter((value): value is string => typeof value === "string" && watchlist.entities.has(value)),
+        ),
+      ]
     : [];
 
   const domains = Array.isArray(parsed.domains) ? parsed.domains.filter(isKnownDomain) : [];
@@ -202,6 +238,10 @@ export function parseTagging(raw: string, watchlist: Watchlist): Tagging | null 
     }
   }
 
+  // isRecord rejects arrays, strings, numbers and booleans -- a model that
+  // returns "facts": "some string" or "facts": [1, 2] gets null here rather
+  // than a Tagging.facts typed as Record<string, unknown> containing
+  // something that isn't actually a record.
   const facts = isRecord(parsed.facts) ? parsed.facts : null;
 
   return { summary, entities, domains, signal, importance, facts, flagged };
