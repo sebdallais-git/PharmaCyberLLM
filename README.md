@@ -62,7 +62,7 @@ Security teams in pharma need fast answers about attack histories, threat actors
 
 > PharmaCyberLLM keeps the model, the embeddings and the knowledge base on your machine. No API keys, no cloud LLM, no `.env` file required.
 
-At runtime, network access is limited to live news lookups (Google News RSS for web search and the news agent), URLs you explicitly add to the knowledge base, your own SearXNG instance if you enable the n8n research loop, and, if you run the optional Telegram assistant, the messages it exchanges with Telegram. Web search can be switched off in the chat UI.
+At runtime, network access is limited to live news lookups (Google News RSS for chat's web search and the watchlist ingest), URLs you explicitly add to the knowledge base, your own SearXNG instance if you enable the n8n research loop, and, if you run the optional Telegram assistant, the messages it exchanges with Telegram. Web search can be switched off in the chat UI.
 
 ---
 
@@ -79,7 +79,7 @@ At runtime, network access is limited to live news lookups (Google News RSS for 
 | 🤖 | **Telegram assistant** | Optional Hermes Agent with four scheduled jobs, a network-less Docker sandbox and read-only tools when unattended |
 | 🩹 | **Self-healing knowledge** | Low-confidence answers trigger an n8n workflow that researches, ingests and re-checks the gap |
 | 🎙️ | **Voice input** | Local speech-to-text with whisper.cpp; HTTPS mode for iPad and mobile microphones |
-| 📰 | **News agent** | 188 search topics pulled from Google News every 24 hours into the knowledge base |
+| 📰 | **News agent** | Runs on the same 24-hour schedule; its 188 search topics now belong to the [watchlist](#watchlist-it-scene-tracking-phase-1)'s nightly ingest to avoid double-fetching, so this job currently updates only its own run state (see below) |
 | 📊 | **Monitoring dashboard** | Chart.js dashboard for questions, confidence, ratings, gaps, KB health and service status |
 | ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX vs oMLX comparison with retrieval overlap and a blind A/B review page |
 
@@ -158,7 +158,7 @@ pip install -r python/requirements.txt
 python python/graph_builder.py
 ```
 
-`graph_builder.py` calls Ollama's `/api/generate` directly with `OLLAMA_MODEL` (default `mistral-small:24b`), so pull that model or set `OLLAMA_MODEL` to one you have. Browse the graph at http://localhost:7474. New content from the news agent and uploads is added to the graph automatically.
+`graph_builder.py` calls Ollama's `/api/generate` directly with `OLLAMA_MODEL` (default `mistral-small:24b`), so pull that model or set `OLLAMA_MODEL` to one you have. Browse the graph at http://localhost:7474. New uploads are added to the graph automatically (the news agent's own graph extraction was retired along with its topic scrub).
 
 </details>
 
@@ -428,13 +428,13 @@ A second workflow runs every 6 hours as a KB health check: it sends test queries
 
 ### Knowledge graph
 
-Neo4j stores **14 entity types** (Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology) and **20 relationship types** such as `ACQUIRED`, `MANUFACTURES`, `TARGETED`, `ATTRIBUTED_TO`, `USED_VECTOR` and `PROTECTS_AGAINST`. Chat extracts likely entity names from the question and queries the graph alongside vector search; graph writes from the news agent and uploads run asynchronously so they never block a response.
+Neo4j stores **14 entity types** (Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology) and **20 relationship types** such as `ACQUIRED`, `MANUFACTURES`, `TARGETED`, `ATTRIBUTED_TO`, `USED_VECTOR` and `PROTECTS_AGAINST`. Chat extracts likely entity names from the question and queries the graph alongside vector search; graph writes from uploads run asynchronously so they never block a response.
 
 ---
 
 ## Watchlist (IT scene tracking, Phase 1)
 
-A second, more targeted news pipeline sits alongside the general news agent: it watches a named list of pharma customers, their competitive peer sets and their IT/security vendors for moves in specific domains (cyber, AI, cloud, infrastructure, SAP, data, and more), plus a set of entity-less topic queries covering the same ground the news agent's Google searches already did. Every item is deduplicated across sources (IR RSS, Google News, EDGAR filings) *before* it reaches the local model, tagged with entities/domains/a signal/an importance score, and stored in its own SQLite database plus ChromaDB.
+A second, more targeted news pipeline sits alongside the general news agent: it watches a named list of pharma customers, their competitive peer sets and their IT/security vendors for moves in specific domains (cyber, AI, cloud, infrastructure, SAP, data, and more), plus a set of entity-less topic queries covering the same ground the news agent's Google searches used to. Every item is deduplicated across sources (IR RSS, Google News, EDGAR filings) *before* it reaches the local model, tagged with entities/domains/a signal/an importance score, and stored in its own SQLite database plus ChromaDB. Those 188 topic queries used to be fetched by *both* jobs into the same ChromaDB collection with no dedupe shared between them; the news agent's own scrub of them was retired (owner decision), so the watchlist ingest is now their only source.
 
 - **Config:** [`config/watchlist.yaml`](config/watchlist.yaml) is the single definition of who is watched (`customers`, `peers`, `vendors`, grouped by domain) and what topic queries run with no named entity (`topics`, grouped the same way). Editing this file is how an entity, feed or topic is added or retired — nothing else needs to change.
 - **Store:** `data/watchlist.db` (SQLite, gitignored) — items, their entities/domains/sources, per-feed fetch watermarks, and a row per run with its stats.
@@ -668,7 +668,7 @@ All LLM steps call `POST /api/llm/complete`, so they run on the active stack. Th
 
 ## Knowledge Base
 
-`knowledge/` ships **40 curated documents** (36 Markdown, 2 DOCX, 2 PDF), grown by the news agent, uploads and the n8n loop. At the last verified rebuild, the Ollama index held **7,779 chunks** and the MLX index **7,623**.
+`knowledge/` ships **40 curated documents** (36 Markdown, 2 DOCX, 2 PDF), grown by uploads and the n8n loop (the news agent's own topic scrub, which used to add to it too, is retired — see the News agent row above). At the last verified rebuild, the Ollama index held **7,779 chunks** and the MLX index **7,623**.
 
 | Area | Examples |
 |---|---|
@@ -743,7 +743,7 @@ PharmaCyberLLM/
 │   │   ├── chromadb-store.ts   # ChromaDB client
 │   │   ├── graph-store.ts      # Neo4j queries and entity writes
 │   │   ├── gap-detector.ts     # Confidence check, cooldown, n8n webhook
-│   │   ├── news-agent.ts       # Google News agent; topics read from config/watchlist.yaml
+│   │   ├── news-agent.ts       # Legacy news agent job; its topic scrub moved to the watchlist ingest
 │   │   ├── watchlist-config.ts # Loads/validates config/watchlist.yaml (entities, feeds, topics)
 │   │   ├── watchlist-store.ts  # SQLite store for watchlist items, feed watermarks and runs
 │   │   ├── watchlist-sources.ts # RSS/Atom + Google News adapters, canonicalization, dedupe keys
