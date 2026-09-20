@@ -1,9 +1,13 @@
-import { describe, expect, it } from "@jest/globals";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import {
   canonicalUrl,
   contentHash,
+  DEFAULT_ADAPTER_TIMEOUT_MS,
+  MAX_ITEM_BODY_LENGTH,
   newsAdapter,
+  parseFeed,
   rssAdapter,
+  titleKey,
   type AdapterDeps,
   type FetchLike,
 } from "../src/services/watchlist-sources.js";
@@ -78,6 +82,7 @@ describe("rssAdapter", () => {
         body: "Roche announces cloud migration",
         sourceKind: "rss",
         sourceName: "Roche",
+        titleKey: "roche announces cloud migration",
       },
       {
         title: "Old item, before the cutoff",
@@ -86,6 +91,7 @@ describe("rssAdapter", () => {
         body: "Old item, before the cutoff",
         sourceKind: "rss",
         sourceName: "Roche",
+        titleKey: "old item before the cutoff",
       },
     ]);
   });
@@ -102,6 +108,7 @@ describe("rssAdapter", () => {
         body: "Atom announcement",
         sourceKind: "rss",
         sourceName: "Roche",
+        titleKey: "atom announcement",
       },
     ]);
   });
@@ -112,6 +119,16 @@ describe("rssAdapter", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].title).toBe("Roche announces cloud migration");
+  });
+
+  // Minor fix round 1 item: since is exclusive (an item exactly at the
+  // cutoff is treated as already seen from the previous run), documented on
+  // rssAdapter/newsAdapter's own doc comments, not just the shared helper.
+  it("drops an item published at exactly since (since is exclusive)", async () => {
+    const adapter = rssAdapter(testDeps(fakeFetch(200, RSS_BODY)));
+    const items = await adapter(RSS_FEED, ENTITY, "2026-09-16T09:30:00.000Z");
+
+    expect(items.map((item) => item.title)).not.toContain("Roche announces cloud migration");
   });
 
   it("rejects on a non-200 response, naming the status but never the url's query string", async () => {
@@ -150,6 +167,34 @@ describe("rssAdapter", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].publishedAt).toBe(FIXED_NOW.toISOString());
+  });
+});
+
+// Fix round 1, R12: DEFAULT_ADAPTER_TIMEOUT_MS used to be unused -- nothing
+// bounded a request beyond whatever fetchImpl a later task injected did on
+// its own. Adapters now arm their own AbortController/timer per request, so
+// a fetchImpl that just hangs (never resolves, never rejects on its own)
+// still gets interrupted at the deadline, mirroring createFetch's own
+// timeout tests above.
+describe("adapter self-imposed timeout (R12)", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("bounds a hung fetch to DEFAULT_ADAPTER_TIMEOUT_MS instead of hanging forever", async () => {
+    jest.useFakeTimers();
+    // Never settles on its own -- only rejects if the signal the adapter
+    // passes in is aborted, exactly like a real hung fetch() would behave.
+    const hungFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+    const adapter = rssAdapter(testDeps(hungFetch));
+
+    const resultPromise = adapter(RSS_FEED, ENTITY, null);
+    const assertion = expect(resultPromise).rejects.toThrow();
+    await jest.advanceTimersByTimeAsync(DEFAULT_ADAPTER_TIMEOUT_MS);
+    await assertion;
   });
 });
 
@@ -200,6 +245,63 @@ describe("newsAdapter", () => {
   });
 });
 
+// Fix round 1, R13(a): the reviewer verified a real Roche release arrives
+// from Google News titled "... - Yahoo Finance" and linked to an opaque
+// news.google.com redirect -- neither canonicalUrl nor contentHash can ever
+// match the publisher's own copy of the same story. newsAdapter strips the
+// suffix from the stored title itself (not just from titleKey).
+describe("newsAdapter title cleanup (R13)", () => {
+  it("strips a trailing Google-News publisher suffix from the title", async () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Roche posts record Q3 profit - Yahoo Finance</title>
+    <link>https://news.google.com/rss/articles/CBMiabc</link>
+    <pubDate>Wed, 16 Sep 2026 09:30:00 GMT</pubDate>
+  </item>
+</channel></rss>`;
+    const adapter = newsAdapter(testDeps(fakeFetch(200, xml)));
+    const items = await adapter("Roche Q3", null);
+
+    expect(items[0].title).toBe("Roche posts record Q3 profit");
+  });
+
+  it("does not truncate a title whose mid-sentence dash is followed by its own punctuation", async () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Roche - once a generics house - posts record profit, beating estimates.</title>
+    <link>https://news.google.com/rss/articles/CBMixyz</link>
+    <pubDate>Wed, 16 Sep 2026 09:30:00 GMT</pubDate>
+  </item>
+</channel></rss>`;
+    const adapter = newsAdapter(testDeps(fakeFetch(200, xml)));
+    const items = await adapter("Roche", null);
+
+    expect(items[0].title).toBe("Roche - once a generics house - posts record profit, beating estimates.");
+  });
+});
+
+// Fix round 1, R13(b)/(c): the cross-source dedupe key. Task 7 owns actually
+// matching on it (plus its ±3-day window); this only produces the key.
+describe("titleKey", () => {
+  it("gives the publisher's own title and Google News' suffixed copy the same key", () => {
+    const publisherTitle = "Roche posts record Q3 profit";
+    const googleNewsTitle = "Roche posts record Q3 profit - Yahoo Finance";
+
+    expect(titleKey(googleNewsTitle)).toBe(titleKey(publisherTitle));
+  });
+
+  it("gives genuinely different titles different keys", () => {
+    expect(titleKey("Roche posts record Q3 profit")).not.toBe(titleKey("Novartis announces new CFO"));
+  });
+
+  it("does not truncate a title containing a mid-sentence dash with its own punctuation", () => {
+    const title = "Roche - once a generics house - posts record profit, beating estimates.";
+    expect(titleKey(title)).toBe("roche once a generics house posts record profit beating estimates");
+  });
+});
+
 describe("canonicalUrl", () => {
   it("gives the same string for the same page reached two different ways", () => {
     const withTracking = canonicalUrl(
@@ -221,10 +323,7 @@ describe("canonicalUrl", () => {
   });
 
   it("keeps meaningful query params", () => {
-    const result = canonicalUrl("https://example.com/press?id=42&lang=en");
-
-    expect(result).toContain("id=42");
-    expect(result).toContain("lang=en");
+    expect(canonicalUrl("https://example.com/press?id=42&lang=en")).toBe("https://example.com/press?id=42&lang=en");
   });
 
   it("drops a trailing slash but leaves a bare root path alone", () => {
@@ -250,5 +349,93 @@ describe("contentHash", () => {
 
   it("returns a sha256 hex digest", () => {
     expect(contentHash("t", "b")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // Fix round 1, R14: title and body used to be joined with "\n" and then
+  // the SAME whitespace-collapsing regex ate that "\n", so contentHash("A",
+  // "B") ("a\nb" -> "a b") collided with contentHash("A B", "") ("a b\n" ->
+  // "a b"). This pair must now differ.
+  it("no longer collides title+body across the old whitespace-collapsed boundary", () => {
+    const a = contentHash("A", "B");
+    const b = contentHash("A B", "");
+
+    expect(a).not.toBe(b);
+  });
+});
+
+// Fix round 1, R11: the reviewer confirmed Roche's real feed has
+// multi-paragraph descriptions that were being discarded (body === title).
+// parseFeed now captures the item's own text, preferring the longest of
+// RSS's <description>/<content:encoded> and Atom's <summary>/<content>.
+describe("parseFeed body extraction (R11)", () => {
+  it("prefers the longer of description and content:encoded", () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Roche press release</title>
+    <link>https://example.com/pr</link>
+    <pubDate>Wed, 16 Sep 2026 09:30:00 GMT</pubDate>
+    <description>Short summary.</description>
+    <content:encoded><![CDATA[<p>This is the full, much longer article body with multiple sentences and considerably more detail than the short summary field above.</p>]]></content:encoded>
+  </item>
+</channel></rss>`;
+    const items = parseFeed(xml);
+
+    expect(items[0].body).toBe(
+      "This is the full, much longer article body with multiple sentences and considerably more detail than the short summary field above.",
+    );
+  });
+
+  it("prefers the longer of Atom's summary and content", () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Atom press release</title>
+    <link rel="alternate" href="https://example.com/atom/pr"/>
+    <updated>2026-09-16T09:30:00Z</updated>
+    <summary>Brief.</summary>
+    <content type="html"><![CDATA[<p>The full Atom content field, considerably longer than the brief summary above it.</p>]]></content>
+  </entry>
+</feed>`;
+    const items = parseFeed(xml);
+
+    expect(items[0].body).toBe("The full Atom content field, considerably longer than the brief summary above it.");
+  });
+
+  it("strips HTML tags and decodes entities in an HTML-laden description", () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Roche HTML body</title>
+    <link>https://example.com/html</link>
+    <pubDate>Wed, 16 Sep 2026 09:30:00 GMT</pubDate>
+    <description><![CDATA[<p>Roche &amp; partners announce a deal.<br/>More&nbsp;details to follow.</p>]]></description>
+  </item>
+</channel></rss>`;
+    const items = parseFeed(xml);
+
+    expect(items[0].body).toBe("Roche & partners announce a deal. More details to follow.");
+  });
+
+  it("falls back to the title when a feed has no description-shaped tag", () => {
+    const items = parseFeed(RSS_BODY);
+
+    expect(items[0].body).toBe(items[0].title);
+  });
+
+  it("caps a very long body at MAX_ITEM_BODY_LENGTH", () => {
+    const longText = "word ".repeat(2000);
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Long body</title>
+    <link>https://example.com/long</link>
+    <pubDate>Wed, 16 Sep 2026 09:30:00 GMT</pubDate>
+    <description>${longText}</description>
+  </item>
+</channel></rss>`;
+    const items = parseFeed(xml);
+
+    expect(items[0].body.length).toBe(MAX_ITEM_BODY_LENGTH);
   });
 });

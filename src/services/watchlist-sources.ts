@@ -95,12 +95,24 @@ export function createFetch(options: CreateFetchOptions = {}): FetchLike {
 
 // ---- RSS/Atom parsing -------------------------------------------------------
 
+// Fix round 1 (R11): a verbose feed's full HTML article dumped straight into
+// `body` could blow up a later summarization prompt. Capped at a length that
+// keeps a multi-paragraph press release intact while bounding the worst
+// case.
+export const MAX_ITEM_BODY_LENGTH = 4000;
+
 export interface ParsedFeedItem {
   title: string;
   link: string;
   // undefined when the item carries no date the parser recognizes
   // (neither <pubDate>, <updated> nor <published>).
   publishedAt?: string;
+  // The item's own text (RSS <description>/<content:encoded>, Atom
+  // <summary>/<content>), stripped of markup and capped at
+  // MAX_ITEM_BODY_LENGTH -- or the title itself when a feed truly carries no
+  // text of its own. Always present so downstream code never has to handle
+  // an absent body separately from a short one.
+  body: string;
 }
 
 function extractBlocks(xml: string, tag: string): string[] {
@@ -129,10 +141,48 @@ function decodeText(raw: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
+    // &nbsp; is HTML, not XML, but item descriptions are routinely HTML
+    // fragments (R11) -- decoded here rather than left as literal text.
+    .replace(/&nbsp;/gi, " ")
     .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCharCode(Number(dec)))
     .replace(/&amp;/g, "&")
     .trim();
+}
+
+// Turns an item-description-shaped raw tag value into plain text: CDATA
+// unwrapped and entities decoded (decodeText), then every markup tag
+// stripped to a space (never nothing -- "Hello<br>World" must not become
+// "HelloWorld"), then whitespace runs collapsed to one space. Used for R11's
+// body extraction only; titles never carry markup in practice so parseFeed
+// keeps using decodeText alone for those.
+function htmlToPlainText(raw: string): string {
+  return decodeText(raw)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// R11: the tags a feed might carry an item's own text under. Checked in a
+// fixed order only to have a deterministic scan; the actual choice among
+// whatever is present is "longest wins" (extractBody below), not first-found.
+const BODY_TAGS = ["content:encoded", "description", "content", "summary"] as const;
+
+// Picks the longest usable text among an item's known body-shaped tags,
+// capped at MAX_ITEM_BODY_LENGTH, falling back to the item's own (already
+// decoded) title when none of those tags are present or all are empty --
+// e.g. a bare-bones feed that only ever gave parseFeed a title to begin
+// with, same as before R11.
+function extractBody(block: string, decodedTitle: string): string {
+  let longest = "";
+  for (const tag of BODY_TAGS) {
+    const raw = extractTag(block, tag);
+    if (raw === undefined) continue;
+    const plain = htmlToPlainText(raw);
+    if (plain.length > longest.length) longest = plain;
+  }
+  if (longest.length === 0) return decodedTitle;
+  return longest.length > MAX_ITEM_BODY_LENGTH ? longest.slice(0, MAX_ITEM_BODY_LENGTH) : longest;
 }
 
 // Normalizes both RFC-822 ("Tue, 15 Sep 2026 08:00:00 GMT") and ISO-8601
@@ -179,11 +229,13 @@ export function parseFeed(xml: string): ParsedFeedItem[] {
 
   return blocks.map((block) => {
     const rawTitle = extractTag(block, "title") ?? "";
+    const title = decodeText(rawTitle);
     const rawDate = extractTag(block, "pubDate") ?? extractTag(block, "updated") ?? extractTag(block, "published");
     return {
-      title: decodeText(rawTitle),
+      title,
       link: extractLink(block),
       publishedAt: normalizeDate(rawDate),
+      body: extractBody(block, title),
     };
   });
 }
@@ -267,10 +319,14 @@ export async function verifyFeed(
 // e.g. createFetch({ userAgent, timeoutMs: DEFAULT_ADAPTER_TIMEOUT_MS }).
 export const DEFAULT_ADAPTER_TIMEOUT_MS = 15_000;
 
-// A single ingested item before tagging/summarization (later tasks). RSS and
-// Atom carry no separate description through parseFeed (Task 3 extracts only
-// title/link/date), so `body` is the title itself -- there is no other text
-// to reuse without writing a second parser, which the brief rules out.
+// A single ingested item before tagging/summarization (later tasks). `body`
+// is the item's own text extracted by parseFeed (R11), or its title when a
+// feed has none. `titleKey` is the cross-source dedupe key (R13): the same
+// press release reaches us with different titles from its publisher and
+// from Google News (which appends " - <Publisher>"), and with an opaque
+// news.google.com redirect link that can never match the publisher's own
+// canonicalUrl -- titleKey is what lets a later task (Task 7, which owns
+// the store column and the matching window) still recognize the pair.
 export interface RawItem {
   title: string;
   url: string;
@@ -278,6 +334,7 @@ export interface RawItem {
   body: string;
   sourceKind: Feed["kind"];
   sourceName: string;
+  titleKey: string;
 }
 
 export interface AdapterDeps {
@@ -297,41 +354,73 @@ export interface AdapterDeps {
 // rssAdapter/newsAdapter's returned promise reject, which the orchestrator
 // (a later task) awaits per feed inside its own try/catch, exactly the way
 // verifyFeed's caller already isolates one bad feed from the rest of a run.
+//
+// Fix round 1 (R12): DEFAULT_ADAPTER_TIMEOUT_MS used to be an unused,
+// aspirational constant -- nothing actually bounded a request, so a
+// fetchImpl that just hung (no createFetch-style timeout of its own) hung
+// the whole adapter call forever. This now arms its own AbortController and
+// timer around every request, exactly like createFetch does, rather than
+// trusting whatever fetchImpl a later task injects to bound itself. The
+// timer is cleared on every exit path (success, thrown error, and a body
+// read that itself fails) so nothing is left armed once the call settles.
 async function fetchBody(deps: AdapterDeps, url: string, label: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_ADAPTER_TIMEOUT_MS);
+  timer.unref?.();
+
   let response: { ok: boolean; status: number; text(): Promise<string> };
   try {
-    response = await deps.fetchImpl(url, { headers: { "User-Agent": deps.userAgent } });
+    response = await deps.fetchImpl(url, { headers: { "User-Agent": deps.userAgent }, signal: controller.signal });
   } catch (err) {
+    clearTimeout(timer);
     throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+
   if (!response.ok) {
+    clearTimeout(timer);
     throw new Error(`${label} failed: HTTP ${response.status}`);
   }
-  return response.text();
+
+  try {
+    return await response.text();
+  } catch (err) {
+    throw new Error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Shared by rssAdapter and newsAdapter: turns parsed feed items into
-// RawItems, applying the since cutoff and the "no date" fallback. An item
-// exactly at `since` is treated as already seen and dropped, on the
-// assumption `since` is the high-water mark of the previous run.
+// RawItems, applying the since cutoff and the "no date" fallback, and
+// computing each item's cross-source titleKey (R13). An item exactly at
+// `since` is treated as already seen and dropped -- `since` is exclusive --
+// on the assumption it's the high-water mark of the previous run.
+//
+// cleanTitle lets a caller rewrite the title actually stored (only
+// newsAdapter needs this, to drop Google News' " - <Publisher>" suffix)
+// before titleKey is computed from it, so the stored title and its key are
+// always derived from the same text.
 function toRawItems(
   parsed: ParsedFeedItem[],
   sourceKind: Feed["kind"],
   sourceName: string,
   since: string | null,
   now: () => Date,
+  cleanTitle: (title: string) => string = (title) => title,
 ): RawItem[] {
   const items: RawItem[] = [];
   for (const item of parsed) {
     const publishedAt = item.publishedAt ?? now().toISOString();
     if (since !== null && publishedAt <= since) continue;
+    const title = cleanTitle(item.title);
     items.push({
-      title: item.title,
+      title,
       url: item.link,
       publishedAt,
-      body: item.title,
+      body: item.body,
       sourceKind,
       sourceName,
+      titleKey: titleKey(title),
     });
   }
   return items;
@@ -339,6 +428,8 @@ function toRawItems(
 
 // Fetches and parses one entity's feed (rss or ir_page: both are just an XML
 // URL to GET). Reuses parseFeed rather than a second parser, per the brief.
+// `since` is exclusive: an item published at exactly `since` is dropped as
+// already seen (see toRawItems).
 export function rssAdapter(
   deps: AdapterDeps,
 ): (feed: Feed, entity: Entity, since: string | null) => Promise<RawItem[]> {
@@ -354,12 +445,15 @@ export function rssAdapter(
 // Fetches Google News' RSS search for a query -- same URL shape as
 // src/services/web-search.ts's searchWeb (q/hl/gl/ceid), so the two never
 // drift into fetching subtly different result sets for the same text.
+// `since` is exclusive, as in rssAdapter. Titles have Google News' own
+// " - <Publisher>" suffix stripped (R13) before being stored or hashed into
+// titleKey.
 export function newsAdapter(deps: AdapterDeps): (query: string, since: string | null) => Promise<RawItem[]> {
   return async (query, since) => {
     const params = new URLSearchParams({ q: query, hl: "en-US", gl: "US", ceid: "US:en" });
     const url = `https://news.google.com/rss/search?${params.toString()}`;
     const body = await fetchBody(deps, url, "Google News request");
-    return toRawItems(parseFeed(body), "news", "Google News", since, deps.now);
+    return toRawItems(parseFeed(body), "news", "Google News", since, deps.now, stripPublisherSuffix);
   };
 }
 
@@ -412,10 +506,55 @@ export function canonicalUrl(url: string): string {
 // hashes identically -- the second half of the dedupe key alongside
 // canonicalUrl (a source can reuse one url for many stories, e.g. a
 // paginated newsroom index, so url alone isn't enough).
+//
+// Fix round 1 (R14): title and body used to be joined with "\n" before the
+// SAME regex collapsed all whitespace runs (including that "\n") down to a
+// single space -- so contentHash("A", "B") ("a\nb" -> "a b") collided with
+// contentHash("A B", "") ("a b\n" -> "a b"). Normalising each field
+// independently first, then joining with a NUL separator that whitespace
+// normalisation can never produce or consume, keeps the two apart.
 export function contentHash(title: string, body: string): string {
-  const normalized = `${title}\n${body}`
+  const normalize = (text: string): string => text.toLowerCase().replace(/\s+/g, " ").trim();
+  const normalized = `${normalize(title)}\u0000${normalize(body)}`;
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+// R13: Google News titles are suffixed with " - <Publisher>" (e.g. "Roche
+// posts Q3 results - Yahoo Finance"), which the publisher's own copy of the
+// same title never carries. Stripped so the two converge on the same
+// titleKey. Only the LAST " - " separator is treated as a possible
+// suffix boundary (a publisher name sits at the very end), and only when
+// what follows carries no sentence punctuation of its own: a real publisher
+// name ("Reuters", "Yahoo Finance") is never itself a full clause, so a
+// title that legitimately contains " - " mid-sentence (e.g. "Roche - once a
+// generics house - posts record profit, beating estimates.") is left
+// untouched because its tail has a comma and a period.
+function stripPublisherSuffix(title: string): string {
+  const separatorIndex = title.lastIndexOf(" - ");
+  if (separatorIndex === -1) return title;
+
+  const tail = title.slice(separatorIndex + 3).trim();
+  if (tail.length === 0) return title;
+  if (/[.,:;!?]/.test(tail)) return title;
+
+  return title.slice(0, separatorIndex).trim();
+}
+
+// The cross-source dedupe key (R13): canonicalUrl and contentHash both
+// depend on the two copies of one release sharing a url or an identical
+// body, which Google News breaks -- it links to an opaque
+// news.google.com/rss/articles/<blob> redirect, never the publisher's url,
+// and often re-typesets or truncates the body. titleKey survives both: it
+// strips Google News' own publisher suffix, then reduces to letters/digits
+// and single spaces, so "Roche posts Q3 results - Yahoo Finance" and the
+// publisher's own "Roche posts Q3 results!" collapse to the same key. Task 7
+// owns actually matching on it (plus its own ±3-day window); this only
+// produces the key.
+export function titleKey(title: string): string {
+  const withoutSuffix = stripPublisherSuffix(title);
+  return withoutSuffix
     .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, "")
     .replace(/\s+/g, " ")
     .trim();
-  return createHash("sha256").update(normalized).digest("hex");
 }
