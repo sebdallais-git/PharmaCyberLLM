@@ -17,6 +17,7 @@ import {
   parseIngestArgs,
   parseOnlyOption,
   parseStatusArgs,
+  resolveStackName,
   runIngest,
   runStatus,
   validateOnlyIds,
@@ -158,6 +159,51 @@ describe("countPlannedFeeds", () => {
     });
 
     expect(countPlannedFeeds(makeWatchlist([misconfigured]), undefined)).toBe(1);
+  });
+});
+
+// ---- resolveStackName ---------------------------------------------------------
+
+// Fix round 2 (Important): this is the one piece of new logic fixing a
+// previously-observed production trap (the CLI silently talking to Ollama's
+// port while the live stack was MLX) and it runs for real on the owner's
+// machine, so it gets its own direct tests rather than only being exercised
+// indirectly through runIngestCli. The file reader is always injected --
+// never a real fs read -- so this never touches data/run/active-stack.
+describe("resolveStackName", () => {
+  it("uses LLM_PROVIDER as-is and never reads the file when it is set", async () => {
+    let readCalls = 0;
+    const readActiveStackFile = async () => {
+      readCalls++;
+      return "mlx";
+    };
+
+    const stack = await resolveStackName({ LLM_PROVIDER: "omlx" }, readActiveStackFile);
+
+    expect(stack).toBe("omlx");
+    expect(readCalls).toBe(0);
+  });
+
+  it("falls back to the trimmed file contents when LLM_PROVIDER is unset", async () => {
+    // Trailing newline/whitespace is exactly what `cat data/run/active-stack`
+    // or a hand-edited file would produce -- must not leak into the stack name.
+    const stack = await resolveStackName({}, async () => "  mlx\n");
+
+    expect(stack).toBe("mlx");
+  });
+
+  it('falls back to "ollama" when LLM_PROVIDER is unset and the file read rejects', async () => {
+    const stack = await resolveStackName({}, async () => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+
+    expect(stack).toBe("ollama");
+  });
+
+  it("treats a whitespace-only LLM_PROVIDER as unset and falls back to the file", async () => {
+    const stack = await resolveStackName({ LLM_PROVIDER: "   " }, async () => "mlx");
+
+    expect(stack).toBe("mlx");
   });
 });
 

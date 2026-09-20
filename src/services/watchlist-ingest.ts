@@ -121,6 +121,21 @@ export function topicFeedId(query: string): string {
   return `topic:${query}`;
 }
 
+// A feed only ever becomes a task in buildTasks below when it carries the
+// field its kind actually fetches with: url for rss/ir_page/news, cik for
+// edgar. Exported so scripts/watchlist.ts's countPlannedFeeds (used to tell
+// "every feed failed" apart from "nothing was ever attempted") uses this
+// exact same predicate rather than its own copy -- two copies of "which
+// feeds count" is exactly the drift that produced a counting bug once
+// already (fix round 1).
+//
+// The type predicate narrows both `url` and `cik` to `string` at once: a
+// convenience for buildTasks's per-kind branches below, each of which only
+// ever reads the one field its own kind actually has.
+export function isRunnableFeed(feed: Feed): feed is Feed & { url: string; cik: string } {
+  return feed.kind === "edgar" ? feed.cik !== undefined : feed.url !== undefined;
+}
+
 // ---- EDGAR rate limiter (R17) -----------------------------------------------
 
 // A minimum-interval gate: every call returns no sooner than minIntervalMs
@@ -228,11 +243,13 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
         const feedId = feedIdFor(entity, feed);
         const label = `${entity.name} (${feed.kind})`;
 
+        if (!isRunnableFeed(feed)) {
+          const missingField = feed.kind === "edgar" ? "cik" : feed.kind === "news" ? "query" : "url";
+          deps.log(`skipping ${label}: no ${missingField}`);
+          continue;
+        }
+
         if (feed.kind === "rss") {
-          if (feed.url === undefined) {
-            deps.log(`skipping ${label}: no url`);
-            continue;
-          }
           tasks.push({
             feedId,
             entity,
@@ -241,10 +258,6 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           });
         } else if (feed.kind === "ir_page") {
           const url = feed.url;
-          if (url === undefined) {
-            deps.log(`skipping ${label}: no url`);
-            continue;
-          }
           tasks.push({
             feedId,
             entity,
@@ -264,10 +277,6 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
           });
         } else if (feed.kind === "edgar") {
           const cik = feed.cik;
-          if (cik === undefined) {
-            deps.log(`skipping ${label}: no cik`);
-            continue;
-          }
           tasks.push({
             feedId,
             entity,
@@ -281,10 +290,6 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
         } else {
           // A "news" feed attached to an entity is a stored Google News query.
           const query = feed.url;
-          if (query === undefined) {
-            deps.log(`skipping ${label}: no query`);
-            continue;
-          }
           tasks.push({
             feedId,
             entity,

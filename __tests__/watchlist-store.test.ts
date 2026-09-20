@@ -404,5 +404,47 @@ describe("watchlist store", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    // Fix round 2, Minor 2: the case most likely to exist on the owner's own
+    // machine isn't the pre-Task-7 legacy schema above -- it's a database
+    // written by the intermediate (round-0) code, which already had
+    // title_key/runs in its CREATE TABLE IF NOT EXISTS block but stamped no
+    // user_version at all, so PRAGMA user_version reads 0 despite the schema
+    // already being current. The guard must recognize title_key is already
+    // there and only stamp the version, never attempt a duplicate-column
+    // ALTER.
+    it("stamps a database that already has the current schema but user_version 0, without re-adding title_key", () => {
+      const dir = mkdtempSync(join(tmpdir(), "watchlist-store-migrate-stamped-"));
+      const dbPath = join(dir, "watchlist.db");
+      try {
+        const first = openWatchlistStore(dbPath);
+        first.insertItem({
+          ...base,
+          urlCanonical: "https://a/pre-stamped",
+          contentHash: "c-pre-stamped",
+          titleKey: "pre stamped",
+        });
+        first.close();
+
+        // Roll the version back to 0 to simulate a database the round-0 code
+        // (current schema, no version stamp) would have produced.
+        const raw = new Database(dbPath);
+        raw.pragma("user_version = 0");
+        raw.close();
+
+        expect(() => openWatchlistStore(dbPath)).not.toThrow();
+
+        const reopened = openWatchlistStore(dbPath);
+        expect(reopened.findByHash("c-pre-stamped")?.titleKey).toBe("pre stamped");
+        reopened.insertItem({ ...base, urlCanonical: "https://a/after-stamp", contentHash: "c-after-stamp" });
+        reopened.close();
+
+        const rawAfter = new Database(dbPath);
+        expect(rawAfter.pragma("user_version", { simple: true })).toBe(1);
+        rawAfter.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

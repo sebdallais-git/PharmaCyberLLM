@@ -23,6 +23,7 @@ import { createTagger } from "../src/services/watchlist-tagger.js";
 import {
   createIngestRun,
   DEFAULT_INGEST_LIMIT,
+  isRunnableFeed,
   type IngestAdapters,
   type IngestDeps,
 } from "../src/services/watchlist-ingest.js";
@@ -187,19 +188,13 @@ export function parseIngestArgs(argv: string[]): IngestArgs {
   return args;
 }
 
-// A feed only ever becomes a task in createIngestRun's buildTasks when it
-// carries the field its kind actually fetches with: url for rss/ir_page/news,
-// cik for edgar. A feed missing that field is skipped there (logged, never
-// attempted), so it must never be counted here either -- a count that can
-// disagree with what actually ran would be worse than no count at all.
-function isRunnableFeed(feed: Feed): boolean {
-  return feed.kind === "edgar" ? feed.cik !== undefined : feed.url !== undefined;
-}
-
 // The number of feeds this run will actually attempt, mirroring
 // createIngestRun's own buildTasks (customers/peers/vendors filtered by
 // --only, plus every topic query when --only is not given) exactly enough
 // to tell "every feed failed" apart from "nothing was ever attempted".
+// isRunnableFeed is imported from watchlist-ingest.ts rather than
+// re-implemented here (fix round 1 duplicated this predicate and drifted
+// from buildTasks' own copy) -- one predicate, used by both.
 export function countPlannedFeeds(watchlist: Watchlist, only: string[] | undefined): number {
   const wanted = only === undefined ? null : new Set(only);
   let total = 0;
@@ -289,7 +284,7 @@ export async function runIngest(argv: string[], deps: RunIngestDeps): Promise<nu
 // scripts/switch-stack.sh) is what actually records the running stack, so
 // it is consulted whenever LLM_PROVIDER is not already set.
 export async function resolveStackName(env: NodeJS.ProcessEnv, readActiveStackFile: () => Promise<string>): Promise<string> {
-  const fromEnv = env.LLM_PROVIDER;
+  const fromEnv = env.LLM_PROVIDER?.trim();
   if (fromEnv !== undefined && fromEnv.length > 0) {
     return fromEnv;
   }
