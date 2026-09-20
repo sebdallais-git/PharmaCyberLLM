@@ -258,6 +258,104 @@ describe("hermes-setup.sh install-cron", () => {
   });
 });
 
+// I6: the wrapper Hermes actually runs. stdout must stay empty on a
+// successful night -- that silence is what makes --no-agent report only
+// failures -- but the run's own output (per-feed lines, anomalies, the stack
+// name) has to survive somewhere, and on a successful run nothing else keeps
+// it. The wrapper is exercised here for real, with a stub `npx` on PATH: no
+// tsx, no model, no network, no ~/.hermes.
+describe("hermes/scripts/pharmallm-watchlist-ingest.sh", () => {
+  interface WrapperBox {
+    tempProject: string;
+    script: string;
+    binDir: string;
+  }
+
+  // An `npx` that prints what the ingest would have printed and exits with
+  // its status. Nothing else on PATH can reach tsx, a model or the network.
+  function stubIngest(box: WrapperBox, stdout: string, exitCode: number): void {
+    const npx = join(box.binDir, "npx");
+    writeFileSync(npx, ["#!/bin/bash", "cat <<'INGESTOUT'", stdout, "INGESTOUT", `exit ${exitCode}`].join("\n"));
+    chmodSync(npx, 0o755);
+  }
+
+  // Copies the wrapper into a temp project with __PROJECT_DIR__ baked in,
+  // exactly as install-cron does, and stubs the `npx` it calls.
+  function wrapperBox(stdout: string, exitCode: number): WrapperBox {
+    const root = mkdtempSync(join(tmpdir(), "watchlist-wrapper-"));
+    dirs.push(root);
+    const tempProject = join(root, "project");
+    const binDir = join(root, "bin");
+    mkdirSync(tempProject);
+    mkdirSync(binDir);
+
+    const template = readFileSync(join(projectDir, "hermes", "scripts", "pharmallm-watchlist-ingest.sh"), "utf-8");
+    const script = join(root, "pharmallm-watchlist-ingest.sh");
+    writeFileSync(script, template.replace(/__PROJECT_DIR__/g, tempProject));
+
+    const box: WrapperBox = { tempProject, script, binDir };
+    stubIngest(box, stdout, exitCode);
+    return box;
+  }
+
+  function runWrapper(box: WrapperBox) {
+    return spawnSync("bash", [box.script], {
+      encoding: "utf-8",
+      env: { PATH: `${box.binDir}:/usr/bin:/bin`, HOME: box.tempProject },
+    });
+  }
+
+  function logPath(box: WrapperBox): string {
+    const today = new Date();
+    const stamp = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0"),
+    ].join("-");
+    return join(box.tempProject, "data", "logs", `watchlist-ingest-${stamp}.log`);
+  }
+
+  it("keeps the whole run in a dated log while staying silent on stdout", () => {
+    const box = wrapperBox("Using stack: mlx\nRoche (rss): 3 items\nIngest run #7: fetched=3 stored=3", 0);
+
+    const result = runWrapper(box);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(""); // --no-agent delivers stdout verbatim: silence means a quiet night
+    const log = readFileSync(logPath(box), "utf-8");
+    expect(log).toContain("Using stack: mlx");
+    expect(log).toContain("Roche (rss): 3 items");
+    expect(log).toContain("Ingest run #7: fetched=3 stored=3");
+  });
+
+  it("still reports a failed run on stdout, with the same lines kept in the log", () => {
+    const box = wrapperBox("Using stack: mlx\nEvery feed failed (4/4) -- treating this run as a failure.", 1);
+
+    const result = runWrapper(box);
+
+    // pipefail, not tee's exit status: appending to the log must not turn a
+    // failed run into a successful one.
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("watchlist ingest failed (exit 1)");
+    expect(result.stdout).toContain("Every feed failed (4/4)");
+    expect(readFileSync(logPath(box), "utf-8")).toContain("Every feed failed (4/4)");
+  });
+
+  it("appends to the day's log instead of overwriting it", () => {
+    // Two runs on one day (a manual re-run after a failure, say) must both
+    // be readable afterwards.
+    const box = wrapperBox("first run output", 0);
+    expect(runWrapper(box).status).toBe(0);
+
+    stubIngest(box, "second run output", 0);
+    expect(runWrapper(box).status).toBe(0);
+
+    const log = readFileSync(logPath(box), "utf-8");
+    expect(log).toContain("first run output");
+    expect(log).toContain("second run output");
+  });
+});
+
 describe("hermes-setup.sh install-services", () => {
   it("renders the MCP plist with node's path, loads it and installs the gateway", () => {
     const box = sandbox();
