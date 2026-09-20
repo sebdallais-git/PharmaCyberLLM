@@ -83,7 +83,13 @@ export interface RunRecord {
 }
 
 export interface WatchlistStore {
-  insertItem(item: NewItem): number; // returns the item id
+  // Idempotent on a duplicate content_hash or url_canonical (R5): the row is
+  // not re-inserted or updated -- no summary/tag overwrite, no extra join
+  // rows -- and the id of the EXISTING item is returned unchanged. Callers
+  // (e.g. an ingest orchestrator re-processing a feed) can call this
+  // unconditionally without a separate check-then-insert race, and can pass
+  // the returned id to addSource to record a new sighting's URL.
+  insertItem(item: NewItem): number; // returns the (possibly pre-existing) item id
   findByHash(contentHash: string): StoredItem | null;
   findByUrl(urlCanonical: string): StoredItem | null;
   addSource(itemId: number, sourceKind: string, url: string): void;
@@ -126,6 +132,9 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // SQLite disables foreign key enforcement per connection by default; the
+  // join tables' ON DELETE CASCADE (R6) is a no-op unless this is set here.
+  db.pragma("foreign_keys = ON");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS items (
@@ -189,9 +198,14 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
   // ---- prepared statements -------------------------------------------------
 
+  // ON CONFLICT DO NOTHING with no column list applies to any constraint
+  // violation (both the content_hash and url_canonical UNIQUE constraints),
+  // making the insert idempotent (R5) -- see insertItemTxn below for how a
+  // no-op insert is resolved back to the existing row's id.
   const insertItemStmt = db.prepare(`
     INSERT INTO items (url_canonical, content_hash, source_kind, source_name, title, summary, signal, importance, facts, published_at, fetched_at, flagged)
     VALUES (@urlCanonical, @contentHash, @sourceKind, @sourceName, @title, @summary, @signal, @importance, @facts, @publishedAt, @fetchedAt, @flagged)
+    ON CONFLICT DO NOTHING
   `);
   const insertEntityStmt = db.prepare(`INSERT OR IGNORE INTO item_entities (item_id, entity_id) VALUES (?, ?)`);
   const insertDomainStmt = db.prepare(`INSERT OR IGNORE INTO item_domains (item_id, domain) VALUES (?, ?)`);
@@ -225,6 +239,14 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     UPDATE runs SET finished_at = ?, fetched = ?, deduped = ?, tagged = ?, failed_feeds = ? WHERE id = ?
   `);
   const lastRunStmt = db.prepare(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`);
+
+  const countsByEntityStmt = db.prepare(`
+    SELECT ie.entity_id AS entityId, COUNT(*) AS items, MAX(COALESCE(i.importance, 0)) AS maxImportance
+    FROM item_entities ie
+    JOIN items i ON i.id = ie.item_id
+    WHERE i.published_at >= ? AND i.published_at <= ?
+    GROUP BY ie.entity_id
+  `);
 
   // ---- row -> domain object mapping ----------------------------------------
 
@@ -295,6 +317,24 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       fetchedAt: item.fetchedAt,
       flagged: item.flagged ?? false ? 1 : 0,
     });
+
+    if (result.changes === 0) {
+      // ON CONFLICT DO NOTHING fired: a row with this content_hash or
+      // url_canonical already exists. Idempotent no-op (R5) -- resolve and
+      // return the existing row's id without touching any data or join rows.
+      const existing =
+        (selectItemByHashStmt.get(item.contentHash) as ItemRow | undefined) ??
+        (selectItemByUrlStmt.get(item.urlCanonical) as ItemRow | undefined);
+      if (existing === undefined) {
+        // Should be unreachable: a conflict happened but neither lookup
+        // finds the row that caused it.
+        throw new Error(
+          `insertItem: conflict on content_hash "${item.contentHash}" or url_canonical "${item.urlCanonical}" but no existing row was found`
+        );
+      }
+      return existing.id;
+    }
+
     const itemId = Number(result.lastInsertRowid);
 
     for (const entityId of item.entities) {
@@ -310,6 +350,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
   });
 
   return {
+    // See the WatchlistStore interface doc: idempotent on a duplicate
+    // content_hash/url_canonical (R5), returning the existing id untouched.
     insertItem(item: NewItem): number {
       return insertItemTxn(item);
     },
@@ -345,14 +387,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     },
 
     countsByEntity(from: string, to: string): Array<{ entityId: string; items: number; maxImportance: number }> {
-      const rows = db.prepare(`
-        SELECT ie.entity_id AS entityId, COUNT(*) AS items, MAX(COALESCE(i.importance, 0)) AS maxImportance
-        FROM item_entities ie
-        JOIN items i ON i.id = ie.item_id
-        WHERE i.published_at >= ? AND i.published_at <= ?
-        GROUP BY ie.entity_id
-      `).all(from, to) as Array<{ entityId: string; items: number; maxImportance: number }>;
-      return rows;
+      return countsByEntityStmt.all(from, to) as Array<{ entityId: string; items: number; maxImportance: number }>;
     },
 
     getFeedState(feedId: string): FeedState {
