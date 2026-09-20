@@ -63,7 +63,8 @@ customers:
             amgen, takeda, novo-nordisk, gilead, bayer]
   novartis:
     name: Novartis
-    aliases: [Sandoz]      # historical only: pre-2023 spin-off articles
+    # No Sandoz alias: it is a separate customer since the 2023 spin-off, and an alias
+    # would re-attribute current Sandoz news to Novartis
     sec_cik: "0001114448"  # 20-F / 6-K filer
     peers: [roche, pfizer, astrazeneca, msd, jnj, abbvie, sanofi, gsk, lilly, bms,
             amgen, takeda, novo-nordisk, gilead, bayer]
