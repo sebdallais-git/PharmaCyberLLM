@@ -119,6 +119,119 @@ describe("parseWatchlist", () => {
     const list = parseWatchlist(acrossTwoGroups);
     expect(list.entities.get("nvidia")).toMatchObject({ kind: "vendor", domains: ["ai", "cloud"] });
   });
+
+  // R8: a vendor entry may be either a bare id (unchanged) or a single-key
+  // mapping { id: { name?, aliases?, feeds?, verifiedAt? } } -- needed for
+  // the Everpure rename (pure-storage keeps its id, gains a display name and
+  // an alias) and to attach researched feeds to any vendor.
+  describe("vendor entries as a mapping (R8)", () => {
+    it("still accepts a bare id with no extra data", () => {
+      const list = parseWatchlist({ customers: {}, vendors: { cloud: ["aws"] }, topics: {} });
+      expect(list.entities.get("aws")).toMatchObject({ kind: "vendor", name: "Aws", aliases: [], feeds: [] });
+    });
+
+    it("accepts a single-key mapping with name, aliases and feeds, stamping verifiedAt onto each feed", () => {
+      const config = {
+        customers: {},
+        vendors: {
+          storage: [
+            {
+              "pure-storage": {
+                name: "Everpure",
+                aliases: ["Pure Storage"],
+                feeds: { rss: ["https://blog.everpuredata.com/feed/"], edgar: "0001474432" },
+                verifiedAt: "2026-09-20",
+              },
+            },
+          ],
+        },
+        topics: {},
+      };
+
+      const list = parseWatchlist(config);
+      const entity = list.entities.get("pure-storage");
+
+      expect(entity).toMatchObject({ id: "pure-storage", kind: "vendor", name: "Everpure", aliases: ["Pure Storage"] });
+      expect(entity?.feeds).toEqual([
+        { kind: "rss", url: "https://blog.everpuredata.com/feed/", verifiedAt: "2026-09-20" },
+        { kind: "edgar", cik: "0001474432", verifiedAt: "2026-09-20" },
+      ]);
+    });
+
+    it("merges domains when a mapping-form vendor also appears as a bare id in another group", () => {
+      const config = {
+        customers: {},
+        vendors: {
+          ai: [{ databricks: { feeds: { rss: ["https://www.databricks.com/feed"] }, verifiedAt: "2026-09-20" } }],
+          data: ["databricks"],
+        },
+        topics: {},
+      };
+
+      const list = parseWatchlist(config);
+      const entity = list.entities.get("databricks");
+
+      expect(entity).toMatchObject({ kind: "vendor", domains: ["ai", "data"] });
+      expect(entity?.feeds).toEqual([{ kind: "rss", url: "https://www.databricks.com/feed", verifiedAt: "2026-09-20" }]);
+    });
+
+    it("rejects a vendor mapping with more than one key", () => {
+      const config = { customers: {}, vendors: { cloud: [{ aws: {}, oracle: {} }] }, topics: {} };
+      expect(() => parseWatchlist(config)).toThrow(/exactly one key/);
+    });
+  });
+});
+
+describe("peers section (explicit feeds for auto-created peers)", () => {
+  it("attaches feeds and verifiedAt to a peer referenced by a customer, instead of leaving it a bare stub", () => {
+    const config = {
+      customers: { roche: { name: "Roche", peers: ["pfizer"] } },
+      peers: {
+        pfizer: {
+          feeds: { edgar: "0000078003", ir_page: "https://investors.pfizer.com/Investors/Financials/Quarterly-Results/default.aspx" },
+          verifiedAt: "2026-09-20",
+        },
+      },
+      vendors: {},
+      topics: {},
+    };
+
+    const list = parseWatchlist(config);
+    const pfizer = list.entities.get("pfizer");
+
+    expect(pfizer).toMatchObject({ id: "pfizer", kind: "peer" });
+    expect(pfizer?.feeds).toEqual([
+      { kind: "edgar", cik: "0000078003", verifiedAt: "2026-09-20" },
+      { kind: "ir_page", url: "https://investors.pfizer.com/Investors/Financials/Quarterly-Results/default.aspx", verifiedAt: "2026-09-20" },
+    ]);
+    // An explicitly-defined peer is not an inferred auto-create: no note.
+    expect(list.notes).toHaveLength(0);
+  });
+
+  it("still auto-creates (with a note) a peer that has no entry under peers:", () => {
+    const config = {
+      customers: { roche: { name: "Roche", peers: ["ghost"] } },
+      peers: {},
+      vendors: {},
+      topics: {},
+    };
+
+    const list = parseWatchlist(config);
+
+    expect(list.entities.get("ghost")).toMatchObject({ kind: "peer", feeds: [] });
+    expect(list.notes[0]).toContain('peer "ghost" referenced by "roche" has no separate definition');
+  });
+
+  it("refuses a peers: entry for an id no customer ever references", () => {
+    const config = {
+      customers: { roche: { name: "Roche", peers: ["pfizer"] } },
+      peers: { pfizer: { feeds: {} }, orphan: { feeds: {} } },
+      vendors: {},
+      topics: {},
+    };
+
+    expect(() => parseWatchlist(config)).toThrow(/"orphan"/);
+  });
 });
 
 describe("loadWatchlist", () => {

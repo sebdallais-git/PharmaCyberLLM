@@ -4,9 +4,12 @@
 
 import type { Entity, Feed } from "../src/services/watchlist-config.js";
 import { loadWatchlist } from "../src/services/watchlist-config.js";
-import { createFetch, verifyFeed } from "../src/services/watchlist-sources.js";
+import { createFetch, DEFAULT_USER_AGENT, verifyFeed } from "../src/services/watchlist-sources.js";
 
-const USER_AGENT = "PharmaLLM-Watchlist/1.0 (+https://github.com/sebdallais-git/claude-workspace)";
+// R9: DEFAULT_USER_AGENT is honest about who we are, in the form sites'
+// bot rules accept -- EDGAR's stricter declared-UA requirement is Task 5's
+// concern, not this CLI's.
+const USER_AGENT = DEFAULT_USER_AGENT;
 const FEED_TIMEOUT_MS = 10_000;
 const MAX_CONCURRENT_REQUESTS = 2;
 
@@ -50,7 +53,27 @@ async function verifyFeeds(): Promise<void> {
   let failures = 0;
 
   await mapWithConcurrency(tasks, MAX_CONCURRENT_REQUESTS, async ({ entity, feed }) => {
-    const result = await verifyFeed(feed, fetchImpl);
+    // verifyFeed only knows how to judge an RSS/Atom body. "edgar" (a CIK,
+    // not a URL) and "ir_page" (an HTML landing page, not a feed) were
+    // verified by other means during feed research (an EDGAR company_tickers
+    // cross-check, a plain HTTP 200 check) -- running them through the RSS
+    // parser would always report a spurious FAIL, not a real problem with the
+    // recorded feed. EDGAR's own strict-UA verification is a later task's
+    // concern (R9 discussion), not this command's.
+    if (feed.kind !== "rss" && feed.kind !== "news") {
+      console.log(`skip ${entity.id} ${feed.kind} verified separately during feed research, not RSS/Atom`);
+      return;
+    }
+    let result = await verifyFeed(feed, fetchImpl);
+    if (!result.ok && result.error === "HTTP 403") {
+      // A couple of Q4-hosted IR platforms (ir.veeva.com, ir.schrodinger.com) have
+      // been observed to 403 under this run's concurrent request pattern but pass
+      // reliably in isolation or on an immediate retry -- a rate-limiting artifact,
+      // not a dead feed. One retry after a short pause absorbs that without masking
+      // a genuinely dead/blocked feed (which fails the same way again).
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      result = await verifyFeed(feed, fetchImpl);
+    }
     if (result.ok) {
       console.log(`ok ${entity.id} ${feed.kind} ${result.items} newest=${result.newest}`);
     } else {

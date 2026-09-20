@@ -145,6 +145,67 @@ function humanize(id: string): string {
     .join(" ");
 }
 
+// A single verifiedAt date applies to every feed a fragment records for one
+// entity (they were all checked in the same run) -- stamped onto each Feed
+// object rather than kept as a separate entity-level field, since Feed
+// already carries its own optional verifiedAt (Task 1).
+function stampVerifiedAt(feeds: Feed[], value: unknown, label: string, errors: string[]): void {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    errors.push(`${label} verifiedAt must be a string`);
+    return;
+  }
+  for (const feed of feeds) feed.verifiedAt = value;
+}
+
+interface VendorEntryData {
+  id: string;
+  name?: string;
+  aliases: string[];
+  feeds: Feed[];
+}
+
+// R8: a vendor list entry is either a bare id (unchanged) or a single-key
+// mapping { id: { name?, aliases?, feeds?, verifiedAt? } } -- needed to give
+// a renamed vendor (e.g. Everpure, formerly Pure Storage) an explicit
+// name/aliases and to attach researched feeds to any vendor.
+function parseVendorEntries(value: unknown, label: string, errors: string[]): VendorEntryData[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push(`${label} must be an array of strings`);
+    return [];
+  }
+
+  const result: VendorEntryData[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      result.push({ id: item, aliases: [], feeds: [] });
+      continue;
+    }
+    if (!isRecord(item)) {
+      errors.push(`${label} contains an entry that is neither a string id nor a single-key mapping`);
+      continue;
+    }
+    const keys = Object.keys(item);
+    if (keys.length !== 1) {
+      errors.push(`${label} vendor mapping must have exactly one key (the vendor id), found ${keys.length}`);
+      continue;
+    }
+    const id = keys[0];
+    const body = item[id];
+    if (!isRecord(body)) {
+      errors.push(`${label} vendor "${id}" must map to an object`);
+      continue;
+    }
+    const name = typeof body.name === "string" ? body.name : undefined;
+    const aliases = parseStringArray(body.aliases, `${label} vendor "${id}" aliases`, errors);
+    const feeds = parseFeeds(body.feeds, `${label} vendor "${id}"`, errors);
+    stampVerifiedAt(feeds, body.verifiedAt, `${label} vendor "${id}"`, errors);
+    result.push({ id, name, aliases, feeds });
+  }
+  return result;
+}
+
 // ---- main parser ----------------------------------------------------------
 
 export function parseWatchlist(raw: unknown): Watchlist {
@@ -193,6 +254,7 @@ export function parseWatchlist(raw: unknown): Watchlist {
     const aliases = parseStringArray(value.aliases, `customer "${id}" aliases`, errors);
     const peers = parseStringArray(value.peers, `customer "${id}" peers`, errors);
     const feeds = parseFeeds(value.feeds, `customer "${id}"`, errors);
+    stampVerifiedAt(feeds, value.verifiedAt, `customer "${id}"`, errors);
     addEntity(id, { id, name, kind: "customer", aliases, domains: [], peers, feeds }, customerIds);
   }
 
@@ -208,9 +270,9 @@ export function parseWatchlist(raw: unknown): Watchlist {
       errors.push(`vendor group "${groupKey}" is not a known domain`);
       continue;
     }
-    const ids = parseStringArray(value, `vendor group "${groupKey}"`, errors);
-    for (const vendorId of ids) {
-      const existing = entities.get(vendorId);
+    const items = parseVendorEntries(value, `vendor group "${groupKey}"`, errors);
+    for (const item of items) {
+      const existing = entities.get(item.id);
       if (existing !== undefined) {
         // A vendor spanning several domains (e.g. Databricks: both "ai" and
         // "data") is listed once per domain group by design; merge domains
@@ -220,22 +282,57 @@ export function parseWatchlist(raw: unknown): Watchlist {
         // reusing this id is a genuine cross-section collision.
         if (existing.kind === "vendor") {
           if (existing.domains.includes(groupKey)) {
-            errors.push(`duplicate id "${vendorId}" within vendor group "${groupKey}"`);
+            errors.push(`duplicate id "${item.id}" within vendor group "${groupKey}"`);
           } else {
             existing.domains.push(groupKey);
+            // A multi-domain vendor is expected to define its name/aliases/
+            // feeds once (R8) and repeat as a bare id elsewhere, but tolerate
+            // a second mapping supplying them too.
+            if (item.name !== undefined) existing.name = item.name;
+            if (item.aliases.length > 0) existing.aliases = item.aliases;
+            if (item.feeds.length > 0) existing.feeds = item.feeds;
           }
         } else {
-          errors.push(`duplicate id "${vendorId}"`);
+          errors.push(`duplicate id "${item.id}"`);
         }
         continue;
       }
       addEntity(
-        vendorId,
-        { id: vendorId, name: humanize(vendorId), kind: "vendor", aliases: [], domains: [groupKey], peers: [], feeds: [] },
+        item.id,
+        {
+          id: item.id,
+          name: item.name ?? humanize(item.id),
+          kind: "vendor",
+          aliases: item.aliases,
+          domains: [groupKey],
+          peers: [],
+          feeds: item.feeds,
+        },
         vendorIds,
       );
     }
   }
+
+  // --- explicit peer feeds (a peer has no section of its own the way
+  // customers/vendors do; "peers" only ever attaches feeds to a peer id that
+  // some customer's peer list already references -- see the loop below) ---
+  const peersRaw = raw.peers;
+  if (peersRaw !== undefined && !isRecord(peersRaw)) {
+    errors.push('"peers" must be an object');
+  }
+  const peerEntries = isRecord(peersRaw) ? Object.entries(peersRaw) : [];
+
+  const explicitPeerFeeds = new Map<string, Feed[]>();
+  for (const [id, value] of peerEntries) {
+    if (!isRecord(value)) {
+      errors.push(`peer "${id}" must be an object`);
+      continue;
+    }
+    const feeds = parseFeeds(value.feeds, `peer "${id}"`, errors);
+    stampVerifiedAt(feeds, value.verifiedAt, `peer "${id}"`, errors);
+    explicitPeerFeeds.set(id, feeds);
+  }
+  const consumedExplicitPeerIds = new Set<string>();
 
   // --- peers implied by customers' peer lists ---
   // Snapshot the customer entities before mutating `entities` with new peers.
@@ -246,6 +343,23 @@ export function parseWatchlist(raw: unknown): Watchlist {
   for (const customer of customerEntitiesSnapshot) {
     for (const peerId of customer.peers) {
       if (entities.has(peerId)) continue; // already a customer, vendor or earlier peer
+
+      const explicitFeeds = explicitPeerFeeds.get(peerId);
+      if (explicitFeeds !== undefined) {
+        consumedExplicitPeerIds.add(peerId);
+        entities.set(peerId, {
+          id: peerId,
+          name: humanize(peerId),
+          kind: "peer",
+          aliases: [],
+          domains: [],
+          peers: [],
+          feeds: explicitFeeds,
+        });
+        peerIds.push(peerId);
+        continue;
+      }
+
       notes.push(`peer "${peerId}" referenced by "${customer.id}" has no separate definition; auto-created`);
       entities.set(peerId, {
         id: peerId,
@@ -257,6 +371,12 @@ export function parseWatchlist(raw: unknown): Watchlist {
         feeds: [],
       });
       peerIds.push(peerId);
+    }
+  }
+
+  for (const id of explicitPeerFeeds.keys()) {
+    if (!consumedExplicitPeerIds.has(id)) {
+      errors.push(`peer "${id}" is defined under "peers" but no customer's peer list references it`);
     }
   }
 

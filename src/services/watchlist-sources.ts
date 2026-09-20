@@ -20,7 +20,7 @@ export interface FetchLike {
   ): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 }
 
-export const DEFAULT_USER_AGENT = "PharmaLLM-Watchlist/1.0 (+https://github.com/sebdallais-git/claude-workspace)";
+export const DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; PharmaLLM/1.0; +sebdallais@gmail.com)";
 
 export interface CreateFetchOptions {
   userAgent?: string;
