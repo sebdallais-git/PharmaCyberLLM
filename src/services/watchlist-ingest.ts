@@ -138,10 +138,10 @@ function createMinIntervalGate(minIntervalMs: number): () => Promise<void> {
     const waitMs = Math.max(0, next - nowMs);
     next = Math.max(nowMs, next) + minIntervalMs;
     if (waitMs > 0) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, waitMs);
-        timer.unref?.();
-      });
+      // Deliberately NOT unref'd: the run is awaiting this timer. If it were
+      // the only ref'd handle left, the event loop would drain, the process
+      // would exit mid-run before finishRun, and cron would see exit 0.
+      await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     }
   };
 }
@@ -204,7 +204,13 @@ interface FeedTask {
 
 export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => Promise<IngestResult> {
   const limit = deps.limit > 0 ? deps.limit : DEFAULT_INGEST_LIMIT;
-  const edgarGate = createMinIntervalGate(deps.edgarMinIntervalMs ?? EDGAR_MIN_INTERVAL_MS);
+  // `?? EDGAR_MIN_INTERVAL_MS` alone would let 0 through (0 is not nullish)
+  // and silently switch the SEC's rate limit off. Non-positive means
+  // "unset", exactly like `limit` above.
+  const edgarInterval = deps.edgarMinIntervalMs;
+  const edgarGate = createMinIntervalGate(
+    edgarInterval !== undefined && edgarInterval > 0 ? edgarInterval : EDGAR_MIN_INTERVAL_MS,
+  );
 
   function buildTasks(only: string[] | undefined): FeedTask[] {
     const wanted = only === undefined ? null : new Set(only);
@@ -321,141 +327,179 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
     const tasks = buildTasks(options.only);
     deps.log(`run ${runId}: ${tasks.length} feeds`);
 
-    for (const task of tasks) {
-      const state = deps.store.getFeedState(task.feedId);
-      const since = options.since ?? state.lastSeenAt;
+    try {
+      for (const task of tasks) {
+        try {
+          // Inside the try on purpose: a store read that throws (a locked
+          // database, a corrupted row) is a per-feed failure like any other.
+          // Outside it, one bad read would take the whole run down -- the
+          // exact thing "a feed never aborts the run" exists to prevent.
+          const state = deps.store.getFeedState(task.feedId);
+          const since = options.since ?? state.lastSeenAt;
 
-      try {
-        const outcome = await task.fetch(since);
-        if (outcome.anomaly !== undefined) {
-          anomalies.push(outcome.anomaly);
-          deps.log(`anomaly: ${outcome.anomaly}`);
-        }
-
-        fetched += outcome.items.length;
-        // The watermark only ever moves over items this run actually
-        // RESOLVED -- stored or recognised as a duplicate. An item the cap
-        // refused is deferred, not lost: leaving the watermark behind it is
-        // what makes the next run fetch it again.
-        let newestPublishedAt: string | null = null;
-        let newestHash: string | null = null;
-        const markResolved = (publishedAt: string, hash: string): void => {
-          if (newestPublishedAt === null || publishedAt > newestPublishedAt) {
-            newestPublishedAt = publishedAt;
-            newestHash = hash;
+          const outcome = await task.fetch(since);
+          if (outcome.anomaly !== undefined) {
+            anomalies.push(outcome.anomaly);
+            deps.log(`anomaly: ${outcome.anomaly}`);
           }
-        };
 
-        for (const item of outcome.items) {
-          const urlCanonical = canonicalUrl(item.url);
-          const hash = contentHash(item.title, item.body);
+          fetched += outcome.items.length;
+          // The watermark only ever moves over items this run actually
+          // RESOLVED -- stored, or recognised as a duplicate. Items the cap
+          // dropped are deferred, not lost, and `since` is a single exclusive
+          // timestamp, not a set: the watermark must therefore stay strictly
+          // BELOW the oldest dropped item, whatever order the feed listed them
+          // in. Feeds are conventionally newest-first, so the cap usually bites
+          // part-way down the list and nothing may move at all.
+          const resolved: Array<{ publishedAt: string; hash: string }> = [];
+          const cappedAt: string[] = [];
+          const markResolved = (publishedAt: string, hash: string): void => {
+            resolved.push({ publishedAt, hash });
+          };
+          const markCapped = (publishedAt: string): void => {
+            cappedAt.push(publishedAt);
+          };
 
-          const existingId = findDuplicate(deps.store, item, urlCanonical, hash);
-          if (existingId !== null) {
-            // A later sighting of a story we already have: record the new
-            // url as another source and never call the model (R13/R15).
-            deps.store.addSource(existingId, item.sourceKind, urlCanonical);
-            deduped += 1;
+          for (const item of outcome.items) {
+            const urlCanonical = canonicalUrl(item.url);
+            const hash = contentHash(item.title, item.body);
+
+            const existingId = findDuplicate(deps.store, item, urlCanonical, hash);
+            if (existingId !== null) {
+              // A later sighting of a story we already have: record the new
+              // url as another source and never call the model (R13/R15).
+              deps.store.addSource(existingId, item.sourceKind, urlCanonical);
+              deduped += 1;
+              markResolved(item.publishedAt, hash);
+              continue;
+            }
+
+            if (tagged >= limit) {
+              // The cap bites in priority order, because tasks are already in
+              // priority order. Counted, not silently lost.
+              skippedByCap += 1;
+              markCapped(item.publishedAt);
+              continue; // deliberately NOT resolved: the watermark stays behind it
+            }
+
+            // A tagger or store failure here propagates to the per-feed catch
+            // below: the feed is marked failed and its watermark stays put, so
+            // the next run re-fetches these items rather than losing them.
+            const candidateIds = computeCandidateIds(item, deps.watchlist, task.entity?.id ?? null);
+            const tagging = await deps.tag(item, candidateIds);
+            tagged += 1;
+
+            // The feed's own entity is always attached: an item pulled from
+            // Roche's newsroom is about Roche whatever the model returned, and
+            // countsByEntity/the digest depend on that link. A topic feed has no
+            // entity of its own, so there the model's answer stands alone (R1:
+            // zero entities is a legitimate result).
+            const entities = [...new Set([...(task.entity !== null ? [task.entity.id] : []), ...tagging.entities])];
+            const itemId = deps.store.insertItem({
+              urlCanonical,
+              contentHash: hash,
+              titleKey: item.titleKey,
+              sourceKind: item.sourceKind,
+              sourceName: item.sourceName,
+              title: item.title,
+              summary: tagging.summary,
+              signal: tagging.signal,
+              importance: tagging.importance,
+              facts: tagging.facts,
+              publishedAt: item.publishedAt,
+              fetchedAt: startedAt,
+              entities,
+              domains: tagging.domains,
+              flagged: tagging.flagged,
+            });
+            stored += 1;
             markResolved(item.publishedAt, hash);
-            continue;
+
+            // The embedding is best-effort: the row is already durable in
+            // SQLite, so a ChromaDB outage must not fail the feed and force a
+            // re-tag of items we would then dedupe away anyway.
+            try {
+              await deps.embed(
+                [[item.title, tagging.summary, item.body].filter((part) => part.length > 0).join("\n\n")],
+                [
+                  {
+                    source: urlCanonical,
+                    title: item.title,
+                    entity: entities.join(","),
+                    domain: tagging.domains.join(","),
+                    signal: tagging.signal ?? "",
+                    published_at: item.publishedAt,
+                    source_kind: item.sourceKind,
+                    importance: tagging.importance ?? 0,
+                    watchlist_item_id: itemId,
+                  },
+                ],
+              );
+            } catch (err) {
+              const message = `embed failed for item ${itemId}: ${err instanceof Error ? err.message : String(err)}`;
+              anomalies.push(message);
+              deps.log(message);
+            }
           }
 
-          if (tagged >= limit) {
-            // The cap bites in priority order, because tasks are already in
-            // priority order. Counted, not silently lost.
-            skippedByCap += 1;
-            continue; // deliberately NOT resolved: the watermark stays behind it
-          }
-
-          // A tagger or store failure here propagates to the per-feed catch
-          // below: the feed is marked failed and its watermark stays put, so
-          // the next run re-fetches these items rather than losing them.
-          const candidateIds = computeCandidateIds(item, deps.watchlist, task.entity?.id ?? null);
-          const tagging = await deps.tag(item, candidateIds);
-          tagged += 1;
-
-          // The feed's own entity is always attached: an item pulled from
-          // Roche's newsroom is about Roche whatever the model returned, and
-          // countsByEntity/the digest depend on that link. A topic feed has no
-          // entity of its own, so there the model's answer stands alone (R1:
-          // zero entities is a legitimate result).
-          const entities = [...new Set([...(task.entity !== null ? [task.entity.id] : []), ...tagging.entities])];
-          const itemId = deps.store.insertItem({
-            urlCanonical,
-            contentHash: hash,
-            titleKey: item.titleKey,
-            sourceKind: item.sourceKind,
-            sourceName: item.sourceName,
-            title: item.title,
-            summary: tagging.summary,
-            signal: tagging.signal,
-            importance: tagging.importance,
-            facts: tagging.facts,
-            publishedAt: item.publishedAt,
-            fetchedAt: startedAt,
-            entities,
-            domains: tagging.domains,
-            flagged: tagging.flagged,
-          });
-          stored += 1;
-          markResolved(item.publishedAt, hash);
-
-          // The embedding is best-effort: the row is already durable in
-          // SQLite, so a ChromaDB outage must not fail the feed and force a
-          // re-tag of items we would then dedupe away anyway.
+          // The newest resolved item that is still strictly older than
+          // everything the cap dropped. With nothing eligible -- an empty feed,
+          // or a first batch the cap ate whole -- the previous watermark is
+          // rewritten unchanged, which is null for a feed never seen before.
+          // Never a stand-in like the run's start: that would push a feed's
+          // entire unseen backlog behind an exclusive `since` permanently, and
+          // the FIRST production run is exactly the one that blows the cap,
+          // since every feed backfills with since === null. Recording the
+          // success (even a null one) still clears the failure streak.
+          const cappedFloor =
+            cappedAt.length === 0 ? null : cappedAt.reduce((oldest, at) => (at < oldest ? at : oldest));
+          const eligible =
+            cappedFloor === null ? resolved : resolved.filter((entry) => entry.publishedAt < cappedFloor);
+          const newest = eligible.reduce<{ publishedAt: string; hash: string } | null>(
+            (best, entry) => (best === null || entry.publishedAt > best.publishedAt ? entry : best),
+            null,
+          );
+          deps.store.recordFeedSuccess(
+            task.feedId,
+            newest?.publishedAt ?? state.lastSeenAt,
+            newest?.hash ?? state.lastItemHash,
+          );
+        } catch (err) {
+          failedFeeds.push(task.feedId);
+          let failures = "?";
           try {
-            await deps.embed(
-              [[item.title, tagging.summary, item.body].filter((part) => part.length > 0).join("\n\n")],
-              [
-                {
-                  source: urlCanonical,
-                  title: item.title,
-                  entity: entities.join(","),
-                  domain: tagging.domains.join(","),
-                  signal: tagging.signal ?? "",
-                  published_at: item.publishedAt,
-                  source_kind: item.sourceKind,
-                  importance: tagging.importance ?? 0,
-                  watchlist_item_id: itemId,
-                },
-              ],
-            );
-          } catch (err) {
-            const message = `embed failed for item ${itemId}: ${err instanceof Error ? err.message : String(err)}`;
+            failures = String(deps.store.recordFeedFailure(task.feedId));
+          } catch (recordErr) {
+            // Recording the failure is itself a store write; if THAT throws the
+            // run still has to reach finishRun.
+            const message = `could not record the failure of ${task.label}: ${
+              recordErr instanceof Error ? recordErr.message : String(recordErr)
+            }`;
             anomalies.push(message);
             deps.log(message);
           }
+          deps.log(
+            `feed failed (${failures} in a row): ${task.label}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
-
-        // The watermark only ever advances on a clean pass over a feed. With
-        // no items at all, the previous watermark is rewritten unchanged
-        // (which also clears the feed's failure streak); a feed that has never
-        // produced anything is stamped with this run's start, since `since`
-        // was null for it and it genuinely had nothing to give.
-        deps.store.recordFeedSuccess(
-          task.feedId,
-          newestPublishedAt ?? state.lastSeenAt ?? startedAt,
-          newestHash ?? state.lastItemHash ?? "",
-        );
-      } catch (err) {
-        const failures = deps.store.recordFeedFailure(task.feedId);
-        failedFeeds.push(task.feedId);
-        deps.log(
-          `feed failed (${failures} in a row): ${task.label}: ${err instanceof Error ? err.message : String(err)}`,
-        );
       }
+    } finally {
+      // Always closed out, even if the loop itself dies: an unfinished `runs`
+      // row is indistinguishable from a run still in flight, and cron would
+      // have no way to tell a crash from a quiet night.
+      deps.store.finishRun(runId, deps.now().toISOString(), {
+        fetched,
+        deduped,
+        tagged,
+        failedFeeds: failedFeeds.length,
+        skippedByCap,
+        anomalies: anomalies.length,
+      });
+      deps.log(
+        `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
+          `skippedByCap=${skippedByCap} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
+      );
     }
-
-    deps.store.finishRun(runId, deps.now().toISOString(), {
-      fetched,
-      deduped,
-      tagged,
-      failedFeeds: failedFeeds.length,
-    });
-    deps.log(
-      `run ${runId} done: fetched=${fetched} deduped=${deduped} tagged=${tagged} stored=${stored} ` +
-        `skippedByCap=${skippedByCap} failedFeeds=${failedFeeds.length} anomalies=${anomalies.length}`,
-    );
 
     return { fetched, deduped, tagged, stored, skippedByCap, failedFeeds, anomalies, runId };
   };

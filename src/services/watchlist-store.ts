@@ -86,6 +86,12 @@ export interface RunRecord {
   deduped: number;
   tagged: number;
   failedFeeds: number;
+  // Cap pressure and anomalies are persisted, not just logged: a starved feed
+  // is recorded as a SUCCESS with its failure streak cleared, so the run row
+  // is the only place "the vendors have been starved for six nights" can be
+  // told apart from "the vendors were quiet".
+  skippedByCap: number;
+  anomalies: number;
 }
 
 export interface WatchlistStore {
@@ -109,10 +115,21 @@ export interface WatchlistStore {
   itemsInPeriod(from: string, to: string, options?: { entities?: string[]; domains?: Domain[] }): StoredItem[];
   countsByEntity(from: string, to: string): Array<{ entityId: string; items: number; maxImportance: number }>;
   getFeedState(feedId: string): FeedState;
-  recordFeedSuccess(feedId: string, lastSeenAt: string, lastItemHash: string): void;
+  // lastSeenAt/lastItemHash are nullable: a feed that fetched cleanly but
+  // resolved nothing it is allowed to move past (an empty feed, or one whose
+  // whole first batch was dropped by an ingest cap) has no watermark to
+  // record. Passing null clears the failure streak while leaving the
+  // watermark alone, so the next run still backfills that feed -- stamping a
+  // made-up watermark would push its unseen backlog behind an exclusive
+  // `since` permanently.
+  recordFeedSuccess(feedId: string, lastSeenAt: string | null, lastItemHash: string | null): void;
   recordFeedFailure(feedId: string): number; // returns consecutiveFailures after increment
   startRun(startedAt: string): number;
-  finishRun(runId: number, finishedAt: string, stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number }): void;
+  finishRun(
+    runId: number,
+    finishedAt: string,
+    stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number; skippedByCap: number; anomalies: number },
+  ): void;
   lastRun(): RunRecord | null;
   close(): void;
 }
@@ -208,7 +225,9 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       fetched INTEGER,
       deduped INTEGER,
       tagged INTEGER,
-      failed_feeds INTEGER
+      failed_feeds INTEGER,
+      skipped_by_cap INTEGER,
+      anomalies INTEGER
     );
   `);
 
@@ -260,7 +279,9 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
 
   const startRunStmt = db.prepare(`INSERT INTO runs (started_at) VALUES (?)`);
   const finishRunStmt = db.prepare(`
-    UPDATE runs SET finished_at = ?, fetched = ?, deduped = ?, tagged = ?, failed_feeds = ? WHERE id = ?
+    UPDATE runs
+    SET finished_at = ?, fetched = ?, deduped = ?, tagged = ?, failed_feeds = ?, skipped_by_cap = ?, anomalies = ?
+    WHERE id = ?
   `);
   const lastRunStmt = db.prepare(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`);
 
@@ -438,7 +459,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       };
     },
 
-    recordFeedSuccess(feedId: string, lastSeenAt: string, lastItemHash: string): void {
+    recordFeedSuccess(feedId: string, lastSeenAt: string | null, lastItemHash: string | null): void {
       insertFeedStateStmt.run(feedId);
       recordFeedSuccessStmt.run(lastSeenAt, lastItemHash, feedId);
     },
@@ -455,13 +476,36 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       return Number(result.lastInsertRowid);
     },
 
-    finishRun(runId: number, finishedAt: string, stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number }): void {
-      finishRunStmt.run(finishedAt, stats.fetched, stats.deduped, stats.tagged, stats.failedFeeds, runId);
+    finishRun(
+      runId: number,
+      finishedAt: string,
+      stats: { fetched: number; deduped: number; tagged: number; failedFeeds: number; skippedByCap: number; anomalies: number },
+    ): void {
+      finishRunStmt.run(
+        finishedAt,
+        stats.fetched,
+        stats.deduped,
+        stats.tagged,
+        stats.failedFeeds,
+        stats.skippedByCap,
+        stats.anomalies,
+        runId,
+      );
     },
 
     lastRun(): RunRecord | null {
       const row = lastRunStmt.get() as
-        | { id: number; started_at: string; finished_at: string | null; fetched: number | null; deduped: number | null; tagged: number | null; failed_feeds: number | null }
+        | {
+            id: number;
+            started_at: string;
+            finished_at: string | null;
+            fetched: number | null;
+            deduped: number | null;
+            tagged: number | null;
+            failed_feeds: number | null;
+            skipped_by_cap: number | null;
+            anomalies: number | null;
+          }
         | undefined;
       if (row === undefined) return null;
       return {
@@ -472,6 +516,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
         deduped: row.deduped ?? 0,
         tagged: row.tagged ?? 0,
         failedFeeds: row.failed_feeds ?? 0,
+        skippedByCap: row.skipped_by_cap ?? 0,
+        anomalies: row.anomalies ?? 0,
       };
     },
 

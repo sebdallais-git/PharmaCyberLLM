@@ -93,11 +93,42 @@ describe("watchlist store", () => {
     expect(store.getFeedState("f1")).toMatchObject({ consecutiveFailures: 0, lastItemHash: "h9" });
   });
 
-  it("records a run's stats", () => {
-    const runId = store.startRun("2026-09-19T02:30:00.000Z");
-    store.finishRun(runId, "2026-09-19T03:10:00.000Z", { fetched: 40, deduped: 12, tagged: 28, failedFeeds: 1 });
+  it("clears a failure streak without inventing a watermark", () => {
+    // A feed that fetched cleanly but resolved nothing has no watermark to
+    // record; stamping one would push its unseen backlog behind an exclusive
+    // `since` forever.
+    expect(store.recordFeedFailure("f-null")).toBe(1);
+    store.recordFeedSuccess("f-null", null, null);
 
-    expect(store.lastRun()).toMatchObject({ id: runId, fetched: 40, deduped: 12, tagged: 28, failedFeeds: 1, finishedAt: "2026-09-19T03:10:00.000Z" });
+    expect(store.getFeedState("f-null")).toEqual({
+      feedId: "f-null",
+      lastSeenAt: null,
+      lastItemHash: null,
+      consecutiveFailures: 0,
+    });
+  });
+
+  it("records a run's stats, cap pressure and anomaly count included", () => {
+    const runId = store.startRun("2026-09-19T02:30:00.000Z");
+    store.finishRun(runId, "2026-09-19T03:10:00.000Z", {
+      fetched: 40,
+      deduped: 12,
+      tagged: 28,
+      failedFeeds: 1,
+      skippedByCap: 7,
+      anomalies: 2,
+    });
+
+    expect(store.lastRun()).toMatchObject({
+      id: runId,
+      fetched: 40,
+      deduped: 12,
+      tagged: 28,
+      failedFeeds: 1,
+      skippedByCap: 7,
+      anomalies: 2,
+      finishedAt: "2026-09-19T03:10:00.000Z",
+    });
   });
 
   it("returns null from lastRun when no run has been recorded", () => {

@@ -396,9 +396,11 @@ describe("watchlist ingest", () => {
     harness.store.close();
   });
 
-  it("does not advance a watermark past items the cap dropped", async () => {
-    // The cap defers work, it must not lose it: the next run has to see the
-    // items this one refused to tag.
+  it("does not advance a watermark past items the cap dropped, newest-first", async () => {
+    // The realistic ordering: feeds are newest-first and adapters preserve
+    // feed order, so the cap bites part-way DOWN the list. Stamping the
+    // newest item would push the capped older ones behind an exclusive
+    // `since` and lose them for good.
     const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
     const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
     const harness = makeHarness({
@@ -406,8 +408,9 @@ describe("watchlist ingest", () => {
       limit: 1,
       async rss() {
         return [
-          rawItem({ title: "Older", url: "https://roche.com/a", publishedAt: "2026-09-17T00:00:00.000Z" }),
-          rawItem({ title: "Newer", url: "https://roche.com/b", publishedAt: "2026-09-19T00:00:00.000Z" }),
+          rawItem({ title: "Newest", url: "https://roche.com/c", publishedAt: "2026-09-19T00:00:00.000Z" }),
+          rawItem({ title: "Middle", url: "https://roche.com/b", publishedAt: "2026-09-17T00:00:00.000Z" }),
+          rawItem({ title: "Oldest", url: "https://roche.com/a", publishedAt: "2026-09-16T00:00:00.000Z" }),
         ];
       },
     });
@@ -415,9 +418,153 @@ describe("watchlist ingest", () => {
     const result = await harness.run();
 
     expect(result.stored).toBe(1);
+    expect(result.skippedByCap).toBe(2);
+    // No resolved item is older than the oldest capped one, so the watermark
+    // cannot move at all.
+    expect(harness.store.getFeedState(feedIdFor(roche, rssFeed)).lastSeenAt).toBeNull();
+    harness.store.close();
+  });
+
+  it("clamps the watermark strictly below the oldest item the cap dropped", async () => {
+    // Oldest-first ordering: the two oldest were resolved, the newest was
+    // capped, so the watermark may advance -- but only to an item strictly
+    // older than the capped one (`since` is exclusive).
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      limit: 2,
+      async rss() {
+        return [
+          rawItem({ title: "Oldest", url: "https://roche.com/a", publishedAt: "2026-09-16T00:00:00.000Z" }),
+          rawItem({ title: "Middle", url: "https://roche.com/b", publishedAt: "2026-09-17T00:00:00.000Z" }),
+          rawItem({ title: "Newest", url: "https://roche.com/c", publishedAt: "2026-09-19T00:00:00.000Z" }),
+        ];
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.stored).toBe(2);
     expect(result.skippedByCap).toBe(1);
     expect(harness.store.getFeedState(feedIdFor(roche, rssFeed)).lastSeenAt).toBe("2026-09-17T00:00:00.000Z");
     harness.store.close();
+  });
+
+  it("leaves a never-seen feed's watermark null when the cap ate its whole first batch", async () => {
+    // The first production run is exactly the one that blows the cap: every
+    // feed backfills with since === null. A feed that resolved nothing must
+    // stay unstamped so the next run backfills it again.
+    const rocheFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const awsFeed: Feed = { kind: "rss", url: "https://aws.example/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", kind: "customer", feeds: [rocheFeed] });
+    const aws = makeEntity({ id: "aws", name: "Amazon Web Services", kind: "vendor", feeds: [awsFeed] });
+    const store = openWatchlistStore(":memory:");
+    const watchlist = makeWatchlist([roche, aws]);
+    const rss = async (_feed: Feed, entity: Entity): Promise<RawItem[]> => [
+      rawItem({
+        title: `${entity.name} does a thing`,
+        url: `https://${entity.id}.example/a`,
+        publishedAt: "2026-09-19T00:00:00.000Z",
+      }),
+    ];
+
+    const starved = makeHarness({ watchlist, store, limit: 1, rss });
+    const first = await starved.run();
+
+    expect(first.skippedByCap).toBe(1);
+    expect(store.getFeedState(feedIdFor(aws, awsFeed)).lastSeenAt).toBeNull();
+    // A starved feed still fetched cleanly, so its failure streak is clear.
+    expect(store.getFeedState(feedIdFor(aws, awsFeed)).consecutiveFailures).toBe(0);
+
+    // Next run, with room again: the vendor's item comes back and is stored.
+    const roomy = makeHarness({ watchlist, store, limit: 250, rss });
+    const second = await roomy.run();
+
+    // The customer's feed resolved its item and advanced; the starved
+    // vendor's is still backfilling from scratch.
+    expect(roomy.rssCalls.map((call) => call.since)).toEqual(["2026-09-19T00:00:00.000Z", null]);
+    expect(second.stored + second.deduped).toBe(2);
+    expect(store.itemsInPeriod(ALL_TIME.from, ALL_TIME.to).map((item) => item.title).sort()).toEqual([
+      "Amazon Web Services does a thing",
+      "Roche does a thing",
+    ]);
+    store.close();
+  });
+
+  it("persists skippedByCap and the anomaly count with the run", async () => {
+    // Starvation has to be visible in the DB tomorrow, not only in tonight's
+    // stdout: a starved feed is recorded as a success, so the run row is the
+    // only place the pressure shows up.
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const irFeed: Feed = { kind: "ir_page", url: "https://roche.com/investors" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed, irFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      limit: 1,
+      async rss() {
+        return [
+          rawItem({ title: "One", url: "https://roche.com/a", publishedAt: "2026-09-16T00:00:00.000Z" }),
+          rawItem({ title: "Two", url: "https://roche.com/b", publishedAt: "2026-09-17T00:00:00.000Z" }),
+        ];
+      },
+      async irPage() {
+        return { items: [], linksScanned: 9, datedLinks: 0 };
+      },
+    });
+
+    const result = await harness.run();
+    const run = harness.store.lastRun();
+
+    expect(result.skippedByCap).toBe(1);
+    expect(run?.skippedByCap).toBe(1);
+    expect(run?.anomalies).toBe(1);
+    harness.store.close();
+  });
+
+  it("dedupes on the canonical url alone and leaves the stored item untouched", async () => {
+    // Same page, re-typeset body: the content hash differs, so only step 1 of
+    // the ladder can catch it -- and the tagging already stored must survive.
+    const store = openWatchlistStore(":memory:");
+    const title = "Roche picks a cloud";
+    store.insertItem({
+      urlCanonical: canonicalUrl("https://roche.com/a"),
+      contentHash: contentHash(title, "the original body"),
+      titleKey: titleKey(title),
+      sourceKind: "rss",
+      sourceName: "Roche",
+      title,
+      summary: "already summarised",
+      signal: "it_move",
+      importance: 4,
+      publishedAt: "2026-09-18T00:00:00.000Z",
+      fetchedAt: "2026-09-19T00:00:00.000Z",
+      entities: ["roche"],
+      domains: ["cloud"],
+    });
+
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      store,
+      async rss() {
+        return [rawItem({ title, url: "https://roche.com/a?utm_source=news", body: "a re-typeset body" })];
+      },
+      async tag() {
+        return { ...defaultTagging, summary: "MUST NOT REPLACE" };
+      },
+    });
+
+    const result = await harness.run();
+
+    expect(result.deduped).toBe(1);
+    expect(result.stored).toBe(0);
+    expect(harness.tagCalls).toHaveLength(0);
+    const kept = store.findByUrl(canonicalUrl("https://roche.com/a"));
+    expect(kept?.summary).toBe("already summarised");
+    expect(kept?.importance).toBe(4);
+    store.close();
   });
 
   it("records a throwing feed as a failure, keeps going, and never advances its watermark", async () => {
@@ -586,6 +733,26 @@ describe("watchlist ingest", () => {
     rssHarness.store.close();
   });
 
+  it("treats a non-positive EDGAR interval as the default, never as 'no gate' (R17)", async () => {
+    const entities = ["a", "b"].map((id) =>
+      makeEntity({ id, name: id.toUpperCase(), feeds: [{ kind: "edgar", cik: `000000000${id.charCodeAt(0)}` }] }),
+    );
+    const harness = makeHarness({
+      watchlist: makeWatchlist(entities),
+      edgarMinIntervalMs: 0,
+      async edgar() {
+        return [];
+      },
+    });
+
+    await harness.run();
+
+    const [first, second] = harness.edgarCalls;
+    // EDGAR_MIN_INTERVAL_MS is 100ms; 0 must not switch the SEC's limit off.
+    expect(second.at - first.at).toBeGreaterThanOrEqual(90);
+    harness.store.close();
+  });
+
   it("gives the tagger the feed's own entity plus entities named in the item", async () => {
     const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
     const roche = makeEntity({ id: "roche", name: "Roche", aliases: ["Genentech"], feeds: [rssFeed] });
@@ -722,6 +889,37 @@ describe("watchlist ingest", () => {
     expect(result.stored).toBe(1);
     expect(result.failedFeeds).toEqual([]);
     expect(result.anomalies.join(" ")).toContain("embed");
+    store.close();
+  });
+
+  it("finishes the run even when a store read throws for one feed", async () => {
+    const rssFeed: Feed = { kind: "rss", url: "https://roche.com/feed.xml" };
+    const roche = makeEntity({ id: "roche", name: "Roche", feeds: [rssFeed] });
+    const store = openWatchlistStore(":memory:");
+    const harness = makeHarness({
+      watchlist: makeWatchlist([roche]),
+      store,
+      async rss() {
+        return [];
+      },
+    });
+    const realGetFeedState = store.getFeedState.bind(store);
+    let firstRead = true;
+    harness.deps.store = {
+      ...store,
+      getFeedState(feedId: string) {
+        if (firstRead) {
+          firstRead = false;
+          throw new Error("database is locked");
+        }
+        return realGetFeedState(feedId);
+      },
+    };
+
+    const result = await createIngestRun(harness.deps)();
+
+    expect(result.failedFeeds).toEqual([feedIdFor(roche, rssFeed)]);
+    expect(store.lastRun()?.finishedAt).not.toBeNull();
     store.close();
   });
 
