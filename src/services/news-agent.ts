@@ -10,7 +10,7 @@ import type { GraphEntity, GraphRelationship } from "./graph-store.js";
 import { getLlmClient } from "./llm-client.js";
 import { getIndexStatus } from "./index-guard.js";
 import { isBenchmarkActive, trackJob } from "./bench-mode.js";
-import { loadWatchlist } from "./watchlist-config.js";
+import { loadWatchlist, type Watchlist } from "./watchlist-config.js";
 
 const KNOWLEDGE_DIR = join(process.cwd(), "knowledge");
 const AGENT_STATE_PATH = join(KNOWLEDGE_DIR, ".agent-state.json");
@@ -34,7 +34,35 @@ interface AgentState {
 // so a topic can be added or retired in one place instead of two drifting
 // lists. Every one of the 188 strings this constant used to hold verbatim
 // is still present in config/watchlist.yaml, split across its topic groups.
-const WATCHLIST_SEARCH_TOPICS: string[] = loadWatchlist().topics.map((topic) => topic.query);
+//
+// I2: read lazily, memoized, and never allowed to throw. This used to be a
+// module-scope `loadWatchlist()` call, and src/server.ts imports this module
+// -- so a typo in config/watchlist.yaml (a file the README tells the owner to
+// edit, and he edits it from an iPad) took the whole PharmaLLM server down at
+// boot, with a YAML error for a stack trace. A broken config must cost the
+// news agent its topic list for the night, nothing more.
+export function createTopicsLoader(load: () => Watchlist): () => string[] {
+  let cache: string[] | null = null;
+  return () => {
+    if (cache === null) {
+      try {
+        cache = load().topics.map((topic) => topic.query);
+      } catch (err) {
+        // Logged once (the memo holds the empty list afterwards), so a broken
+        // config is loud in the server log without being repeated per scrub.
+        console.error(
+          `[News Agent] config/watchlist.yaml could not be read (${
+            err instanceof Error ? err.message : String(err)
+          }); continuing with no search topics until it is fixed`,
+        );
+        cache = [];
+      }
+    }
+    return cache;
+  };
+}
+
+const watchlistSearchTopics = createTopicsLoader(() => loadWatchlist());
 
 async function fetchGoogleNewsRSS(query: string): Promise<NewsItem[]> {
   const params = new URLSearchParams({
@@ -223,7 +251,7 @@ async function runNewsScrub(): Promise<{ newArticles: number; topics: number }> 
 
   const chromaOk = await isChromaDBAvailable().catch(() => false);
 
-  for (const topic of WATCHLIST_SEARCH_TOPICS) {
+  for (const topic of watchlistSearchTopics()) {
     const items = await fetchGoogleNewsRSS(topic);
     topicsProcessed++;
 
@@ -295,5 +323,5 @@ async function runNewsScrub(): Promise<{ newArticles: number; topics: number }> 
 }
 
 export function getAgentTopics(): string[] {
-  return [...WATCHLIST_SEARCH_TOPICS];
+  return [...watchlistSearchTopics()];
 }
