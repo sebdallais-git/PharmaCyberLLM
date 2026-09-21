@@ -1,0 +1,117 @@
+import { describe, expect, it } from "@jest/globals";
+import {
+  parseAccounts,
+  accountToGraphFacts,
+  parseNeedsMap,
+  needsMapToGraphFacts,
+} from "../src/services/graph-accounts.js";
+
+const yaml = (body: string) => `accounts:\n${body}`;
+
+const roche = yaml(`  roche:
+    name: Roche
+    aliases: [Genentech]
+    needs: [rnd-compute, gxp-compliance]
+    incumbents:
+      storage-file: [dell]
+      compute-standard: [hpe, lenovo]
+`);
+
+describe("parseAccounts", () => {
+  it("reads accounts, needs and incumbents", () => {
+    const [account] = parseAccounts(roche);
+
+    expect(account.id).toBe("roche");
+    expect(account.name).toBe("Roche");
+    expect(account.needs).toEqual(["rnd-compute", "gxp-compliance"]);
+    expect(account.incumbents).toEqual({ "storage-file": ["dell"], "compute-standard": ["hpe", "lenovo"] });
+  });
+
+  it("rejects an incumbency in a segment outside the closed set", () => {
+    const bad = yaml(`  roche:
+    name: Roche
+    needs: []
+    incumbents:
+      storage: [dell]
+`);
+    expect(() => parseAccounts(bad)).toThrow(/storage/);
+  });
+
+  it("rejects a need outside the closed set", () => {
+    const bad = yaml(`  roche:
+    name: Roche
+    needs: [world-peace]
+    incumbents: {}
+`);
+    expect(() => parseAccounts(bad)).toThrow(/world-peace/);
+  });
+
+  it("accepts an account with no incumbents recorded yet", () => {
+    // Blank is the honest default: a guessed incumbent flips defend into
+    // displace while sounding just as confident.
+    const blank = yaml(`  sandoz:
+    name: Sandoz
+    needs: [cost-optimisation]
+    incumbents: {}
+`);
+    expect(parseAccounts(blank)[0].incumbents).toEqual({});
+  });
+});
+
+describe("accountToGraphFacts", () => {
+  it("emits the account, its needs and a USES edge per incumbent", () => {
+    const facts = accountToGraphFacts(parseAccounts(roche)[0]);
+
+    expect(facts.nodes.filter((n) => n.label === "Account")).toHaveLength(1);
+    expect(facts.nodes.filter((n) => n.label === "Need")).toHaveLength(2);
+    expect(facts.relationships.filter((r) => r.type === "HAS_NEED")).toHaveLength(2);
+    expect(facts.relationships.filter((r) => r.type === "USES")).toHaveLength(3);
+  });
+
+  it("materialises a Vendor node for an incumbent with no brief", () => {
+    // Deliberately unlike a competitor named in a brief, which stays a claim.
+    // An incumbent is observed reality at the account and must exist whether or
+    // not anyone has researched that vendor -- lenovo has no brief.
+    const facts = accountToGraphFacts(parseAccounts(roche)[0]);
+
+    expect(facts.nodes.filter((n) => n.label === "Vendor").map((n) => n.id).sort()).toEqual([
+      "dell",
+      "hpe",
+      "lenovo",
+    ]);
+  });
+
+  it("puts the segment on the USES edge so incumbency is per segment", () => {
+    const facts = accountToGraphFacts(parseAccounts(roche)[0]);
+    const uses = facts.relationships.filter((r) => r.type === "USES");
+
+    expect(uses.find((r) => r.to === "dell")?.properties.segment).toBe("storage-file");
+    expect(uses.filter((r) => r.properties.segment === "compute-standard").map((r) => r.to).sort()).toEqual([
+      "hpe",
+      "lenovo",
+    ]);
+  });
+});
+
+describe("parseNeedsMap", () => {
+  it("maps needs onto the segments that address them", () => {
+    const map = parseNeedsMap("needs:\n  rnd-compute: [compute-ai, storage-file]\n");
+
+    expect(map["rnd-compute"]).toEqual(["compute-ai", "storage-file"]);
+  });
+
+  it("rejects a segment outside the closed set", () => {
+    expect(() => parseNeedsMap("needs:\n  rnd-compute: [storage]\n")).toThrow(/storage/);
+  });
+
+  it("rejects a need outside the closed set", () => {
+    expect(() => parseNeedsMap("needs:\n  world-peace: [services]\n")).toThrow(/world-peace/);
+  });
+
+  it("emits one ADDRESSED_BY edge per need-segment pair", () => {
+    const facts = needsMapToGraphFacts(parseNeedsMap("needs:\n  rnd-compute: [compute-ai, storage-file]\n"));
+
+    expect(facts.relationships.filter((r) => r.type === "ADDRESSED_BY")).toHaveLength(2);
+    expect(facts.nodes.map((n) => n.label).sort()).toEqual(["Need", "Segment", "Segment"]);
+  });
+});

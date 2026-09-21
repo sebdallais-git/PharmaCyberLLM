@@ -11,6 +11,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import neo4j from "neo4j-driver";
 import { briefToGraphFacts, parseVendorBrief } from "../src/services/graph-schema.js";
+import {
+  accountToGraphFacts,
+  needsMapToGraphFacts,
+  parseAccounts,
+  parseNeedsMap,
+} from "../src/services/graph-accounts.js";
 import { writeGraphFacts, type GraphWriter } from "../src/services/graph-writer.js";
 
 const URI = process.env.NEO4J_URI ?? "bolt://localhost:7687";
@@ -36,6 +42,33 @@ for (const { file, brief, facts } of batch) {
   );
 }
 
+// Accounts are optional: the vendor half stands alone, and a missing local
+// file must not stop a rebuild. Its absence is reported, not swallowed.
+const extra = [];
+const needsPath = join(process.cwd(), "config", "needs.yaml");
+try {
+  const facts = needsMapToGraphFacts(parseNeedsMap(readFileSync(needsPath, "utf8")));
+  extra.push(facts);
+  console.log(`\nneeds.yaml                   -> ${facts.relationships.length} ADDRESSED_BY edges`);
+} catch (err) {
+  console.log(`\nneeds.yaml                   -> skipped (${(err as Error).message})`);
+}
+
+const accountsPath = join(process.cwd(), "config", "accounts.local.yaml");
+try {
+  for (const account of parseAccounts(readFileSync(accountsPath, "utf8"))) {
+    const facts = accountToGraphFacts(account);
+    extra.push(facts);
+    const held = Object.keys(account.incumbents).length;
+    console.log(
+      `${(account.id + ".account").padEnd(28)} ${account.needs.length} needs, ` +
+        `${held} segment(s) with a known incumbent -> ${facts.relationships.length} rels`,
+    );
+  }
+} catch (err) {
+  console.log(`accounts.local.yaml          -> skipped (${(err as Error).message})`);
+}
+
 if (!apply) {
   // Still runs the whole validation and dedupe path, just against a writer that
   // records instead of writing -- a dry run that skipped it would prove nothing.
@@ -49,7 +82,7 @@ if (!apply) {
       counted.relationships++;
     },
   };
-  await writeGraphFacts(batch.map((b) => b.facts), noop);
+  await writeGraphFacts([...batch.map((b) => b.facts), ...extra], noop);
   console.log(`\nDRY RUN — would write ${counted.nodes} nodes and ${counted.relationships} relationships`);
   console.log("pass --apply to write, add --rebuild to wipe the graph first");
   process.exit(0);
@@ -68,17 +101,23 @@ const liveWriter: GraphWriter = {
     // closed set. Never relax that check.
     await session.run(`MERGE (n:${label} {id: $id}) SET n += $properties`, { id, properties });
   },
-  async mergeRelationship(type, from, to, properties) {
+  async mergeRelationship(type, from, to, properties, identity) {
+    // Identity properties belong in the MERGE pattern: without them, two USES
+    // edges for different segments collapse into one and a segment is lost.
+    const pattern = identity.length
+      ? `{${identity.map((k) => `${k}: $id_${k}`).join(", ")}}`
+      : "";
+    const idParams = Object.fromEntries(identity.map((k) => [`id_${k}`, properties[k]]));
     await session.run(
-      `MATCH (a {id: $from}), (b {id: $to}) MERGE (a)-[r:${type}]->(b) SET r += $properties`,
-      { from, to, properties },
+      `MATCH (a {id: $from}), (b {id: $to}) MERGE (a)-[r:${type} ${pattern}]->(b) SET r += $properties`,
+      { from, to, properties, ...idParams },
     );
   },
 };
 
 try {
   if (rebuild) console.log("\nWIPING the graph before writing (--rebuild)");
-  const written = await writeGraphFacts(batch.map((b) => b.facts), liveWriter, { rebuild });
+  const written = await writeGraphFacts([...batch.map((b) => b.facts), ...extra], liveWriter, { rebuild });
   console.log(`\nAPPLIED — ${written.nodes} nodes, ${written.relationships} relationships`);
 
   const check = await session.run(

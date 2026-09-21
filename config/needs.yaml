@@ -1,0 +1,58 @@
+# Which segments address which customer need.
+#
+# This is the hinge of the whole query: an account declares needs, and this maps
+# them to the segments where a conversation is worth having. Get it wrong and
+# the system recommends the wrong part of the portfolio with full confidence.
+#
+# PROPOSED 2026-09-21, for Seb to correct — these are reasoned, not researched.
+# Both keys and values are validated against the closed sets in graph-schema.ts.
+
+needs:
+  rnd-compute:
+    # Discovery: cryo-EM, sequencing, molecular dynamics. Compute plus the file
+    # tier those pipelines actually stall on.
+    - compute-ai
+    - compute-standard
+    - storage-file
+
+  ai-factory:
+    # Training and inference at scale: GPUs, a parallel filesystem, and the
+    # fabric between them.
+    - compute-ai
+    - storage-file
+    - networking
+
+  gxp-compliance:
+    # Validated estates and regulated records: retention, immutability, and the
+    # services that keep validation current.
+    - data-protection
+    - storage-object
+    - services
+
+  cyber-resilience:
+    # Detection on primary storage plus an air-gapped, immutable recovery path.
+    - data-protection
+    - storage-block
+    - storage-file
+
+  data-sovereignty:
+    # Customer-owned, customer-sited, no foreign operator in the control path.
+    - storage-object
+    - storage-block
+    - services
+
+  manufacturing-ot:
+    # MES, LIMS and SCADA at plant sites: small resilient clusters, pinned
+    # hypervisors, segmented networks.
+    - hci
+    - compute-standard
+    - networking
+
+  cost-optimisation:
+    - services
+    - storage-object
+    - client
+
+  sustainability:
+    - compute-standard
+    - services

@@ -10,6 +10,7 @@ import {
   type GraphFacts,
   type GraphNode,
   type GraphRelationship,
+  EDGE_IDENTITY,
   type NodeLabel,
   type RelationshipType,
 } from "./graph-schema.js";
@@ -25,6 +26,7 @@ export interface GraphWriter {
     from: string,
     to: string,
     properties: Record<string, unknown>,
+    identity: string[],
   ): Promise<void>;
 }
 
@@ -86,7 +88,9 @@ export async function writeGraphFacts(
   if (options.rebuild) await writer.clear();
 
   for (const node of nodes.values()) await writer.mergeNode(node.label, node.id, node.properties);
-  for (const rel of relationships) await writer.mergeRelationship(rel.type, rel.from, rel.to, rel.properties);
+  for (const rel of relationships) {
+    await writer.mergeRelationship(rel.type, rel.from, rel.to, rel.properties, EDGE_IDENTITY[rel.type]);
+  }
 
   return { nodes: nodes.size, relationships: relationships.length };
 }

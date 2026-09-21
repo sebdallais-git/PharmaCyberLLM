@@ -47,6 +47,25 @@ export const RELATIONSHIP_TYPES = [
   "SUPPORTS",
 ] as const;
 
+/**
+ * Properties that identify an edge, per relationship type.
+ *
+ * An account can use one vendor in several segments -- Roche runs HPE in both
+ * compute-ai and compute-standard -- so merging USES on (from, type, to) alone
+ * collapses them and loses a segment silently. Identity properties go INTO the
+ * MERGE pattern; everything else is SET afterwards, so values that legitimately
+ * change (a rationale, an asOf) update in place instead of creating duplicates.
+ */
+export const EDGE_IDENTITY: Record<RelationshipType, string[]> = {
+  OFFERS: [],
+  IN_SEGMENT: [],
+  COMPETES_IN: [],
+  HAS_NEED: [],
+  ADDRESSED_BY: [],
+  USES: ["segment"],
+  SUPPORTS: ["url"],
+};
+
 export type Segment = (typeof SEGMENTS)[number];
 export type Need = (typeof NEEDS)[number];
 export type Position = (typeof POSITIONS)[number];

@@ -13,8 +13,9 @@ function fakeWriter(): GraphWriter & { merged: string[]; cleared: number } {
     async mergeNode(label, id) {
       merged.push(`node ${label}:${id}`);
     },
-    async mergeRelationship(type, from, to) {
-      merged.push(`rel ${from}-[${type}]->${to}`);
+    async mergeRelationship(type, from, to, properties, identity) {
+      const key = (identity ?? []).map((k) => `${k}=${properties[k]}`).join(",");
+      merged.push(`rel ${from}-[${type}${key ? " " + key : ""}]->${to}`);
     },
   };
 }
@@ -102,5 +103,31 @@ describe("writeGraphFacts", () => {
     await writeGraphFacts([facts()], second);
 
     expect(second.merged).toEqual([...first.merged, ...first.merged]);
+  });
+});
+
+describe("relationships distinguished by a property", () => {
+  // An account can use one vendor in several segments: Roche runs HPE in both
+  // compute-ai and compute-standard. Merging on (from, type, to) alone collapses
+  // those into one edge and the second segment is lost silently -- which is
+  // exactly what happened against real data on 2026-09-21.
+  it("keeps one USES edge per segment between the same pair", async () => {
+    const writer = fakeWriter();
+    const facts = {
+      nodes: [
+        { label: "Account" as const, id: "roche", properties: {} },
+        { label: "Vendor" as const, id: "hpe", properties: {} },
+      ],
+      relationships: [
+        { type: "USES" as const, from: "roche", to: "hpe", properties: { segment: "compute-ai" } },
+        { type: "USES" as const, from: "roche", to: "hpe", properties: { segment: "compute-standard" } },
+      ],
+    };
+
+    await writeGraphFacts([facts], writer);
+
+    const uses = writer.merged.filter((m) => m.includes("[USES"));
+    expect(uses).toHaveLength(2);
+    expect(new Set(uses).size).toBe(2);
   });
 });
