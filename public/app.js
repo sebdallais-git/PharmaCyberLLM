@@ -375,7 +375,9 @@ async function sendMessage() {
           // pipeline status ("searching knowledge base"). Different things.
           if (!thinkingPanel) {
             thinkingPanel = createThinkingPanel();
-            messageEl.insertBefore(thinkingPanel.el, messageEl.firstChild);
+            // Above the answer, beside the RAG panel — same container the
+            // reasoning panel is inserted into.
+            wrapperDiv.insertBefore(thinkingPanel.el, contentDiv);
           }
           thinkingPanel.append(data.thinking);
         }
@@ -429,7 +431,18 @@ async function sendMessage() {
     }
   } catch (error) {
     removeTyping();
-    addMessage("assistant", "Connection error. Make sure PharmaLLM and its LLM stack are running.");
+    // This catch wraps the whole request AND the rendering that follows it, so
+    // a bug in this file used to surface as "Connection error" and send people
+    // to check a stack that was perfectly healthy. Tell the two apart.
+    console.error("[chat] request failed:", error);
+    const networkFailure =
+      error instanceof TypeError && /fetch|network|load failed|failed to fetch/i.test(error.message || "");
+    addMessage(
+      "assistant",
+      networkFailure
+        ? "Connection error. Make sure PharmaLLM and its LLM stack are running."
+        : `Something went wrong in the page, not the stack: ${error.message}. See the browser console.`,
+    );
   } finally {
     sendBtn.disabled = false;
   }
