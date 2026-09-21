@@ -1,17 +1,17 @@
-// Knowledge graph tools (Neo4j via PharmaLLM)
+// Knowledge graph tools (Neo4j via PharmaITChat)
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PharmaLLMClient } from "../pharmallm-client.js";
+import type { PharmaITChatClient } from "../pharmaitchat-client.js";
 import { runTool } from "./result.js";
 import type { ToolLogger } from "./result.js";
 
-export function registerGraphTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+export function registerGraphTools(server: McpServer, client: PharmaITChatClient, log: ToolLogger): void {
   server.registerTool(
     "graph_search",
     {
       description:
-        "Look up an entity in PharmaLLM's knowledge graph (company, drug, threat actor, attack, vendor, regulation…) " +
+        "Look up an entity in PharmaITChat's knowledge graph (company, drug, threat actor, attack, vendor, regulation…) " +
         "and return it with its neighbours and relationships.",
       inputSchema: { entity: z.string().min(1).describe("Entity name, e.g. 'LockBit' or 'Novartis'") },
     },

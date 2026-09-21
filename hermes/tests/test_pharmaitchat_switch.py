@@ -1,4 +1,4 @@
-"""Tests for the pharmallm-switch Hermes plugin. Stdlib only: no Telegram, no Hermes, no live app."""
+"""Tests for the pharmaitchat-switch Hermes plugin. Stdlib only: no Telegram, no Hermes, no live app."""
 
 import asyncio
 import importlib.util
@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins" / "pharmallm-switch"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins" / "pharmaitchat-switch"
 TOKEN = "0123456789abcdef0123456789abcdef"
 
 
@@ -30,15 +30,15 @@ class _LocalHTTPServer(HTTPServer):
 def load_plugin():
     # Loaded as a package, the way Hermes loads it, so the plugin's relative import resolves
     spec = importlib.util.spec_from_file_location(
-        "pharmallm_switch", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
+        "pharmaitchat_switch", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
     module = importlib.util.module_from_spec(spec)
-    sys.modules["pharmallm_switch"] = module
+    sys.modules["pharmaitchat_switch"] = module
     spec.loader.exec_module(module)
     return module
 
 
 plugin = load_plugin()
-tap = sys.modules["pharmallm_switch.tap"]
+tap = sys.modules["pharmaitchat_switch.tap"]
 
 
 class ParseTapTest(unittest.TestCase):
@@ -67,10 +67,10 @@ class OutcomeTest(unittest.TestCase):
     def test_maps_each_app_reply(self):
         confirm, cancel = tap.Tap("confirm", TOKEN), tap.Tap("cancel", TOKEN)
         switching = tap.outcome_for(confirm, tap.AppReply(200, {"status": "switching", "target": "mlx"}))
-        self.assertEqual(switching.text, "✅ Switching to mlx — PharmaLLM restarts in a moment")
+        self.assertEqual(switching.text, "✅ Switching to mlx — PharmaITChat restarts in a moment")
         self.assertEqual(tap.outcome_for(cancel, tap.AppReply(200, {})).text, "✖ Switch cancelled")
         self.assertEqual(tap.outcome_for(confirm, tap.AppReply(410, {})).text,
-                         "⌛ Expired — request the switch again from PharmaLLM")
+                         "⌛ Expired — request the switch again from PharmaITChat")
 
     def test_keeps_the_buttons_when_the_app_cannot_be_reached(self):
         down = tap.outcome_for(tap.Tap("confirm", TOKEN), tap.AppReply(0, {}, "ConnectionRefusedError"))
@@ -222,8 +222,8 @@ class HandleTapTest(unittest.TestCase):
 
     def test_leaves_the_message_alone_when_the_outcome_keeps_the_buttons(self):
         query = FakeQuery(f"pls:no:{TOKEN}", 424242)
-        self.run_tap(query, tap.Outcome("⚠️ Could not reach PharmaLLM (HTTP 500)", None))
-        self.assertEqual(query.answers, ["⚠️ Could not reach PharmaLLM (HTTP 500)"])
+        self.run_tap(query, tap.Outcome("⚠️ Could not reach PharmaITChat (HTTP 500)", None))
+        self.assertEqual(query.answers, ["⚠️ Could not reach PharmaITChat (HTTP 500)"])
         self.assertEqual(query.edits, [])
 
     def test_edits_even_when_telegram_rejects_the_answer(self):
@@ -240,8 +240,8 @@ class ReadyFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             path = plugin.write_ready_file(Path(home), 4242, 777)
             self.assertEqual(json.loads(path.read_text()), {"pid": 4242, "start_time": 777})
-            self.assertEqual(path.name, "pharmallm-switch.ready.json")
-            self.assertEqual([p.name for p in Path(home).iterdir()], ["pharmallm-switch.ready.json"])
+            self.assertEqual(path.name, "pharmaitchat-switch.ready.json")
+            self.assertEqual([p.name for p in Path(home).iterdir()], ["pharmaitchat-switch.ready.json"])
 
 
 class FakeAdapter:

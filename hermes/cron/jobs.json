@@ -1,33 +1,33 @@
 [
   {
-    "name": "pharmallm-news-digest",
+    "name": "pharmaitchat-news-digest",
     "schedule": "0 6 * * *",
     "deliver": "telegram",
     "prompt": "Scheduled job: morning news digest. Call run_news_agent once and wait for it to finish. Then call knowledge_status. Reply with a digest of at most 10 lines: how many items were added, and the most notable pharma and cyber items with their sources. If run_news_agent fails, reply with one line saying why."
   },
   {
-    "name": "pharmallm-gap-resolution",
+    "name": "pharmaitchat-gap-resolution",
     "schedule": "0 7 * * *",
     "deliver": "telegram",
     "prompt": "Scheduled job: knowledge gap resolution. Call list_knowledge_gaps with status triggered. Pick at most 3 gaps, oldest first, and call resolve_knowledge_gap for each with its id and original query. Do not call add_knowledge. Reply with one line per gap: the question and whether it is now resolved. If there are no triggered gaps, reply [SILENT]."
   },
   {
-    "name": "pharmallm-health-watch",
+    "name": "pharmaitchat-health-watch",
     "schedule": "0 9,19 * * *",
     "deliver": "telegram",
     "prompt": "Scheduled job: health watch. Call system_health once. If its status is healthy, reply with exactly [SILENT] and nothing else. Otherwise reply with at most 5 lines naming the stack and each failing check with its error."
   },
   {
-    "name": "pharmallm-feedback-digest",
+    "name": "pharmaitchat-feedback-digest",
     "schedule": "0 8 * * 1",
     "deliver": "telegram",
     "prompt": "Scheduled job: weekly feedback digest. Call feedback_report with kind weekly_digest, then feedback_report with kind low_rated. Reply with at most 15 lines: rating trends for the week and the worst-rated answers with the question and what went wrong."
   },
   {
-    "name": "pharmallm-watchlist-ingest",
+    "name": "pharmaitchat-watchlist-ingest",
     "schedule": "30 2 * * *",
     "kind": "script",
-    "script": "pharmallm-watchlist-ingest.sh",
+    "script": "pharmaitchat-watchlist-ingest.sh",
     "no_agent": true,
     "deliver": "local",
     "failure_deliver": "telegram",

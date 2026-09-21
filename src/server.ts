@@ -1,4 +1,4 @@
-// PharmaLLM server entry point
+// PharmaITChat server entry point
 
 import express from "express";
 import { createServer as createHttpsServer } from "node:https";
@@ -161,7 +161,7 @@ async function start(): Promise<void> {
 
   // Start HTTP server
   app.listen(PORT, HOST, () => {
-    console.log(`PharmaLLM running on http://${HOST}:${PORT}`);
+    console.log(`PharmaITChat running on http://${HOST}:${PORT}`);
   });
 
   // Start HTTPS server if certs exist (required for iPad mic access)
@@ -173,7 +173,7 @@ async function start(): Promise<void> {
       cert: readFileSync(certPath),
     };
     createHttpsServer(httpsOptions, app).listen(HTTPS_PORT, HOST, () => {
-      console.log(`PharmaLLM HTTPS running on https://${HOST}:${HTTPS_PORT}`);
+      console.log(`PharmaITChat HTTPS running on https://${HOST}:${HTTPS_PORT}`);
     });
   }
 

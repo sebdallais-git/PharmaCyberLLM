@@ -1,5 +1,5 @@
 // Can the Hermes gateway receive a stack-switch button tap? The app shares Hermes' bot and Hermes is
-// its only update consumer, so the tap reaches us only through the pharmallm-switch plugin. Ready
+// its only update consumer, so the tap reaches us only through the pharmaitchat-switch plugin. Ready
 // means the gateway runs, Telegram is connected, and the plugin's ready file names this very gateway
 // process: pid and start time together, since a pid alone can be reused after a crash.
 
@@ -40,10 +40,10 @@ export function evaluateReadiness(status: unknown, readyFile: unknown): HermesRe
   if (telegram?.state !== "connected") return { ready: false, reason: "Hermes is not connected to Telegram" };
   const plugin = asRecord(readyFile);
   if (!plugin) {
-    return { ready: false, reason: "the pharmallm-switch plugin is not loaded (scripts/hermes-setup.sh install-plugin)" };
+    return { ready: false, reason: "the pharmaitchat-switch plugin is not loaded (scripts/hermes-setup.sh install-plugin)" };
   }
   if (typeof gateway.pid !== "number" || plugin.pid !== gateway.pid || plugin.start_time !== gateway.start_time) {
-    return { ready: false, reason: "the pharmallm-switch plugin was loaded by an earlier gateway process; restart the gateway" };
+    return { ready: false, reason: "the pharmaitchat-switch plugin was loaded by an earlier gateway process; restart the gateway" };
   }
   return { ready: true, reason: "" };
 }

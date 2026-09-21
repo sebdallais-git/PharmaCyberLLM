@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { bearerToken, isLoopbackAddress, tokensMatch } from "./config.js";
 import type { McpConfig } from "./config.js";
 import { buildMcpServer } from "./mcp-server.js";
-import type { PharmaLLMClient } from "./pharmallm-client.js";
+import type { PharmaITChatClient } from "./pharmaitchat-client.js";
 import type { ToolLogger, ToolOptions } from "./tools/result.js";
 
 export interface McpAuthResult {
@@ -35,18 +35,18 @@ function jsonRpcError(res: Response, status: number, code: number, message: stri
   res.status(status).json({ jsonrpc: "2.0", error: { code, message }, id: null });
 }
 
-export function createHttpApp(config: McpConfig, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): Express {
+export function createHttpApp(config: McpConfig, client: PharmaITChatClient, log: ToolLogger, options: ToolOptions = {}): Express {
   const app = express();
 
   app.get("/healthz", async (_req: Request, res: Response) => {
-    let pharmallm = false;
+    let pharmaitchat = false;
     try {
       await client.get("/api/health", 3000);
-      pharmallm = true;
+      pharmaitchat = true;
     } catch {
-      pharmallm = false;
+      pharmaitchat = false;
     }
-    res.json({ ok: true, pharmallm });
+    res.json({ ok: true, pharmaitchat });
   });
 
   // Without a token, loopback is the only protection: also require a localhost Host header so a web page

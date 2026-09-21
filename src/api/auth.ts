@@ -2,6 +2,7 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
+import { readEnvWithFallback } from "../config/env-names.js";
 
 // Routes the chat UI and dashboard call from the browser (method, path); these stay open
 export const BROWSER_ROUTES: ReadonlyArray<readonly [string, string]> = [
@@ -81,26 +82,27 @@ export function authorizeRequest(request: AuthRequest, token: string | null): Au
     const provided = bearerToken(request.authorization);
     return provided !== null && tokensMatch(token, provided)
       ? { ok: true, message: "" }
-      : { ok: false, message: "Unauthorized: send Authorization: Bearer <PHARMALLM_API_TOKEN>" };
+      : { ok: false, message: "Unauthorized: send Authorization: Bearer <PHARMAITCHAT_API_TOKEN>" };
   }
 
   // No token configured: operations stay local-only
   if (!isLoopbackAddress(request.remoteAddress)) {
     return {
       ok: false,
-      message: "Unauthorized: set PHARMALLM_API_TOKEN (scripts/switch-stack.sh token) to allow requests from other machines",
+      message:
+        "Unauthorized: set PHARMAITCHAT_API_TOKEN (or the legacy PHARMALLM_API_TOKEN) (scripts/switch-stack.sh token) to allow requests from other machines",
     };
   }
   return isLocalHostHeader(request.host)
     ? { ok: true, message: "" }
     : {
         ok: false,
-        message: "Unauthorized: without PHARMALLM_API_TOKEN, call the API as localhost, 127.0.0.1 or [::1]",
+        message: "Unauthorized: without PHARMAITCHAT_API_TOKEN, call the API as localhost, 127.0.0.1 or [::1]",
       };
 }
 
 export function readApiToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  return env.PHARMALLM_API_TOKEN?.trim() || null;
+  return readEnvWithFallback(env, "API_TOKEN") ?? null;
 }
 
 export function createAuthMiddleware(getToken: () => string | null = () => readApiToken()): RequestHandler {

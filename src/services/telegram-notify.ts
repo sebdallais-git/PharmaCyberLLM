@@ -1,5 +1,5 @@
 // Outbound-only Telegram messages. The app never polls for updates: Hermes' gateway is the single
-// allowed consumer of that bot's getUpdates stream, so button taps are Hermes' to receive (pharmallm-switch plugin).
+// allowed consumer of that bot's getUpdates stream, so button taps are Hermes' to receive (pharmaitchat-switch plugin).
 
 export interface TelegramConfig {
   botToken: string | null;

@@ -1,4 +1,4 @@
-// Shrinks PharmaLLM payloads before they reach an agent's context: embeddings, full source lists and
+// Shrinks PharmaITChat payloads before they reach an agent's context: embeddings, full source lists and
 // stored model answers cost thousands of tokens per call and tell the agent nothing it can act on.
 
 const SOURCE_SAMPLE = 20;

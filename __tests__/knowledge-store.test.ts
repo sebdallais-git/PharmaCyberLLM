@@ -57,7 +57,7 @@ describe("loadIndex", () => {
     const log = console.log;
     console.log = () => {};
     try {
-      await loadIndex(join(tmpdir(), "pharmallm-missing-index", ".index-missing.json"));
+      await loadIndex(join(tmpdir(), "pharmaitchat-missing-index", ".index-missing.json"));
     } finally {
       console.log = log;
     }

@@ -1,6 +1,6 @@
 // Stack switching for the browser UI. Requesting a switch needs no token; approval arrives out of
 // band, as a tap on a Telegram button. Hermes' gateway receives the tap (it is the shared bot's only
-// update consumer) and its pharmallm-switch plugin calls /confirm or /cancel here with the API token.
+// update consumer) and its pharmaitchat-switch plugin calls /confirm or /cancel here with the API token.
 // The spawned script outlives the app it restarts.
 
 import { spawn } from "node:child_process";
@@ -64,7 +64,7 @@ export function createStackRouter(deps: StackRouterDeps): Router {
     const { token } = outcome.pending;
     try {
       await deps.sendTelegram(
-        `PharmaLLM: switch the LLM stack from ${deps.activeStack()} to ${target}?\n` +
+        `PharmaITChat: switch the LLM stack from ${deps.activeStack()} to ${target}?\n` +
           `Confirm within 5 minutes. If you did not ask for this, tap Cancel or ignore it.`,
         {
           buttons: [
@@ -178,7 +178,7 @@ export default createStackRouter({
   telegramConfigured: () => isTelegramConfigured(telegramConfig),
   hermes: createHermesReadiness({
     queryGatewayStatus: () => queryGatewayStatus(join(hermesHome(), "gateway.sock")),
-    readPluginReadyFile: () => readPluginReadyFile(join(hermesHome(), "pharmallm-switch.ready.json")),
+    readPluginReadyFile: () => readPluginReadyFile(join(hermesHome(), "pharmaitchat-switch.ready.json")),
     now: () => Date.now(),
   }),
 });

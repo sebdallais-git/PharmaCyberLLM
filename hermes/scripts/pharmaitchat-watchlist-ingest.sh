@@ -4,7 +4,7 @@
 # Installed by scripts/hermes-setup.sh install-cron into ~/.hermes/scripts/,
 # with __PROJECT_DIR__ replaced by this repo's absolute path at install time
 # -- once this file lives under ~/.hermes it has no other way to find the
-# repo (same reason com.pharmallm.mcp.plist.template bakes in __PROJECT_DIR__).
+# repo (same reason com.pharmaitchat.mcp.plist.template bakes in __PROJECT_DIR__).
 #
 # Hermes runs this job with --no-agent (see hermes/cron/jobs.json and
 # scripts/hermes-setup.sh's install-cron): whatever this script prints to

@@ -46,32 +46,32 @@ describe("hermes/config.template.yaml", () => {
   it("references only documented environment variables", () => {
     const referenced = [...configText.matchAll(/\$\{([A-Z0-9_]+)\}/g)].map((match) => match[1]);
     expect(new Set(referenced)).toEqual(new Set(["PHARMALLM_URL", "PHARMALLM_MCP_URL", "PHARMALLM_MCP_TOKEN"]));
-    expect(at("providers.pharmallm.key_env")).toBe("PHARMALLM_API_TOKEN");
+    expect(at("providers.pharmaitchat.key_env")).toBe("PHARMAITCHAT_API_TOKEN");
     expect(configText).not.toMatch(/[0-9a-f]{32,}/);
   });
 
-  it("uses the PharmaLLM gateway with a 64k context and no model discovery", () => {
-    expect(at("model.provider")).toBe("custom:pharmallm");
-    expect(at("model.default")).toBe("pharmallm-local");
+  it("uses the PharmaITChat gateway with a 64k context and no model discovery", () => {
+    expect(at("model.provider")).toBe("custom:pharmaitchat");
+    expect(at("model.default")).toBe("pharmaitchat-local");
     expect(at("model.context_length")).toBe(65536);
-    expect(at("providers.pharmallm.api")).toBe("${PHARMALLM_URL}/v1");
-    expect(at("providers.pharmallm.discover_models")).toBe(false);
-    expect(at("providers.pharmallm.request_timeout_seconds")).toBe(1800);
-    expect(at("providers.pharmallm.models.pharmallm-local.context_length")).toBe(65536);
+    expect(at("providers.pharmaitchat.api")).toBe("${PHARMALLM_URL}/v1");
+    expect(at("providers.pharmaitchat.discover_models")).toBe(false);
+    expect(at("providers.pharmaitchat.request_timeout_seconds")).toBe(1800);
+    expect(at("providers.pharmaitchat.models.pharmaitchat-local.context_length")).toBe(65536);
   });
 
   it("pins the cron provider so scheduled runs resolve credentials", () => {
     // Hermes stores a bare "custom" snapshot per job and resolves cron runs from cron.* first
-    expect(at("cron.model")).toBe("pharmallm-local");
-    expect(at("cron.model_provider")).toBe("custom:pharmallm");
+    expect(at("cron.model")).toBe("pharmaitchat-local");
+    expect(at("cron.model_provider")).toBe("custom:pharmaitchat");
   });
 
-  it("connects to pharmallm-mcp with a bearer token, long timeout and no start_reindex", () => {
-    expect(at("mcp_servers.pharmallm.url")).toBe("${PHARMALLM_MCP_URL}");
-    expect(at("mcp_servers.pharmallm.headers.Authorization")).toBe("Bearer ${PHARMALLM_MCP_TOKEN}");
-    expect(at("mcp_servers.pharmallm.timeout")).toBe(900);
-    expect(at("mcp_servers.pharmallm.connect_timeout")).toBe(30);
-    expect(at("mcp_servers.pharmallm.tools.exclude")).toEqual(["start_reindex"]);
+  it("connects to pharmaitchat-mcp with a bearer token, long timeout and no start_reindex", () => {
+    expect(at("mcp_servers.pharmaitchat.url")).toBe("${PHARMALLM_MCP_URL}");
+    expect(at("mcp_servers.pharmaitchat.headers.Authorization")).toBe("Bearer ${PHARMALLM_MCP_TOKEN}");
+    expect(at("mcp_servers.pharmaitchat.timeout")).toBe(900);
+    expect(at("mcp_servers.pharmaitchat.connect_timeout")).toBe(30);
+    expect(at("mcp_servers.pharmaitchat.tools.exclude")).toEqual(["start_reindex"]);
   });
 
   it("sandboxes the shell, denies unattended approvals and keeps web search local", () => {
@@ -102,36 +102,36 @@ describe("hermes/config.template.yaml", () => {
       "vision",
     ]);
     const telegram = at("platform_toolsets.telegram") as string[];
-    expect(telegram).toContain("pharmallm");
+    expect(telegram).toContain("pharmaitchat");
     expect(telegram).not.toContain("cronjob");
   });
 
   it("gives unattended runs no ungated write channel", () => {
     // approvals.cron_mode gates dangerous *commands* only; MCP calls are never approval-gated, so the
     // cron toolset list and a write-limited MCP server are the real controls for scheduled runs
-    expect(at("platform_toolsets.cron")).toEqual(["session_search", "pharmallm_cron"]);
+    expect(at("platform_toolsets.cron")).toEqual(["session_search", "pharmaitchat_cron"]);
     const cron = at("platform_toolsets.cron") as string[];
-    for (const toolset of ["web", "search", "memory", "terminal", "file", "skills", "pharmallm"]) {
+    for (const toolset of ["web", "search", "memory", "terminal", "file", "skills", "pharmaitchat"]) {
       expect(cron).not.toContain(toolset);
     }
-    expect(at("mcp_servers.pharmallm_cron.tools.exclude")).toEqual(["start_reindex", "add_knowledge"]);
+    expect(at("mcp_servers.pharmaitchat_cron.tools.exclude")).toEqual(["start_reindex", "add_knowledge"]);
     // Same endpoint and credentials as the interactive server, only the tool filter differs
-    expect(at("mcp_servers.pharmallm_cron.url")).toBe(at("mcp_servers.pharmallm.url"));
-    expect(at("mcp_servers.pharmallm_cron.headers.Authorization")).toBe(
-      at("mcp_servers.pharmallm.headers.Authorization")
+    expect(at("mcp_servers.pharmaitchat_cron.url")).toBe(at("mcp_servers.pharmaitchat.url"));
+    expect(at("mcp_servers.pharmaitchat_cron.headers.Authorization")).toBe(
+      at("mcp_servers.pharmaitchat.headers.Authorization")
     );
-    expect(at("mcp_servers.pharmallm_cron.timeout")).toBe(900);
-    expect(at("mcp_servers.pharmallm_cron.connect_timeout")).toBe(30);
-    expect(at("mcp_servers.pharmallm_cron.tools.resources")).toBe(false);
-    expect(at("mcp_servers.pharmallm_cron.tools.prompts")).toBe(false);
+    expect(at("mcp_servers.pharmaitchat_cron.timeout")).toBe(900);
+    expect(at("mcp_servers.pharmaitchat_cron.connect_timeout")).toBe(30);
+    expect(at("mcp_servers.pharmaitchat_cron.tools.resources")).toBe(false);
+    expect(at("mcp_servers.pharmaitchat_cron.tools.prompts")).toBe(false);
   });
 
-  it("enables the pharmallm-switch plugin that receives the stack-switch buttons", () => {
-    expect(at("plugins.enabled")).toContain("pharmallm-switch");
+  it("enables the pharmaitchat-switch plugin that receives the stack-switch buttons", () => {
+    expect(at("plugins.enabled")).toContain("pharmaitchat-switch");
   });
 
   it("keeps the tools the scheduled jobs actually call available to the cron server", () => {
-    const excluded = at("mcp_servers.pharmallm_cron.tools.exclude") as string[];
+    const excluded = at("mcp_servers.pharmaitchat_cron.tools.exclude") as string[];
     for (const tool of ["run_news_agent", "knowledge_status", "list_knowledge_gaps", "resolve_knowledge_gap", "system_health", "feedback_report"]) {
       expect(excluded).not.toContain(tool);
     }
@@ -141,11 +141,11 @@ describe("hermes/config.template.yaml", () => {
 describe("hermes/cron/jobs.json", () => {
   it("defines the five scheduled jobs delivered to Telegram", () => {
     expect(jobs.map((job) => job.name)).toEqual([
-      "pharmallm-news-digest",
-      "pharmallm-gap-resolution",
-      "pharmallm-health-watch",
-      "pharmallm-feedback-digest",
-      "pharmallm-watchlist-ingest",
+      "pharmaitchat-news-digest",
+      "pharmaitchat-gap-resolution",
+      "pharmaitchat-health-watch",
+      "pharmaitchat-feedback-digest",
+      "pharmaitchat-watchlist-ingest",
     ]);
     // Two health runs a day, not three: every Hermes step is a full cold prefill (~160 s of GPU)
     expect(jobs.map((job) => job.schedule)).toEqual([
@@ -171,11 +171,11 @@ describe("hermes/cron/jobs.json", () => {
   });
 
   it("runs the watchlist ingest nightly at 02:30 as a script-mode job (Hermes --no-agent), clear of the news/gap/health/feedback windows, alerting only on failure", () => {
-    const watchlistJob = jobs.find((job) => job.name === "pharmallm-watchlist-ingest");
+    const watchlistJob = jobs.find((job) => job.name === "pharmaitchat-watchlist-ingest");
     expect(watchlistJob).toBeDefined();
     expect(watchlistJob?.schedule).toBe("30 2 * * *");
     expect(watchlistJob?.kind).toBe("script");
-    expect(watchlistJob?.script).toBe("pharmallm-watchlist-ingest.sh");
+    expect(watchlistJob?.script).toBe("pharmaitchat-watchlist-ingest.sh");
     expect(watchlistJob?.no_agent).toBe(true);
     // `deliver: local` keeps run state visible in `hermes cron list` without
     // pushing anything on a quiet night; `failure_deliver` overrides the
@@ -183,7 +183,7 @@ describe("hermes/cron/jobs.json", () => {
     expect(watchlistJob?.deliver).toBe("local");
     expect(watchlistJob?.failure_deliver).toBe("telegram");
 
-    const otherSchedules = jobs.filter((job) => job.name !== "pharmallm-watchlist-ingest").map((job) => job.schedule);
+    const otherSchedules = jobs.filter((job) => job.name !== "pharmaitchat-watchlist-ingest").map((job) => job.schedule);
     expect(otherSchedules).not.toContain(watchlistJob?.schedule);
   });
 
@@ -193,7 +193,7 @@ describe("hermes/cron/jobs.json", () => {
   // declares a timeout of its own, and it must stay well above the budget the
   // run stops itself at, or the external kill wins again.
   it("asks Hermes for a script timeout far above the ingest's own wall-clock budget", () => {
-    const watchlistJob = jobs.find((job) => job.name === "pharmallm-watchlist-ingest");
+    const watchlistJob = jobs.find((job) => job.name === "pharmaitchat-watchlist-ingest");
     const timeoutMs = (watchlistJob?.script_timeout_seconds ?? 0) * 1000;
 
     expect(timeoutMs).toBeGreaterThan(DEFAULT_INGEST_BUDGET_MS);
@@ -203,7 +203,7 @@ describe("hermes/cron/jobs.json", () => {
   });
 
   it("ships the watchlist ingest's wrapper script next to jobs.json", () => {
-    const scriptPath = join(hermesDir, "scripts", "pharmallm-watchlist-ingest.sh");
+    const scriptPath = join(hermesDir, "scripts", "pharmaitchat-watchlist-ingest.sh");
     const script = readFileSync(scriptPath, "utf-8");
     expect(script).toContain("__PROJECT_DIR__");
     expect(script).toContain("scripts/watchlist.ts ingest");
@@ -229,7 +229,7 @@ describe("hermes/cron/jobs.json", () => {
 describe("hermes/SOUL.md", () => {
   it("restricts knowledge-changing tools to explicit requests", () => {
     const soul = readFileSync(join(hermesDir, "SOUL.md"), "utf-8");
-    for (const tool of ["add_knowledge", "run_news_agent", "resolve_knowledge_gap", "search_knowledge", "ask_pharmallm"]) {
+    for (const tool of ["add_knowledge", "run_news_agent", "resolve_knowledge_gap", "search_knowledge", "ask_pharmaitchat"]) {
       expect(soul).toContain(tool);
     }
     expect(soul).toContain("explicitly");

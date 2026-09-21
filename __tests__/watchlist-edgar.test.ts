@@ -19,7 +19,7 @@ function fakeFetch(status: number, body: string): FetchLike {
 }
 
 function testDeps(fetchImpl: FetchLike): AdapterDeps {
-  return { fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaLLM-Test/1.0" };
+  return { fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaITChat-Test/1.0" };
 }
 
 const NOVARTIS: Entity = {
@@ -201,7 +201,7 @@ describe("edgarAdapter", () => {
     const adapter = edgarAdapter(testDeps(fetchImpl));
     await adapter("1114448", NOVARTIS, null);
 
-    expect(seenHeaders?.["User-Agent"]).toBe("PharmaLLM/1.0 (sebdallais@gmail.com)");
+    expect(seenHeaders?.["User-Agent"]).toBe("PharmaITChat/1.0 (sebdallais@gmail.com)");
   });
 
   it("fetches the submissions URL for the given CIK", async () => {
@@ -356,7 +356,7 @@ describe("irPageAdapter", () => {
     const adapter = irPageAdapter(testDeps(fetchImpl));
     await adapter(IR_PAGE_URL, NOVARTIS, null);
 
-    expect(seenHeaders?.["User-Agent"]).toBe("PharmaLLM-Test/1.0");
+    expect(seenHeaders?.["User-Agent"]).toBe("PharmaITChat-Test/1.0");
   });
 
   it("rejects on a non-200 response, naming the status", async () => {

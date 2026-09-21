@@ -110,7 +110,7 @@ describe("buildUpstreamBody", () => {
   it("lists only the stack's chat model", () => {
     expect(modelList(mlx)).toEqual({
       object: "list",
-      data: [{ id: "mlx-community/Qwen3.8-27B-4bit", object: "model", created: 0, owned_by: "pharmallm" }],
+      data: [{ id: "mlx-community/Qwen3.8-27B-4bit", object: "model", created: 0, owned_by: "pharmaitchat" }],
     });
   });
 });

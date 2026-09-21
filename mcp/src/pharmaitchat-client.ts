@@ -1,4 +1,4 @@
-// REST client for PharmaLLM used by the MCP tools
+// REST client for PharmaITChat used by the MCP tools
 
 import { Agent, fetch as undiciFetch } from "undici";
 
@@ -30,12 +30,12 @@ const noTimeoutAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 const defaultFetch: FetchImpl = (url, init) =>
   undiciFetch(url, { ...init, dispatcher: noTimeoutAgent });
 
-export class PharmaLLMError extends Error {
+export class PharmaITChatError extends Error {
   readonly status: number | null;
 
   constructor(message: string, status: number | null) {
     super(message);
-    this.name = "PharmaLLMError";
+    this.name = "PharmaITChatError";
     this.status = status;
   }
 }
@@ -48,7 +48,7 @@ export interface ChatAnswer {
   timings: Record<string, number> | null;
 }
 
-export interface PharmaLLMClient {
+export interface PharmaITChatClient {
   readonly baseUrl: string;
   get(path: string, timeoutMs?: number): Promise<unknown>;
   post(path: string, body: unknown, timeoutMs?: number): Promise<unknown>;
@@ -85,8 +85,8 @@ interface PendingResponse {
   finish(): void;
 }
 
-function timeoutError(timeoutMs: number): PharmaLLMError {
-  return new PharmaLLMError(`PharmaLLM did not answer within ${timeoutMs / 1000} s`, null);
+function timeoutError(timeoutMs: number): PharmaITChatError {
+  return new PharmaITChatError(`PharmaITChat did not answer within ${timeoutMs / 1000} s`, null);
 }
 
 function errorDetail(payload: unknown, text: string): string {
@@ -97,11 +97,11 @@ function errorDetail(payload: unknown, text: string): string {
   return text.slice(0, 300);
 }
 
-export function createPharmaLLMClient(
+export function createPharmaITChatClient(
   baseUrl: string,
   token: string | null,
   fetchImpl: FetchImpl = defaultFetch
-): PharmaLLMClient {
+): PharmaITChatClient {
   async function send(method: "GET" | "POST", path: string, body: unknown, timeoutMs: number): Promise<PendingResponse> {
     const controller = new AbortController();
     let timedOut = false;
@@ -125,7 +125,7 @@ export function createPharmaLLMClient(
     } catch (err) {
       clearTimeout(timeoutHandle);
       if (timedOut || isTimeout(err)) throw timeoutError(timeoutMs);
-      throw new PharmaLLMError(`PharmaLLM not reachable at ${baseUrl}`, null);
+      throw new PharmaITChatError(`PharmaITChat not reachable at ${baseUrl}`, null);
     }
   }
 
@@ -136,7 +136,7 @@ export function createPharmaLLMClient(
       text = await resp.text();
     } catch (err) {
       if (pending.timedOut() || isTimeout(err)) throw timeoutError(timeoutMs);
-      throw new PharmaLLMError(`PharmaLLM ${path} response could not be read`, resp.status);
+      throw new PharmaITChatError(`PharmaITChat ${path} response could not be read`, resp.status);
     }
 
     let payload: unknown = text;
@@ -147,10 +147,10 @@ export function createPharmaLLMClient(
     }
 
     if (resp.status === 401) {
-      throw new PharmaLLMError("PharmaLLM rejected the API token — check PHARMALLM_API_TOKEN", 401);
+      throw new PharmaITChatError("PharmaITChat rejected the API token — check PHARMAITCHAT_API_TOKEN", 401);
     }
     if (!resp.ok) {
-      throw new PharmaLLMError(`PharmaLLM ${path} failed (${resp.status}): ${errorDetail(payload, text)}`, resp.status);
+      throw new PharmaITChatError(`PharmaITChat ${path} failed (${resp.status}): ${errorDetail(payload, text)}`, resp.status);
     }
     return payload;
   }
@@ -180,7 +180,7 @@ export function createPharmaLLMClient(
       await readJson(pending, path, timeoutMs);
     }
     const reader = resp.body?.getReader();
-    if (!reader) throw new PharmaLLMError(`PharmaLLM ${path} returned no stream`, resp.status);
+    if (!reader) throw new PharmaITChatError(`PharmaITChat ${path} returned no stream`, resp.status);
 
     const decoder = new TextDecoder();
     const sources = new Set<string>();
@@ -198,7 +198,7 @@ export function createPharmaLLMClient(
         for (const line of lines) {
           if (!line.startsWith("data:")) continue;
           const event = JSON.parse(line.slice(5).trim()) as ChatEvent;
-          if (event.error) throw new PharmaLLMError(event.error, null);
+          if (event.error) throw new PharmaITChatError(event.error, null);
           if (Array.isArray(event.sources)) {
             for (const source of event.sources) {
               if (typeof source === "string") sources.add(source);
@@ -217,14 +217,14 @@ export function createPharmaLLMClient(
         }
       }
     } catch (err) {
-      if (err instanceof PharmaLLMError) throw err;
+      if (err instanceof PharmaITChatError) throw err;
       if (pending.timedOut() || isTimeout(err)) throw timeoutError(timeoutMs);
-      throw new PharmaLLMError(`PharmaLLM chat stream failed: ${err instanceof Error ? err.message : String(err)}`, null);
+      throw new PharmaITChatError(`PharmaITChat chat stream failed: ${err instanceof Error ? err.message : String(err)}`, null);
     } finally {
       await reader.cancel().catch(() => {});
     }
 
-    throw new PharmaLLMError("PharmaLLM chat stream ended without an answer", null);
+    throw new PharmaITChatError("PharmaITChat chat stream ended without an answer", null);
   }
 
   return {

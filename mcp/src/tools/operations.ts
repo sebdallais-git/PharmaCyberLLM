@@ -1,7 +1,7 @@
 // Operations tools: health, metrics, news agent, background reindex
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PharmaLLMClient } from "../pharmallm-client.js";
+import type { PharmaITChatClient } from "../pharmaitchat-client.js";
 import { compactAgentStatus } from "./compact.js";
 import { runLongTool, runTool } from "./result.js";
 import type { ToolLogger, ToolOptions } from "./result.js";
@@ -9,10 +9,10 @@ import type { ToolLogger, ToolOptions } from "./result.js";
 // 14 minutes: the tool reports its own timeout before Hermes gives up on the call at 900 s
 export const NEWS_AGENT_TIMEOUT_MS = 14 * 60 * 1000;
 
-export function registerOperationsTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): void {
+export function registerOperationsTools(server: McpServer, client: PharmaITChatClient, log: ToolLogger, options: ToolOptions = {}): void {
   server.registerTool(
     "system_health",
-    { description: "PharmaLLM health: active LLM stack, chat/embedding/index checks, supporting services, benchmark mode." },
+    { description: "PharmaITChat health: active LLM stack, chat/embedding/index checks, supporting services, benchmark mode." },
     async () => runTool("system_health", log, () => client.get("/api/health"))
   );
 
@@ -26,7 +26,7 @@ export function registerOperationsTools(server: McpServer, client: PharmaLLMClie
     "run_news_agent",
     {
       description:
-        "Run PharmaLLM's news agent now: pulls pharma and cyber news for about 190 topics into the knowledge base. " +
+        "Run PharmaITChat's news agent now: pulls pharma and cyber news for about 190 topics into the knowledge base. " +
         "Takes several minutes and uses the GPU.",
     },
     async (extra) =>

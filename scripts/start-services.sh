@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start ChromaDB, the active LLM stack and the PharmaLLM dev server
+# Start ChromaDB, the active LLM stack and the PharmaITChat dev server
 # Usage: ./scripts/start-services.sh   (switch stacks with scripts/switch-stack.sh ollama|mlx)
 
 set -e
@@ -24,13 +24,13 @@ trap cleanup SIGINT SIGTERM
 ensure_chromadb
 "$SCRIPT_DIR/switch-stack.sh" ensure-stack "$STACK"
 
-log "Starting PharmaLLM dev server on the $STACK stack..."
+log "Starting PharmaITChat dev server on the $STACK stack..."
 cd "$PROJECT_DIR"
 export CHROMADB_URL="$CHROMA_URL"
 export LLM_PROVIDER="$STACK"
 # API token for agents and other machines, created by scripts/switch-stack.sh token
 if [ -s "$PROJECT_DIR/data/run/api-token" ]; then
-  export PHARMALLM_API_TOKEN="$(cat "$PROJECT_DIR/data/run/api-token")"
+  export PHARMAITCHAT_API_TOKEN="$(cat "$PROJECT_DIR/data/run/api-token")"
 fi
 npx tsx watch src/server.ts &
 

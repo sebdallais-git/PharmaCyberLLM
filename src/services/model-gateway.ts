@@ -89,7 +89,7 @@ export function modelList(stack: StackConfig): {
   object: "list";
   data: Array<{ id: string; object: "model"; created: number; owned_by: string }>;
 } {
-  return { object: "list", data: [{ id: stack.chatModel, object: "model", created: 0, owned_by: "pharmallm" }] };
+  return { object: "list", data: [{ id: stack.chatModel, object: "model", created: 0, owned_by: "pharmaitchat" }] };
 }
 
 export async function forwardChatCompletion(body: unknown, res: ExpressResponse, deps: GatewayDeps): Promise<void> {

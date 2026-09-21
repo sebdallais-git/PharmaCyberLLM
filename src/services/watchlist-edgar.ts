@@ -17,7 +17,7 @@ import { fetchBody, MAX_ITEM_BODY_LENGTH, titleKey, type AdapterDeps, type RawIt
 // User-Agent (DEFAULT_USER_AGENT in watchlist-sources.ts), which is a
 // generic browser-like string that satisfies ordinary newsroom/IR hosts but
 // not data.sec.gov. See https://www.sec.gov/os/webmaster-faq#developers.
-export const EDGAR_USER_AGENT = "PharmaLLM/1.0 (sebdallais@gmail.com)";
+export const EDGAR_USER_AGENT = "PharmaITChat/1.0 (sebdallais@gmail.com)";
 
 // The SEC also rate-limits at 10 requests/second across all of EDGAR (not
 // per-CIK). This adapter makes exactly one request per call, so throttling

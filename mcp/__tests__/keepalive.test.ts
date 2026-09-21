@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { sendJson } from "./helpers/fake-pharmallm.js";
+import { sendJson } from "./helpers/fake-pharmaitchat.js";
 import { isToolError, startHarness, toolText } from "./helpers/harness.js";
 import type { Harness } from "./helpers/harness.js";
 

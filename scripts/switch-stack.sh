@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Switch PharmaLLM between the Ollama and MLX stacks. Only one stack runs at a time.
+# Switch PharmaITChat between the Ollama and MLX stacks. Only one stack runs at a time.
 # Usage:
 #   scripts/switch-stack.sh ollama|mlx|omlx          stop the other stacks, start this one, restart the app
 #   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
@@ -8,8 +8,8 @@
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
 #   scripts/switch-stack.sh telegram                 store the Telegram credentials used to confirm UI switches
 #   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
-#   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmallm-mcp
-#   scripts/switch-stack.sh mcp start|stop|status    control the pharmallm-mcp launchd service
+#   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmaitchat-mcp
+#   scripts/switch-stack.sh mcp start|stop|status    control the pharmaitchat-mcp launchd service
 
 set -euo pipefail
 
@@ -19,13 +19,13 @@ LOG_PREFIX="switch-stack"
 # shellcheck source=lib/services.sh
 source "$SCRIPT_DIR/lib/services.sh"
 
-RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
+RUN_DIR="${PHARMAITCHAT_RUN_DIR:-${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}}"
 TOKEN_FILE="$RUN_DIR/api-token"
 MCP_TOKEN_FILE="$RUN_DIR/mcp-token"
 SWITCH_FILE="$RUN_DIR/stack-switch.json"
 TELEGRAM_BOT_TOKEN_FILE="$RUN_DIR/telegram-bot-token"
 TELEGRAM_CHAT_ID_FILE="$RUN_DIR/telegram-chat-id"
-MCP_LABEL="com.pharmallm.mcp"
+MCP_LABEL="com.pharmaitchat.mcp"
 MCP_PLIST="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$MCP_LABEL.plist"
 MCP_PORT="3200"
 LOG_DIR="$PROJECT_DIR/data/logs"
@@ -283,7 +283,7 @@ ensure_index() {
   esac
 }
 
-# --- PharmaLLM app --------------------------------------------------------------
+# --- PharmaITChat app --------------------------------------------------------------
 
 stop_app() {
   local pid
@@ -309,7 +309,7 @@ ensure_token() {
   fi
   chmod 600 "$TOKEN_FILE"
   log "Restart the app to enforce it: scripts/switch-stack.sh $(active_stack)"
-  log "Use it in a shell with: export PHARMALLM_API_TOKEN=\"\$(cat $TOKEN_FILE)\""
+  log "Use it in a shell with: export PHARMAITCHAT_API_TOKEN=\"\$(cat $TOKEN_FILE)\""
 }
 
 api_token() {
@@ -379,9 +379,9 @@ notify_switch_result() {
   [ -n "$token" ] && [ -n "$chat" ] || return 0
   elapsed=$(( ($(date +%s) * 1000 - ${SWITCH_STARTED:-0}) / 1000 ))
   if [ "$phase" = "ready" ]; then
-    text="PharmaLLM: ${SWITCH_TARGET} stack is ready (${elapsed}s)."
+    text="PharmaITChat: ${SWITCH_TARGET} stack is ready (${elapsed}s)."
   else
-    text="PharmaLLM: switch to ${SWITCH_TARGET} failed after ${elapsed}s; ${SWITCH_PREVIOUS} is being restored."
+    text="PharmaITChat: switch to ${SWITCH_TARGET} failed after ${elapsed}s; ${SWITCH_PREVIOUS} is being restored."
   fi
   payload="$(TEXT="$text" CHAT="$chat" python3 -c 'import json,os;print(json.dumps({"chat_id":os.environ["CHAT"],"text":os.environ["TEXT"]}))')"
   # The URL carries the bot token; put it in curl's stdin config instead of argv, or `ps` would
@@ -391,7 +391,7 @@ notify_switch_result() {
     || log "Could not send the Telegram completion message"
 }
 
-# Token agents send to pharmallm-mcp (readable only by you); run-mcp.sh passes it to the service
+# Token agents send to pharmaitchat-mcp (readable only by you); run-mcp.sh passes it to the service
 ensure_mcp_token() {
   if [ -s "$MCP_TOKEN_FILE" ]; then
     log "MCP token already exists at $MCP_TOKEN_FILE"
@@ -402,7 +402,7 @@ ensure_mcp_token() {
   chmod 600 "$MCP_TOKEN_FILE"
 }
 
-# pharmallm-mcp runs under launchd (installed by scripts/hermes-setup.sh install-services); stack switches leave it running
+# pharmaitchat-mcp runs under launchd (installed by scripts/hermes-setup.sh install-services); stack switches leave it running
 mcp_service() {
   local domain
   domain="gui/$(id -u)"
@@ -411,12 +411,12 @@ mcp_service() {
       [ -f "$MCP_PLIST" ] || { log "No $MCP_PLIST — run: scripts/hermes-setup.sh install-services"; exit 1; }
       launchctl bootstrap "$domain" "$MCP_PLIST" 2>/dev/null || launchctl kickstart -k "$domain/$MCP_LABEL"
       wait_http "http://127.0.0.1:$MCP_PORT/healthz" 30 \
-        || { log "pharmallm-mcp did not answer on :$MCP_PORT (see $LOG_DIR/mcp.log)"; exit 1; }
-      log "pharmallm-mcp is up on :$MCP_PORT"
+        || { log "pharmaitchat-mcp did not answer on :$MCP_PORT (see $LOG_DIR/mcp.log)"; exit 1; }
+      log "pharmaitchat-mcp is up on :$MCP_PORT"
       ;;
     stop)
       launchctl bootout "$domain/$MCP_LABEL" 2>/dev/null || true
-      log "pharmallm-mcp stopped"
+      log "pharmaitchat-mcp stopped"
       ;;
     status)
       if launchctl print "$domain/$MCP_LABEL" >/dev/null 2>&1; then log "  mcp service loaded"; else log "  mcp service not loaded"; fi
@@ -431,7 +431,7 @@ mcp_service() {
 
 start_app() {
   cd "$PROJECT_DIR"
-  LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMALLM_API_TOKEN="$(api_token)" \
+  LLM_PROVIDER="$1" CHROMADB_URL="$CHROMA_URL" PHARMAITCHAT_API_TOKEN="$(api_token)" \
     TELEGRAM_BOT_TOKEN="$(telegram_value bot-token)" TELEGRAM_CHAT_ID="$(telegram_value chat-id)" \
     nohup npx tsx src/server.ts >"$LOG_DIR/app.log" 2>&1 &
   echo $! >"$RUN_DIR/app.pid"
@@ -441,13 +441,13 @@ start_app() {
     status="$(curl -sf -m 5 "http://localhost:$APP_PORT/api/health" 2>/dev/null \
       | python3 -c 'import sys, json; print(json.load(sys.stdin)["status"])' 2>/dev/null || true)"
     case "$status" in
-      healthy) log "PharmaLLM is up on the $1 stack"; return 0 ;;
-      degraded) log "PharmaLLM is up on the $1 stack (degraded: a supporting service is down)"; return 0 ;;
+      healthy) log "PharmaITChat is up on the $1 stack"; return 0 ;;
+      degraded) log "PharmaITChat is up on the $1 stack (degraded: a supporting service is down)"; return 0 ;;
     esac
     sleep 2
     waited=$((waited + 2))
   done
-  log "PharmaLLM did not become healthy (last status: ${status:-no response})"
+  log "PharmaITChat did not become healthy (last status: ${status:-no response})"
   return 1
 }
 

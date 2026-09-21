@@ -110,7 +110,7 @@ describe("switch-stack.sh mcp commands", () => {
 
   it("manages the launchd service by label and checks its health endpoint", () => {
     const script = readFileSync(join(projectDir, "scripts", "switch-stack.sh"), "utf-8");
-    expect(script).toContain('MCP_LABEL="com.pharmallm.mcp"');
+    expect(script).toContain('MCP_LABEL="com.pharmaitchat.mcp"');
     expect(script).toContain('launchctl bootstrap "$domain" "$MCP_PLIST"');
     expect(script).toContain('launchctl bootout "$domain/$MCP_LABEL"');
     expect(script).toContain('"http://127.0.0.1:$MCP_PORT/healthz"');
@@ -119,8 +119,8 @@ describe("switch-stack.sh mcp commands", () => {
   });
 
   it("ships a plist template that runs run-mcp.sh with no secrets", () => {
-    const template = readFileSync(join(projectDir, "hermes", "com.pharmallm.mcp.plist.template"), "utf-8");
-    expect(template).toContain("<string>com.pharmallm.mcp</string>");
+    const template = readFileSync(join(projectDir, "hermes", "com.pharmaitchat.mcp.plist.template"), "utf-8");
+    expect(template).toContain("<string>com.pharmaitchat.mcp</string>");
     expect(template).toContain("<string>__PROJECT_DIR__/scripts/run-mcp.sh</string>");
     expect(template).toContain("<key>NODE_BIN</key><string>__NODE_BIN__</string>");
     // MCP_HOST lives in the plist, not in `launchctl setenv`, so a LAN move survives a reboot
@@ -129,7 +129,7 @@ describe("switch-stack.sh mcp commands", () => {
     expect(template).not.toMatch(/TOKEN/);
 
     const dir = tempDir("plist-");
-    const rendered = join(dir, "com.pharmallm.mcp.plist");
+    const rendered = join(dir, "com.pharmaitchat.mcp.plist");
     writeFileSync(
       rendered,
       template

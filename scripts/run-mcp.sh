@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# launchd entry point for pharmallm-mcp: reads the API and MCP tokens from data/run and starts the service.
+# launchd entry point for pharmaitchat-mcp: reads the API and MCP tokens from data/run and starts the service.
 # Tokens are passed through the environment only, never as arguments.
 set -euo pipefail
 

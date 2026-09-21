@@ -1,10 +1,10 @@
-"""pharmallm-switch: confirms or cancels a PharmaLLM stack switch from the Telegram buttons the app sends.
+"""pharmaitchat-switch: confirms or cancels a PharmaITChat stack switch from the Telegram buttons the app sends.
 
 The app shares Hermes' bot and Hermes' gateway is that bot's only getUpdates consumer, so a tap on the
 app's buttons lands here. The handler is scoped to ``pls:`` callback data and registered before
 Hermes' own catch-all, so every other button keeps working.
 
-The ready file PharmaLLM checks is written only once the adapter is connected with this plugin's handler
+The ready file PharmaITChat checks is written only once the adapter is connected with this plugin's handler
 in place: a Telegram app rebuilt by a transient init retry never gets plugin handlers, so it gets no file."""
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Optional
 from .tap import PATTERN, is_allowed, parse_tap, resolve
 
 logger = logging.getLogger(__name__)
-READY_FILE_NAME = "pharmallm-switch.ready.json"
+READY_FILE_NAME = "pharmaitchat-switch.ready.json"
 # Strong references to the ready-file publishers: the loop keeps only weak ones to its tasks
 _pending: set[asyncio.Task] = set()
 
@@ -36,7 +36,7 @@ def _wire(app, adapter) -> None:
     from hermes_constants import get_process_hermes_home
 
     # The launch home, like gateway.pid and gateway.sock: get_hermes_home() honours per-session
-    # profile overrides, which would put the file where PharmaLLM never looks
+    # profile overrides, which would put the file where PharmaITChat never looks
     home = Path(get_process_hermes_home())
     # A file left by an earlier connect must not vouch for this one while it is still in progress
     (home / READY_FILE_NAME).unlink(missing_ok=True)
@@ -45,7 +45,7 @@ def _wire(app, adapter) -> None:
     # block=False: the tap waits on the app, and a blocking handler would hold up every other update
     app.add_handler(CallbackQueryHandler(handle_tap, pattern=PATTERN, block=False))
     pid = os.getpid()
-    # Same function the gateway's own pid record uses, so PharmaLLM can compare the two exactly.
+    # Same function the gateway's own pid record uses, so PharmaITChat can compare the two exactly.
     # The factory runs inside the adapter's connect() coroutine, so there is a running loop.
     task = asyncio.get_running_loop().create_task(
         publish_ready_when_connected(adapter, app, home, pid, get_process_start_time(pid)))
@@ -61,11 +61,11 @@ async def publish_ready_when_connected(adapter, app, home: Path, pid: int, start
     deadline = loop.time() + timeout
     while not adapter.is_connected:
         if loop.time() >= deadline:
-            logger.warning("pharmallm-switch: Telegram did not connect within %.0f s; no ready file", timeout)
+            logger.warning("pharmaitchat-switch: Telegram did not connect within %.0f s; no ready file", timeout)
             return
         await asyncio.sleep(poll)
     if getattr(adapter, "_app", app) is not app:
-        logger.error("pharmallm-switch: Telegram app was rebuilt without plugin handlers; restart the gateway")
+        logger.error("pharmaitchat-switch: Telegram app was rebuilt without plugin handlers; restart the gateway")
         return
     write_ready_file(home, pid, start_time)
 
@@ -84,7 +84,7 @@ async def _answer(query, text: str) -> None:
     try:
         await query.answer(text=text)
     except Exception as exc:
-        logger.warning("pharmallm-switch: could not answer the tap (%s)", type(exc).__name__)
+        logger.warning("pharmaitchat-switch: could not answer the tap (%s)", type(exc).__name__)
 
 
 async def handle_tap(update, context) -> None:
@@ -104,4 +104,4 @@ async def handle_tap(update, context) -> None:
     try:
         await query.edit_message_text(outcome.text)
     except Exception as exc:  # an edit failure must not surface as a gateway error
-        logger.warning("pharmallm-switch: could not edit the message (%s)", type(exc).__name__)
+        logger.warning("pharmaitchat-switch: could not edit the message (%s)", type(exc).__name__)

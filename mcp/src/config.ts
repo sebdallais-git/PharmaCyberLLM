@@ -1,13 +1,16 @@
-// Environment configuration for the PharmaLLM MCP service
+// Environment configuration for the PharmaITChat MCP service
 
 import { createHash, timingSafeEqual } from "node:crypto";
+// The MCP service is a separate package but shares the app's env-name fallback: both read the same
+// PHARMAITCHAT_* env vars (falling back to the legacy PHARMALLM_* names) for the app's URL and token.
+import { readEnvWithFallback } from "../../src/config/env-names.js";
 
 export interface McpConfig {
   port: number;
   host: string;
   mcpToken: string | null;
-  pharmallmUrl: string;
-  pharmallmToken: string | null;
+  pharmaitchatUrl: string;
+  pharmaitchatToken: string | null;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -49,7 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     port,
     host,
     mcpToken,
-    pharmallmUrl: (env.PHARMALLM_URL ?? "http://localhost:3000").replace(/\/+$/, ""),
-    pharmallmToken: env.PHARMALLM_API_TOKEN?.trim() || null,
+    pharmaitchatUrl: (readEnvWithFallback(env, "URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
+    pharmaitchatToken: readEnvWithFallback(env, "API_TOKEN") ?? null,
   };
 }

@@ -3,7 +3,7 @@
 // src/services/news-agent.ts used to call loadWatchlist() at module scope and
 // src/server.ts imports it, so a typo in that file -- which the README tells
 // the owner to edit, and which he edits from an iPad -- took the whole
-// PharmaLLM server down at boot with a YAML error for a stack trace.
+// PharmaITChat server down at boot with a YAML error for a stack trace.
 //
 // This suite deliberately does NOT import news-agent at the top: the point is
 // what happens at IMPORT time with a broken config on disk, so the import has

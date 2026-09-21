@@ -1,4 +1,4 @@
-// Starts a fake PharmaLLM, the MCP HTTP app, and a connected MCP client
+// Starts a fake PharmaITChat, the MCP HTTP app, and a connected MCP client
 
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,34 +6,34 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpConfig } from "../../src/config.js";
 import { createHttpApp } from "../../src/http.js";
-import { createPharmaLLMClient } from "../../src/pharmallm-client.js";
+import { createPharmaITChatClient } from "../../src/pharmaitchat-client.js";
 import { silentToolLogger } from "../../src/tools/result.js";
-import { startFakePharmaLLM } from "./fake-pharmallm.js";
-import type { FakePharmaLLM } from "./fake-pharmallm.js";
+import { startFakePharmaITChat } from "./fake-pharmaitchat.js";
+import type { FakePharmaITChat } from "./fake-pharmaitchat.js";
 
 export interface HarnessOptions {
   mcpToken?: string | null;
-  pharmallmToken?: string | null;
+  pharmaitchatToken?: string | null;
   keepAliveMs?: number;
 }
 
 export interface Harness {
-  pharma: FakePharmaLLM;
+  pharma: FakePharmaITChat;
   client: Client;
   mcpUrl: string;
   close(): Promise<void>;
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const pharma = await startFakePharmaLLM();
+  const pharma = await startFakePharmaITChat();
   const config: McpConfig = {
     port: 0,
     host: "127.0.0.1",
     mcpToken: options.mcpToken ?? null,
-    pharmallmUrl: pharma.url,
-    pharmallmToken: options.pharmallmToken ?? null,
+    pharmaitchatUrl: pharma.url,
+    pharmaitchatToken: options.pharmaitchatToken ?? null,
   };
-  const app = createHttpApp(config, createPharmaLLMClient(pharma.url, config.pharmallmToken), silentToolLogger, {
+  const app = createHttpApp(config, createPharmaITChatClient(pharma.url, config.pharmaitchatToken), silentToolLogger, {
     keepAliveMs: options.keepAliveMs,
   });
   const server = await new Promise<Server>((resolve) => {

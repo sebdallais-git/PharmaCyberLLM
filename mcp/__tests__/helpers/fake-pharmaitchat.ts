@@ -1,4 +1,4 @@
-// Minimal HTTP server that stands in for PharmaLLM's REST API in tests
+// Minimal HTTP server that stands in for PharmaITChat's REST API in tests
 
 import { createServer } from "node:http";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
@@ -15,7 +15,7 @@ export interface FakeHandler {
   (req: FakeRequest, res: ServerResponse): void;
 }
 
-export interface FakePharmaLLM {
+export interface FakePharmaITChat {
   url: string;
   requests: FakeRequest[];
   on(method: string, path: string, handler: FakeHandler): void;
@@ -35,7 +35,7 @@ export function sendSse(res: ServerResponse, events: unknown[]): void {
   res.end();
 }
 
-export async function startFakePharmaLLM(): Promise<FakePharmaLLM> {
+export async function startFakePharmaITChat(): Promise<FakePharmaITChat> {
   const routes = new Map<string, FakeHandler>();
   const requests: FakeRequest[] = [];
 

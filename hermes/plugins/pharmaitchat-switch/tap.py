@@ -1,4 +1,4 @@
-"""Pure logic for the PharmaLLM switch buttons: parse a tap, check who tapped, ask the app, pick the reply.
+"""Pure logic for the PharmaITChat switch buttons: parse a tap, check who tapped, ask the app, pick the reply.
 No Telegram or Hermes imports, so it tests with the standard library alone."""
 
 from __future__ import annotations
@@ -79,13 +79,13 @@ def post_json(url: str, body: dict, token: str, timeout: float = 10.0) -> AppRep
 def outcome_for(tap: Tap, reply: AppReply) -> Outcome:
     if reply.status == 200 and tap.action == "confirm":
         target = str(reply.body.get("target") or "the new stack")
-        return Outcome(f"✅ Switching to {target}", f"✅ Switching to {target} — PharmaLLM restarts in a moment")
+        return Outcome(f"✅ Switching to {target}", f"✅ Switching to {target} — PharmaITChat restarts in a moment")
     if reply.status == 200:
         return Outcome("✖ Switch cancelled", "✖ Switch cancelled")
     if reply.status == 410:
-        return Outcome("⌛ Expired", "⌛ Expired — request the switch again from PharmaLLM")
+        return Outcome("⌛ Expired", "⌛ Expired — request the switch again from PharmaITChat")
     detail = reply.error or f"HTTP {reply.status}"
-    return Outcome(f"⚠️ Could not reach PharmaLLM ({detail})", None)
+    return Outcome(f"⚠️ Could not reach PharmaITChat ({detail})", None)
 
 
 def resolve(tap: Tap, env: Mapping[str, str],

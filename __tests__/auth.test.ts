@@ -76,7 +76,8 @@ describe("authorizeRequest", () => {
   it("refuses protected routes from other machines when no token is configured", () => {
     const decision = authorizeRequest({ ...reindex, authorization: undefined, remoteAddress: lan, host: localHost }, null);
     expect(decision.ok).toBe(false);
-    expect(decision.message).toContain("PHARMALLM_API_TOKEN");
+    expect(decision.message).toContain("PHARMAITCHAT_API_TOKEN");
+    expect(decision.message).toContain("legacy PHARMALLM_API_TOKEN");
   });
 
   it("refuses loopback requests with a foreign Host header when no token is configured (DNS rebinding)", () => {
@@ -127,7 +128,9 @@ describe("token helpers", () => {
     expect(bearerToken("Basic abc")).toBeNull();
     expect(tokensMatch("abc", "abc")).toBe(true);
     expect(tokensMatch("abc", "abcd")).toBe(false);
-    expect(readApiToken({ PHARMALLM_API_TOKEN: "  t0ken " })).toBe("t0ken");
+    expect(readApiToken({ PHARMAITCHAT_API_TOKEN: "  t0ken " })).toBe("t0ken");
+    expect(readApiToken({ PHARMALLM_API_TOKEN: "  legacy " })).toBe("legacy");
+    expect(readApiToken({ PHARMAITCHAT_API_TOKEN: "new", PHARMALLM_API_TOKEN: "old" })).toBe("new");
     expect(readApiToken({ PHARMALLM_API_TOKEN: "" })).toBeNull();
     expect(readApiToken({})).toBeNull();
   });
@@ -182,7 +185,7 @@ describe("createAuthMiddleware", () => {
 
     const denied = await fetch(`${url}/api/knowledge/reindex`, { method: "POST" });
     expect(denied.status).toBe(401);
-    expect(await denied.json()).toEqual({ error: "Unauthorized: send Authorization: Bearer <PHARMALLM_API_TOKEN>" });
+    expect(await denied.json()).toEqual({ error: "Unauthorized: send Authorization: Bearer <PHARMAITCHAT_API_TOKEN>" });
 
     const allowed = await fetch(`${url}/api/knowledge/reindex`, {
       method: "POST",

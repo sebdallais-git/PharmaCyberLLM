@@ -7,12 +7,12 @@ describe("loadConfig", () => {
       port: 3200,
       host: "127.0.0.1",
       mcpToken: null,
-      pharmallmUrl: "http://localhost:3000",
-      pharmallmToken: null,
+      pharmaitchatUrl: "http://localhost:3000",
+      pharmaitchatToken: null,
     });
   });
 
-  it("reads overrides and trims the PharmaLLM URL", () => {
+  it("reads overrides and trims the PharmaITChat URL", () => {
     const config = loadConfig({
       MCP_PORT: "4100",
       MCP_HOST: "0.0.0.0",
@@ -24,9 +24,20 @@ describe("loadConfig", () => {
       port: 4100,
       host: "0.0.0.0",
       mcpToken: "agent-secret",
-      pharmallmUrl: "http://model-mac.local:3000",
-      pharmallmToken: "app-secret",
+      pharmaitchatUrl: "http://model-mac.local:3000",
+      pharmaitchatToken: "app-secret",
     });
+  });
+
+  it("prefers the renamed PHARMAITCHAT_* env vars over the legacy PHARMALLM_* ones", () => {
+    const config = loadConfig({
+      PHARMAITCHAT_URL: "http://new-mac.local:3000/",
+      PHARMAITCHAT_API_TOKEN: "new-secret",
+      PHARMALLM_URL: "http://old-mac.local:3000/",
+      PHARMALLM_API_TOKEN: "old-secret",
+    });
+    expect(config.pharmaitchatUrl).toBe("http://new-mac.local:3000");
+    expect(config.pharmaitchatToken).toBe("new-secret");
   });
 
   it("refuses a non-loopback host without MCP_TOKEN", () => {

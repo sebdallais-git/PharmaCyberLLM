@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import type { ServerResponse } from "node:http";
-import { createPharmaLLMClient, PharmaLLMError } from "../src/pharmallm-client.js";
-import type { FetchImpl } from "../src/pharmallm-client.js";
-import { sendJson, sendSse, startFakePharmaLLM } from "./helpers/fake-pharmallm.js";
-import type { FakePharmaLLM } from "./helpers/fake-pharmallm.js";
+import { createPharmaITChatClient, PharmaITChatError } from "../src/pharmaitchat-client.js";
+import type { FetchImpl } from "../src/pharmaitchat-client.js";
+import { sendJson, sendSse, startFakePharmaITChat } from "./helpers/fake-pharmaitchat.js";
+import type { FakePharmaITChat } from "./helpers/fake-pharmaitchat.js";
 
-let pharma: FakePharmaLLM;
+let pharma: FakePharmaITChat;
 // Responses a test left hanging on purpose; ended in cleanup so Jest exits cleanly
 let stalled: ServerResponse[] = [];
 
 beforeEach(async () => {
-  pharma = await startFakePharmaLLM();
+  pharma = await startFakePharmaITChat();
 });
 
 afterEach(async () => {
@@ -28,7 +28,7 @@ function rejectingFetch(code: string): FetchImpl {
 describe("get and post", () => {
   it("sends the API token and parses JSON", async () => {
     pharma.on("GET", "/api/health", (_req, res) => sendJson(res, 200, { status: "healthy" }));
-    const client = createPharmaLLMClient(pharma.url, "app-secret");
+    const client = createPharmaITChatClient(pharma.url, "app-secret");
 
     await expect(client.get("/api/health")).resolves.toEqual({ status: "healthy" });
     expect(pharma.requests[0].headers.authorization).toBe("Bearer app-secret");
@@ -36,7 +36,7 @@ describe("get and post", () => {
 
   it("sends no Authorization header without a token and posts JSON", async () => {
     pharma.on("POST", "/api/knowledge/search", (_req, res) => sendJson(res, 200, { results: [] }));
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
     await client.post("/api/knowledge/search", { query: "Dell", topK: 5 });
     expect(pharma.requests[0].headers.authorization).toBeUndefined();
@@ -45,51 +45,51 @@ describe("get and post", () => {
 
   it("explains a rejected token", async () => {
     pharma.on("GET", "/api/health", (_req, res) => sendJson(res, 401, { error: "Unauthorized" }));
-    const client = createPharmaLLMClient(pharma.url, "wrong");
+    const client = createPharmaITChatClient(pharma.url, "wrong");
 
     await expect(client.get("/api/health")).rejects.toThrow(
-      "PharmaLLM rejected the API token — check PHARMALLM_API_TOKEN"
+      "PharmaITChat rejected the API token — check PHARMAITCHAT_API_TOKEN"
     );
   });
 
-  it("includes status and PharmaLLM's error message", async () => {
+  it("includes status and PharmaITChat's error message", async () => {
     pharma.on("POST", "/api/knowledge/search", (_req, res) =>
       sendJson(res, 503, { error: "Search refused: index incomplete" })
     );
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
     const error = await client.post("/api/knowledge/search", { query: "x" }).catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(PharmaLLMError);
-    expect((error as PharmaLLMError).status).toBe(503);
-    expect((error as PharmaLLMError).message).toBe(
-      "PharmaLLM /api/knowledge/search failed (503): Search refused: index incomplete"
+    expect(error).toBeInstanceOf(PharmaITChatError);
+    expect((error as PharmaITChatError).status).toBe(503);
+    expect((error as PharmaITChatError).message).toBe(
+      "PharmaITChat /api/knowledge/search failed (503): Search refused: index incomplete"
     );
   });
 
-  it("reports an unreachable PharmaLLM", async () => {
-    const client = createPharmaLLMClient("http://127.0.0.1:9", null);
-    await expect(client.get("/api/health")).rejects.toThrow("PharmaLLM not reachable at http://127.0.0.1:9");
+  it("reports an unreachable PharmaITChat", async () => {
+    const client = createPharmaITChatClient("http://127.0.0.1:9", null);
+    await expect(client.get("/api/health")).rejects.toThrow("PharmaITChat not reachable at http://127.0.0.1:9");
   });
 
   it("times out a slow request", async () => {
     pharma.on("GET", "/api/health", () => {
       // never answers
     });
-    const client = createPharmaLLMClient(pharma.url, null);
-    await expect(client.get("/api/health", 50)).rejects.toThrow("PharmaLLM did not answer within 0.05 s");
+    const client = createPharmaITChatClient(pharma.url, null);
+    await expect(client.get("/api/health", 50)).rejects.toThrow("PharmaITChat did not answer within 0.05 s");
   });
 
   it("treats undici's own header and body timeouts as timeouts, not as unreachable", async () => {
-    const headers = createPharmaLLMClient(pharma.url, null, rejectingFetch("UND_ERR_HEADERS_TIMEOUT"));
+    const headers = createPharmaITChatClient(pharma.url, null, rejectingFetch("UND_ERR_HEADERS_TIMEOUT"));
     await expect(headers.post("/api/agent/run", {}, 840_000)).rejects.toThrow(
-      "PharmaLLM did not answer within 840 s"
+      "PharmaITChat did not answer within 840 s"
     );
 
-    const body = createPharmaLLMClient(pharma.url, null, rejectingFetch("UND_ERR_BODY_TIMEOUT"));
+    const body = createPharmaITChatClient(pharma.url, null, rejectingFetch("UND_ERR_BODY_TIMEOUT"));
     await expect(body.get("/api/health", 5000)).rejects.toThrow("did not answer within");
 
-    const refused = createPharmaLLMClient(pharma.url, null, rejectingFetch("ECONNREFUSED"));
-    await expect(refused.get("/api/health", 5000)).rejects.toThrow("PharmaLLM not reachable at");
+    const refused = createPharmaITChatClient(pharma.url, null, rejectingFetch("ECONNREFUSED"));
+    await expect(refused.get("/api/health", 5000)).rejects.toThrow("PharmaITChat not reachable at");
   });
 
   it("keeps the deadline running while the JSON body is read", async () => {
@@ -98,8 +98,8 @@ describe("get and post", () => {
       res.write('{"status":');
       stalled.push(res);
     });
-    const client = createPharmaLLMClient(pharma.url, null);
-    await expect(client.get("/api/health", 300)).rejects.toThrow("PharmaLLM did not answer within 0.3 s");
+    const client = createPharmaITChatClient(pharma.url, null);
+    await expect(client.get("/api/health", 300)).rejects.toThrow("PharmaITChat did not answer within 0.3 s");
   });
 });
 
@@ -115,7 +115,7 @@ describe("ask", () => {
         { done: true, stack: "ollama", response_id: "r-1", timings: { totalMs: 1234 } },
       ])
     );
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
     await expect(client.ask("How does Dell protect backups?", false, 5000)).resolves.toEqual({
       answer: "Dell isolates backups.",
@@ -127,20 +127,20 @@ describe("ask", () => {
     expect(pharma.requests[0].body).toEqual({ message: "How does Dell protect backups?", webSearch: false });
   });
 
-  it("turns a stream error event into a PharmaLLMError", async () => {
+  it("turns a stream error event into a PharmaITChatError", async () => {
     pharma.on("POST", "/api/chat", (_req, res) =>
       sendSse(res, [{ error: "OLLAMA stack not reachable at http://localhost:11434/v1/chat/completions" }])
     );
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
     await expect(client.ask("hi", false, 5000)).rejects.toThrow("OLLAMA stack not reachable");
   });
 
   it("fails when the stream ends without an answer", async () => {
     pharma.on("POST", "/api/chat", (_req, res) => sendSse(res, [{ token: "partial" }]));
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
-    await expect(client.ask("hi", false, 5000)).rejects.toThrow("PharmaLLM chat stream ended without an answer");
+    await expect(client.ask("hi", false, 5000)).rejects.toThrow("PharmaITChat chat stream ended without an answer");
   });
 
   it("times out a chat stream that stalls after the first event", async () => {
@@ -150,8 +150,8 @@ describe("ask", () => {
       res.write(`data: ${JSON.stringify({ token: "Dell " })}\n\n`);
       stalled.push(res);
     });
-    const client = createPharmaLLMClient(pharma.url, null);
+    const client = createPharmaITChatClient(pharma.url, null);
 
-    await expect(client.ask("hi", false, 300)).rejects.toThrow("PharmaLLM did not answer within 0.3 s");
+    await expect(client.ask("hi", false, 300)).rejects.toThrow("PharmaITChat did not answer within 0.3 s");
   });
 });

@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PharmaLLMClient } from "../pharmallm-client.js";
+import type { PharmaITChatClient } from "../pharmaitchat-client.js";
 import { runTool } from "./result.js";
 import type { ToolLogger } from "./result.js";
 
@@ -12,11 +12,11 @@ const REPORT_ROUTES = {
   weekly_digest: "/api/feedback/weekly-digest",
 } as const;
 
-export function registerFeedbackTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger): void {
+export function registerFeedbackTools(server: McpServer, client: PharmaITChatClient, log: ToolLogger): void {
   server.registerTool(
     "record_feedback",
     {
-      description: "Rate a PharmaLLM answer from 1 (poor) to 5 (excellent), using the response_id from ask_pharmallm.",
+      description: "Rate a PharmaITChat answer from 1 (poor) to 5 (excellent), using the response_id from ask_pharmaitchat.",
       inputSchema: {
         rating: z.number().int().min(1).max(5),
         response_id: z.string().min(1).optional(),

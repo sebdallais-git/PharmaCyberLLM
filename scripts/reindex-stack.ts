@@ -1,6 +1,6 @@
 // Rebuild or inspect the active stack's search indexes
 // Usage:
-//   LLM_PROVIDER=mlx npx tsx scripts/reindex-stack.ts            rebuild (PharmaLLM must be stopped)
+//   LLM_PROVIDER=mlx npx tsx scripts/reindex-stack.ts            rebuild (PharmaITChat must be stopped)
 //   LLM_PROVIDER=mlx npx tsx scripts/reindex-stack.ts --check    exit 0 if ready, 2 if a rebuild is needed
 //   LLM_PROVIDER=mlx npx tsx scripts/reindex-stack.ts --status   print index metadata and counts
 
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   }
 
   if (await appIsRunning()) {
-    console.error(`PharmaLLM is running at ${APP_URL}. Stop it first, or call POST /api/knowledge/reindex.`);
+    console.error(`PharmaITChat is running at ${APP_URL}. Stop it first, or call POST /api/knowledge/reindex.`);
     process.exit(1);
   }
 

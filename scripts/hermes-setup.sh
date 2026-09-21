@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Set up Hermes Agent for PharmaLLM: config, secrets, launchd services and scheduled jobs.
+# Set up Hermes Agent for PharmaITChat: config, secrets, launchd services and scheduled jobs.
 # Usage:
 #   scripts/hermes-setup.sh check             read-only status (prints variable names, never values)
 #   scripts/hermes-setup.sh install-config    copy config.yaml and SOUL.md into ~/.hermes and fill ~/.hermes/.env
-#   scripts/hermes-setup.sh install-services  install the pharmallm-mcp launch agent and the Hermes gateway service
-#   scripts/hermes-setup.sh install-plugin    install the pharmallm-switch plugin (Telegram switch buttons) and restart the gateway
+#   scripts/hermes-setup.sh install-services  install the pharmaitchat-mcp launch agent and the Hermes gateway service
+#   scripts/hermes-setup.sh install-plugin    install the pharmaitchat-switch plugin (Telegram switch buttons) and restart the gateway
 #   scripts/hermes-setup.sh install-cron      create or update the scheduled jobs from hermes/cron/jobs.json
 #   scripts/hermes-setup.sh all               install-config, install-services, install-plugin, install-cron
 set -euo pipefail
@@ -14,16 +14,16 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TEMPLATE_DIR="$PROJECT_DIR/hermes"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 ENV_FILE="$HERMES_HOME/.env"
-RUN_DIR="${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}"
+RUN_DIR="${PHARMAITCHAT_RUN_DIR:-${PHARMALLM_RUN_DIR:-$PROJECT_DIR/data/run}}"
 LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
 MCP_HEALTH_URL="${MCP_HEALTH_URL:-http://127.0.0.1:3200/healthz}"
-MCP_LABEL="com.pharmallm.mcp"
-PLUGIN_NAME="pharmallm-switch"
+MCP_LABEL="com.pharmaitchat.mcp"
+PLUGIN_NAME="pharmaitchat-switch"
 # Only the plugin's own files: the tests next to it in the repo stay out of ~/.hermes
 PLUGIN_FILES=(plugin.yaml __init__.py tap.py)
-ENV_KEYS=(PHARMALLM_URL PHARMALLM_MCP_URL SEARXNG_URL PHARMALLM_API_TOKEN PHARMALLM_MCP_TOKEN
+ENV_KEYS=(PHARMALLM_URL PHARMALLM_MCP_URL SEARXNG_URL PHARMAITCHAT_API_TOKEN PHARMALLM_MCP_TOKEN
   TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_HOME_CHANNEL)
 
 log() {
@@ -106,7 +106,7 @@ fill_env() {
   if [ -z "$value" ]; then
     local hint=""
     case "$key" in
-      PHARMALLM_API_TOKEN) hint=" — generate it with: scripts/switch-stack.sh token" ;;
+      PHARMAITCHAT_API_TOKEN) hint=" — generate it with: scripts/switch-stack.sh token" ;;
       PHARMALLM_MCP_TOKEN) hint=" — generate it with: scripts/switch-stack.sh mcp-token" ;;
     esac
     log "Missing $key: add it to $ENV_FILE (chmod 600) and re-run, see hermes/README.md$hint"
@@ -134,7 +134,7 @@ install_config() {
   fill_env PHARMALLM_URL "http://localhost:3000"
   fill_env PHARMALLM_MCP_URL "http://127.0.0.1:3200/mcp"
   fill_env SEARXNG_URL "http://localhost:8888"
-  fill_env PHARMALLM_API_TOKEN "" "$RUN_DIR/api-token"
+  fill_env PHARMAITCHAT_API_TOKEN "" "$RUN_DIR/api-token"
   fill_env PHARMALLM_MCP_TOKEN "" "$RUN_DIR/mcp-token"
   fill_env TELEGRAM_BOT_TOKEN ""
   fill_env TELEGRAM_ALLOWED_USERS ""
@@ -157,7 +157,7 @@ install_services() {
       -e "s|__NODE_BIN__|$node_bin|g" \
       -e "s|__MCP_HOST__|${MCP_HOST:-127.0.0.1}|g" \
       -e "s|__PATH__|$(dirname "$node_bin"):/usr/bin:/bin:/usr/sbin:/sbin|g" \
-      "$TEMPLATE_DIR/com.pharmallm.mcp.plist.template" >"$plist"
+      "$TEMPLATE_DIR/com.pharmaitchat.mcp.plist.template" >"$plist"
   domain="gui/$(id -u)"
   "$LAUNCHCTL_BIN" bootout "$domain/$MCP_LABEL" >/dev/null 2>&1 || true
   # launchd can still be tearing the old job down and answers "Input/output error"; give it a few tries
@@ -220,7 +220,7 @@ if os.path.exists(store_path):
 # `cron create <schedule> <prompt>` shape every other job uses.
 def install_script(script_name):
     # __PROJECT_DIR__ is baked in at install time (same idea as
-    # com.pharmallm.mcp.plist.template's __PROJECT_DIR__): once this file
+    # com.pharmaitchat.mcp.plist.template's __PROJECT_DIR__): once this file
     # lives under ~/.hermes/scripts it has no other way to find the repo.
     src = os.path.join(template_dir, "scripts", script_name)
     with open(src, encoding="utf-8") as handle:
@@ -350,22 +350,22 @@ PY
     log "plugin $PLUGIN_NAME: installed, waiting for a gateway restart"
     problems=1
   fi
-  # /healthz answers 200 with {"ok":true,"pharmallm":false} while the app behind the service is down,
+  # /healthz answers 200 with {"ok":true,"pharmaitchat":false} while the app behind the service is down,
   # so a 200 alone says nothing: parse the field instead of trusting the status code
   local health
   if health="$(curl -sf -m 3 "$MCP_HEALTH_URL" 2>/dev/null)"; then
     if printf '%s' "$health" | python3 -c 'import json,sys
 try:
-    sys.exit(0 if json.load(sys.stdin).get("pharmallm") is True else 1)
+    sys.exit(0 if json.load(sys.stdin).get("pharmaitchat") is True else 1)
 except Exception:
     sys.exit(1)'; then
-      log "pharmallm-mcp: healthy"
+      log "pharmaitchat-mcp: healthy"
     else
-      log "pharmallm-mcp: up, PharmaLLM not reachable"
+      log "pharmaitchat-mcp: up, PharmaITChat not reachable"
       problems=1
     fi
   else
-    log "pharmallm-mcp: not answering"
+    log "pharmaitchat-mcp: not answering"
     problems=1
   fi
   return "$problems"

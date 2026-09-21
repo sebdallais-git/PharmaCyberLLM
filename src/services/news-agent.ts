@@ -49,7 +49,7 @@ interface AgentState {
 // I2: read lazily, memoized, and never allowed to throw. This used to be a
 // module-scope `loadWatchlist()` call, and src/server.ts imports this module
 // -- so a typo in config/watchlist.yaml (a file the README tells the owner to
-// edit, and he edits it from an iPad) took the whole PharmaLLM server down at
+// edit, and he edits it from an iPad) took the whole PharmaITChat server down at
 // boot, with a YAML error for a stack trace. A broken config must cost the
 // news agent its topic list for the night, nothing more.
 export function createTopicsLoader(load: () => Watchlist): () => string[] {

@@ -1,4 +1,4 @@
-// OpenAI-compatible endpoints so agents use PharmaLLM's active LLM stack
+// OpenAI-compatible endpoints so agents use PharmaITChat's active LLM stack
 
 import { Router } from "express";
 import type { Request, Response } from "express";

@@ -21,7 +21,7 @@ export interface FetchLike {
   ): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 }
 
-export const DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; PharmaLLM/1.0; +sebdallais@gmail.com)";
+export const DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; PharmaITChat/1.0; +sebdallais@gmail.com)";
 
 // The bound verifyFeed's default fetchImpl uses when a caller doesn't supply
 // its own timeoutMs (fix round 1: a bare verifyFeed(feed) used to have no

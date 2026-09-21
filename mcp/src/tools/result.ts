@@ -33,7 +33,7 @@ export async function runTool(name: string, log: ToolLogger, fn: () => Promise<u
   }
 }
 
-// Long PharmaLLM calls send nothing until they finish; HTTP clients with a read timeout (Hermes waits 300 s
+// Long PharmaITChat calls send nothing until they finish; HTTP clients with a read timeout (Hermes waits 300 s
 // between bytes) would give up, so long tools send a logging notification on the call's stream meanwhile
 export const KEEPALIVE_INTERVAL_MS = 60_000;
 
@@ -56,7 +56,7 @@ export async function runLongTool(
     sender
       .sendNotification({
         method: "notifications/message",
-        params: { level: "info", logger: "pharmallm-mcp", data: `${name} is still running` },
+        params: { level: "info", logger: "pharmaitchat-mcp", data: `${name} is still running` },
       })
       .catch(() => {});
   }, options.keepAliveMs ?? KEEPALIVE_INTERVAL_MS);

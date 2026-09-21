@@ -1,4 +1,4 @@
-// Benchmark the active stack end to end through the running PharmaLLM app
+// Benchmark the active stack end to end through the running PharmaITChat app
 // Usage: npx tsx scripts/benchmark-stack.ts [--runs 1] [--app http://localhost:3000] [--questions bench/questions.json]
 
 import { execFileSync } from "node:child_process";
@@ -9,10 +9,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseSseLines } from "../src/services/llm-client.js";
 import type { ChatTimings } from "../src/services/bench-mode.js";
 import type { BenchEnvironment, BenchQuestion, BenchmarkFile, MemoryPeak, QuestionResult, RunResult } from "./lib/benchmark-types.js";
+import { readEnvWithFallback } from "../src/config/env-names.js";
 
 // Benchmark routes (/api/bench/*) are protected: send the API token when one is configured
 function apiToken(): string | null {
-  const fromEnv = process.env.PHARMALLM_API_TOKEN?.trim();
+  const fromEnv = readEnvWithFallback(process.env, "API_TOKEN");
   if (fromEnv) return fromEnv;
   const tokenFile = join(process.cwd(), "data", "run", "api-token");
   return existsSync(tokenFile) ? readFileSync(tokenFile, "utf-8").trim() || null : null;
@@ -193,7 +194,7 @@ async function main(): Promise<void> {
   const questions = JSON.parse(await readFile(options.questionsPath, "utf-8")) as BenchQuestion[];
 
   const health = await getJson<{ status: string; stack: string }>(`${options.appUrl}/api/health`);
-  if (health.status === "unhealthy") throw new Error(`PharmaLLM is unhealthy on the ${health.stack} stack`);
+  if (health.status === "unhealthy") throw new Error(`PharmaITChat is unhealthy on the ${health.stack} stack`);
   const models = await getJson<{ chatModel: string; embeddingModel: string }>(`${options.appUrl}/api/chat/models`);
   const stack = health.stack;
 

@@ -2,19 +2,19 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PharmaLLMClient } from "../pharmallm-client.js";
+import type { PharmaITChatClient } from "../pharmaitchat-client.js";
 import { compactKnowledgeStats, compactSearchResults } from "./compact.js";
 import { runLongTool, runTool } from "./result.js";
 import type { ToolLogger, ToolOptions } from "./result.js";
 
 export const ASK_TIMEOUT_MS = 5 * 60 * 1000;
 
-export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClient, log: ToolLogger, options: ToolOptions = {}): void {
+export function registerKnowledgeTools(server: McpServer, client: PharmaITChatClient, log: ToolLogger, options: ToolOptions = {}): void {
   server.registerTool(
     "search_knowledge",
     {
       description:
-        "Search PharmaLLM's knowledge base (pharma business, cyber attacks, threat actors, IT vendors, regulations) " +
+        "Search PharmaITChat's knowledge base (pharma business, cyber attacks, threat actors, IT vendors, regulations) " +
         "and return the most relevant chunks with their sources. Fast: no LLM call.",
       inputSchema: {
         query: z.string().min(1).describe("What to search for"),
@@ -28,10 +28,10 @@ export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClien
   );
 
   server.registerTool(
-    "ask_pharmallm",
+    "ask_pharmaitchat",
     {
       description:
-        "Ask PharmaLLM a question and get its full retrieval-augmented answer with sources, the active LLM stack " +
+        "Ask PharmaITChat a question and get its full retrieval-augmented answer with sources, the active LLM stack " +
         "and a response_id for feedback. Runs the local 27B model and takes about 1-2 minutes.",
       inputSchema: {
         question: z.string().min(1).describe("The question to answer"),
@@ -39,14 +39,14 @@ export function registerKnowledgeTools(server: McpServer, client: PharmaLLMClien
       },
     },
     async ({ question, web_search }, extra) =>
-      runLongTool("ask_pharmallm", log, extra, options, () => client.ask(question, web_search ?? false, ASK_TIMEOUT_MS))
+      runLongTool("ask_pharmaitchat", log, extra, options, () => client.ask(question, web_search ?? false, ASK_TIMEOUT_MS))
   );
 
   server.registerTool(
     "add_knowledge",
     {
       description:
-        "Add knowledge to PharmaLLM: either text with a source name, or a URL to fetch. " +
+        "Add knowledge to PharmaITChat: either text with a source name, or a URL to fetch. " +
         "It is saved as a raw document so it survives reindexing.",
       inputSchema: {
         text: z.string().min(1).optional().describe("Text to add (requires source)"),

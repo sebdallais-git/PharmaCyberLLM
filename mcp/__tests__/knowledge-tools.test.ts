@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
-import { sendJson, sendSse } from "./helpers/fake-pharmallm.js";
+import { sendJson, sendSse } from "./helpers/fake-pharmaitchat.js";
 import { isToolError, startHarness, toolText } from "./helpers/harness.js";
 import type { Harness } from "./helpers/harness.js";
 
 let harness: Harness;
 
 beforeEach(async () => {
-  harness = await startHarness({ pharmallmToken: "app-secret" });
+  harness = await startHarness({ pharmaitchatToken: "app-secret" });
 });
 
 afterEach(async () => {
@@ -29,7 +29,7 @@ describe("search_knowledge", () => {
     expect(harness.pharma.requests[0].headers.authorization).toBe("Bearer app-secret");
   });
 
-  it("turns PharmaLLM errors into tool errors", async () => {
+  it("turns PharmaITChat errors into tool errors", async () => {
     harness.pharma.on("POST", "/api/knowledge/search", (_req, res) =>
       sendJson(res, 503, { error: "Search refused: index incomplete" })
     );
@@ -37,12 +37,12 @@ describe("search_knowledge", () => {
     const result = await harness.client.callTool({ name: "search_knowledge", arguments: { query: "x" } });
 
     expect(isToolError(result)).toBe(true);
-    expect(toolText(result)).toBe("PharmaLLM /api/knowledge/search failed (503): Search refused: index incomplete");
+    expect(toolText(result)).toBe("PharmaITChat /api/knowledge/search failed (503): Search refused: index incomplete");
     expect(harness.pharma.requests[0].body).toEqual({ query: "x", topK: 5 });
   });
 });
 
-describe("ask_pharmallm", () => {
+describe("ask_pharmaitchat", () => {
   it("returns the collected answer", async () => {
     harness.pharma.on("POST", "/api/chat", (_req, res) =>
       sendSse(res, [
@@ -52,7 +52,7 @@ describe("ask_pharmallm", () => {
       ])
     );
 
-    const result = await harness.client.callTool({ name: "ask_pharmallm", arguments: { question: "What is Part 11?" } });
+    const result = await harness.client.callTool({ name: "ask_pharmaitchat", arguments: { question: "What is Part 11?" } });
 
     expect(JSON.parse(toolText(result))).toEqual({
       answer: "21 CFR Part 11 covers electronic records.",
@@ -87,7 +87,7 @@ describe("add_knowledge", () => {
     expect(harness.pharma.requests[0].body).toEqual({ url: "https://example.com/report" });
   });
 
-  it("rejects missing or conflicting input without calling PharmaLLM", async () => {
+  it("rejects missing or conflicting input without calling PharmaITChat", async () => {
     const neither = await harness.client.callTool({ name: "add_knowledge", arguments: { text: "no source" } });
     const both = await harness.client.callTool({
       name: "add_knowledge",

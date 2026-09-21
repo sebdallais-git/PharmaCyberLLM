@@ -3,7 +3,7 @@
 <!-- Rendered by scripts/hermes-setup.sh install-services; holds no secrets (run-mcp.sh reads the token files) -->
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.pharmallm.mcp</string>
+  <key>Label</key><string>com.pharmaitchat.mcp</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

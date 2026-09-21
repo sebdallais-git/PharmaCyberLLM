@@ -25,7 +25,7 @@ function fakeFetch(status: number, body: string): FetchLike {
 }
 
 function testDeps(fetchImpl: FetchLike): AdapterDeps {
-  return { fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaLLM-Test/1.0" };
+  return { fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaITChat-Test/1.0" };
 }
 
 const ENTITY: Entity = {
@@ -182,7 +182,7 @@ describe("rssAdapter", () => {
     const adapter = rssAdapter(testDeps(fetchImpl));
     await adapter(RSS_FEED, ENTITY, null);
 
-    expect(seenHeaders?.["User-Agent"]).toBe("PharmaLLM-Test/1.0");
+    expect(seenHeaders?.["User-Agent"]).toBe("PharmaITChat-Test/1.0");
   });
 
   it("falls back to the injected clock when an item carries no parseable date", async () => {

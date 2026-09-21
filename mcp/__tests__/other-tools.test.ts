@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import { NEWS_AGENT_TIMEOUT_MS } from "../src/tools/operations.js";
-import { sendJson } from "./helpers/fake-pharmallm.js";
+import { sendJson } from "./helpers/fake-pharmaitchat.js";
 import { isToolError, startHarness, toolText } from "./helpers/harness.js";
 import type { Harness } from "./helpers/harness.js";
 
@@ -19,11 +19,11 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<u
 }
 
 describe("tool list", () => {
-  it("exposes exactly the 16 PharmaLLM tools", async () => {
+  it("exposes exactly the 16 PharmaITChat tools", async () => {
     const { tools } = await harness.client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "add_knowledge",
-      "ask_pharmallm",
+      "ask_pharmaitchat",
       "dashboard_metrics",
       "feedback_report",
       "graph_search",
@@ -59,7 +59,7 @@ describe("graph tools", () => {
 });
 
 describe("gap tools", () => {
-  // PharmaLLM inserts new gaps as 'triggered', not 'detected' (src/services/gap-detector.ts)
+  // PharmaITChat inserts new gaps as 'triggered', not 'detected' (src/services/gap-detector.ts)
   function serveGaps(): void {
     harness.pharma.on("GET", "/api/knowledge/gaps", (_req, res) =>
       sendJson(res, 200, {
@@ -141,7 +141,7 @@ describe("operations tools", () => {
     const result = await call("start_reindex");
 
     expect(isToolError(result)).toBe(true);
-    expect(toolText(result)).toBe("PharmaLLM /api/knowledge/reindex failed (409): A reindex is already running");
+    expect(toolText(result)).toBe("PharmaITChat /api/knowledge/reindex failed (409): A reindex is already running");
   });
 });
 
@@ -154,7 +154,7 @@ describe("feedback tools", () => {
     expect(harness.pharma.requests[0].body).toEqual({ rating: 4, response_id: "r-9", comment: "Good sources" });
   });
 
-  it("rejects an out-of-range rating before calling PharmaLLM", async () => {
+  it("rejects an out-of-range rating before calling PharmaITChat", async () => {
     const result = await call("record_feedback", { rating: 9 });
     expect(isToolError(result)).toBe(true);
     expect(harness.pharma.requests).toHaveLength(0);

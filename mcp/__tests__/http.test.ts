@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { request } from "node:http";
 import { authorizeMcpRequest } from "../src/http.js";
-import { sendJson } from "./helpers/fake-pharmallm.js";
+import { sendJson } from "./helpers/fake-pharmaitchat.js";
 import { startHarness } from "./helpers/harness.js";
 import type { Harness } from "./helpers/harness.js";
 
@@ -69,7 +69,7 @@ describe("HTTP app", () => {
     harness = await startHarness({ mcpToken: "agent-secret" });
     const { tools } = await harness.client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["search_knowledge", "ask_pharmallm", "add_knowledge", "knowledge_status"])
+      expect.arrayContaining(["search_knowledge", "ask_pharmaitchat", "add_knowledge", "knowledge_status"])
     );
   });
 
@@ -119,10 +119,10 @@ describe("HTTP app", () => {
     expect(resp.headers.get("allow")).toBe("POST");
   });
 
-  it("reports PharmaLLM reachability on /healthz", async () => {
+  it("reports PharmaITChat reachability on /healthz", async () => {
     harness = await startHarness();
     harness.pharma.on("GET", "/api/health", (_req, res) => sendJson(res, 200, { status: "healthy" }));
     const resp = await fetch(harness.mcpUrl.replace("/mcp", "/healthz"));
-    expect(await resp.json()).toEqual({ ok: true, pharmallm: true });
+    expect(await resp.json()).toEqual({ ok: true, pharmaitchat: true });
   });
 });

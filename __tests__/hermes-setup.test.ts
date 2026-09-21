@@ -13,7 +13,7 @@ const WATCHLIST_SCRIPT_TIMEOUT_SECONDS = (
     name: string;
     script_timeout_seconds?: number;
   }>
-).find((job) => job.name === "pharmallm-watchlist-ingest")?.script_timeout_seconds ?? 0;
+).find((job) => job.name === "pharmaitchat-watchlist-ingest")?.script_timeout_seconds ?? 0;
 const dirs: string[] = [];
 const API_TOKEN = "api-token-value-1111";
 const MCP_TOKEN = "mcp-token-value-2222";
@@ -110,7 +110,7 @@ describe("hermes-setup.sh install-config", () => {
     expect(existsSync(join(box.home, "SOUL.md"))).toBe(true);
     expect(statSync(join(box.home, ".env")).mode & 0o777).toBe(0o600);
     const env = envFile(box);
-    expect(env).toContain(`PHARMALLM_API_TOKEN=${API_TOKEN}`);
+    expect(env).toContain(`PHARMAITCHAT_API_TOKEN=${API_TOKEN}`);
     expect(env).toContain(`PHARMALLM_MCP_TOKEN=${MCP_TOKEN}`);
     expect(env).toContain("PHARMALLM_URL=http://localhost:3000");
     expect(env).toContain("PHARMALLM_MCP_URL=http://127.0.0.1:3200/mcp");
@@ -142,7 +142,7 @@ describe("hermes-setup.sh install-config", () => {
     expect(readdirSync(box.home).filter((name) => name.startsWith(".env") && name !== ".env")).toEqual([]);
   });
 
-  it("names the token helper when a PharmaLLM token is missing", () => {
+  it("names the token helper when a PharmaITChat token is missing", () => {
     const box = sandbox();
     rmSync(join(box.runDir, "api-token"));
 
@@ -150,7 +150,7 @@ describe("hermes-setup.sh install-config", () => {
 
     expect(result.status).toBe(1);
     const output = result.stdout + result.stderr;
-    expect(output).toContain("Missing PHARMALLM_API_TOKEN");
+    expect(output).toContain("Missing PHARMAITCHAT_API_TOKEN");
     expect(output).toContain("scripts/switch-stack.sh token");
   });
 
@@ -190,8 +190,8 @@ describe("hermes-setup.sh install-cron", () => {
     // 5 jobs plus the one `config set` the script-mode job needs (C1(b)).
     expect(calls).toHaveLength(6);
     expect(calls[0]).toContain("hermes [cron] [create] [0 6 * * *] [Scheduled job: morning news digest.");
-    expect(calls[0]).toContain("[--name] [pharmallm-news-digest] [--deliver] [telegram]");
-    expect(calls[2]).toContain("[--name] [pharmallm-health-watch]");
+    expect(calls[0]).toContain("[--name] [pharmaitchat-news-digest] [--deliver] [telegram]");
+    expect(calls[2]).toContain("[--name] [pharmaitchat-health-watch]");
   });
 
   it("edits jobs that already exist by name instead of duplicating them", () => {
@@ -199,7 +199,7 @@ describe("hermes-setup.sh install-cron", () => {
     mkdirSync(join(box.home, "cron"), { recursive: true });
     writeFileSync(
       join(box.home, "cron", "jobs.json"),
-      JSON.stringify({ jobs: [{ id: "abc123", name: "pharmallm-health-watch", schedule: "0 9 * * *" }] })
+      JSON.stringify({ jobs: [{ id: "abc123", name: "pharmaitchat-health-watch", schedule: "0 9 * * *" }] })
     );
 
     const result = setup(box, ["install-cron"]);
@@ -222,7 +222,7 @@ describe("hermes-setup.sh install-cron", () => {
     // The wrapper is installed into ~/.hermes/scripts (not run from the repo
     // checkout: this file has no other way to find the repo once it lives
     // there), with __PROJECT_DIR__ baked in.
-    const scriptPath = join(box.home, "scripts", "pharmallm-watchlist-ingest.sh");
+    const scriptPath = join(box.home, "scripts", "pharmaitchat-watchlist-ingest.sh");
     const installed = readFileSync(scriptPath, "utf-8");
     expect(installed).toContain(`PROJECT_DIR="${projectDir}"`);
     expect(installed).not.toContain("__PROJECT_DIR__");
@@ -233,8 +233,8 @@ describe("hermes-setup.sh install-cron", () => {
     // --deliver local (quiet on a normal night) and --failure-deliver
     // telegram (the only case this job should ever speak up).
     expect(calls[5]).toBe(
-      "hermes [cron] [create] [30 2 * * *] [--name] [pharmallm-watchlist-ingest] " +
-        "[--script] [pharmallm-watchlist-ingest.sh] [--no-agent] [--deliver] [local] [--failure-deliver] [telegram]",
+      "hermes [cron] [create] [30 2 * * *] [--name] [pharmaitchat-watchlist-ingest] " +
+        "[--script] [pharmaitchat-watchlist-ingest.sh] [--no-agent] [--deliver] [local] [--failure-deliver] [telegram]",
     );
   });
 
@@ -253,7 +253,7 @@ describe("hermes-setup.sh install-cron", () => {
     const calls = readFileSync(box.calls, "utf-8").trim().split("\n");
     expect(calls[4]).toBe(`hermes [config] [set] [cron.script_timeout_seconds] [${WATCHLIST_SCRIPT_TIMEOUT_SECONDS}]`);
     // Set before the job is created, so the job never exists under the 3600 s default.
-    expect(calls[5]).toContain("[--name] [pharmallm-watchlist-ingest]");
+    expect(calls[5]).toContain("[--name] [pharmaitchat-watchlist-ingest]");
     expect(WATCHLIST_SCRIPT_TIMEOUT_SECONDS * 1000).toBeGreaterThan(DEFAULT_INGEST_BUDGET_MS);
   });
 });
@@ -264,7 +264,7 @@ describe("hermes-setup.sh install-cron", () => {
 // name) has to survive somewhere, and on a successful run nothing else keeps
 // it. The wrapper is exercised here for real, with a stub `npx` on PATH: no
 // tsx, no model, no network, no ~/.hermes.
-describe("hermes/scripts/pharmallm-watchlist-ingest.sh", () => {
+describe("hermes/scripts/pharmaitchat-watchlist-ingest.sh", () => {
   interface WrapperBox {
     tempProject: string;
     script: string;
@@ -289,8 +289,8 @@ describe("hermes/scripts/pharmallm-watchlist-ingest.sh", () => {
     mkdirSync(tempProject);
     mkdirSync(binDir);
 
-    const template = readFileSync(join(projectDir, "hermes", "scripts", "pharmallm-watchlist-ingest.sh"), "utf-8");
-    const script = join(root, "pharmallm-watchlist-ingest.sh");
+    const template = readFileSync(join(projectDir, "hermes", "scripts", "pharmaitchat-watchlist-ingest.sh"), "utf-8");
+    const script = join(root, "pharmaitchat-watchlist-ingest.sh");
     writeFileSync(script, template.replace(/__PROJECT_DIR__/g, tempProject));
 
     const box: WrapperBox = { tempProject, script, binDir };
@@ -363,13 +363,13 @@ describe("hermes-setup.sh install-services", () => {
     const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
 
     expect(result.status).toBe(0);
-    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    const plist = readFileSync(join(box.agentsDir, "com.pharmaitchat.mcp.plist"), "utf-8");
     expect(plist).toContain("<key>NODE_BIN</key><string>/opt/fake/bin/node</string>");
     expect(plist).toContain(`<string>${projectDir}/scripts/run-mcp.sh</string>`);
     expect(plist).not.toContain("__");
     expect(plist).not.toContain(MCP_TOKEN);
     const calls = readFileSync(box.calls, "utf-8");
-    expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmallm\.mcp\.plist\]/);
+    expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmaitchat\.mcp\.plist\]/);
     expect(calls).toContain("hermes [gateway] [install] [--force] [--start-now] [--start-on-login]");
   });
 
@@ -380,7 +380,7 @@ describe("hermes-setup.sh install-services", () => {
     const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node", MCP_HOST: "0.0.0.0" });
 
     expect(result.status).toBe(0);
-    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    const plist = readFileSync(join(box.agentsDir, "com.pharmaitchat.mcp.plist"), "utf-8");
     expect(plist).toContain("<key>MCP_HOST</key><string>0.0.0.0</string>");
     expect(plist).not.toContain("__");
   });
@@ -391,7 +391,7 @@ describe("hermes-setup.sh install-services", () => {
     const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
 
     expect(result.status).toBe(0);
-    const plist = readFileSync(join(box.agentsDir, "com.pharmallm.mcp.plist"), "utf-8");
+    const plist = readFileSync(join(box.agentsDir, "com.pharmaitchat.mcp.plist"), "utf-8");
     expect(plist).toContain("<key>MCP_HOST</key><string>127.0.0.1</string>");
   });
 
@@ -437,11 +437,11 @@ describe("hermes-setup.sh install-plugin", () => {
     const result = setup(box, ["install-plugin"]);
 
     expect(result.status).toBe(0);
-    const dest = join(box.home, "plugins", "pharmallm-switch");
+    const dest = join(box.home, "plugins", "pharmaitchat-switch");
     expect(readdirSync(dest).sort()).toEqual(["__init__.py", "plugin.yaml", "tap.py"]);
     const calls = readFileSync(box.calls, "utf-8");
     // --no-allow-tool-override answers Hermes' y/N tool-override prompt, which would otherwise block
-    expect(calls).toContain("hermes [plugins] [enable] [pharmallm-switch] [--no-allow-tool-override]");
+    expect(calls).toContain("hermes [plugins] [enable] [pharmaitchat-switch] [--no-allow-tool-override]");
     expect(calls).toContain("hermes [gateway] [restart]");
     expect(calls.indexOf("[plugins] [enable]")).toBeLessThan(calls.indexOf("[gateway] [restart]"));
   });
@@ -455,13 +455,13 @@ describe("hermes-setup.sh check: plugin", () => {
   }
 
   it("reports the plugin as missing before install-plugin", () => {
-    expect(checkOutput(sandbox())).toContain("plugin pharmallm-switch: missing");
+    expect(checkOutput(sandbox())).toContain("plugin pharmaitchat-switch: missing");
   });
 
   function writeRecords(box: Sandbox, gateway: unknown, ready: unknown): void {
     mkdirSync(box.home, { recursive: true });
     writeFileSync(join(box.home, "gateway.pid"), JSON.stringify(gateway));
-    writeFileSync(join(box.home, "pharmallm-switch.ready.json"), JSON.stringify(ready));
+    writeFileSync(join(box.home, "pharmaitchat-switch.ready.json"), JSON.stringify(ready));
   }
 
   function isLive(pid: number): boolean {
@@ -479,10 +479,10 @@ describe("hermes-setup.sh check: plugin", () => {
     // check probes the pid, so it has to name a live process: Jest's own
     const pid = process.pid;
     writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 777 });
-    expect(checkOutput(box)).toContain("plugin pharmallm-switch: loaded by the running gateway");
+    expect(checkOutput(box)).toContain("plugin pharmaitchat-switch: loaded by the running gateway");
 
     writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 1 });
-    expect(checkOutput(box)).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+    expect(checkOutput(box)).toContain("plugin pharmaitchat-switch: installed, waiting for a gateway restart");
   });
 
   it("does not report a plugin loaded when the gateway process is gone", () => {
@@ -491,7 +491,7 @@ describe("hermes-setup.sh check: plugin", () => {
     const pid = 999999999;
     expect(isLive(pid)).toBe(false);
     writeRecords(box, { pid, start_time: 777, kind: "hermes-gateway" }, { pid, start_time: 777 });
-    expect(checkOutput(box)).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+    expect(checkOutput(box)).toContain("plugin pharmaitchat-switch: installed, waiting for a gateway restart");
   });
 
   it("treats a ready file that is not a JSON object as not loaded, without a traceback", () => {
@@ -499,7 +499,7 @@ describe("hermes-setup.sh check: plugin", () => {
     setup(box, ["install-plugin"]);
     writeRecords(box, { pid: process.pid, start_time: 777, kind: "hermes-gateway" }, [process.pid, 777]);
     const output = checkOutput(box);
-    expect(output).toContain("plugin pharmallm-switch: installed, waiting for a gateway restart");
+    expect(output).toContain("plugin pharmaitchat-switch: installed, waiting for a gateway restart");
     expect(output).not.toContain("Traceback");
   });
 });
@@ -513,6 +513,7 @@ describe("hermes-setup.sh check", () => {
 
     const output = result.stdout + result.stderr;
     expect(output).toContain("TELEGRAM_BOT_TOKEN: set");
+    expect(output).toContain("PHARMAITCHAT_API_TOKEN: set");
     expect(output).toContain("PHARMALLM_MCP_TOKEN: set");
     expect(output).toContain(".env permissions: 600");
     for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN, "424242"]) expect(output).not.toContain(secret);
@@ -527,35 +528,35 @@ describe("hermes-setup.sh check", () => {
     const result = setup(box, ["check"]);
 
     const output = result.stdout + result.stderr;
-    expect(output).toContain("service com.pharmallm.mcp: loaded");
+    expect(output).toContain("service com.pharmaitchat.mcp: loaded");
     expect(output).toContain("service ai.hermes.gateway: loaded");
     expect(output).not.toContain("not loaded");
   });
 
-  it("calls the MCP service healthy only when PharmaLLM behind it answers", () => {
+  it("calls the MCP service healthy only when PharmaITChat behind it answers", () => {
     const box = sandbox();
     setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
-    writeCurlStub(box, '{"ok":true,"pharmallm":true}');
+    writeCurlStub(box, '{"ok":true,"pharmaitchat":true}');
 
     const result = setup(box, ["check"], stubPath(box));
 
     const output = result.stdout + result.stderr;
-    expect(output).toContain("pharmallm-mcp: healthy");
-    expect(output).not.toContain("PharmaLLM not reachable");
+    expect(output).toContain("pharmaitchat-mcp: healthy");
+    expect(output).not.toContain("PharmaITChat not reachable");
   });
 
   it("reports a problem when the MCP service is up but the app behind it is down", () => {
     const box = sandbox();
     setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
-    // /healthz answers 200 with pharmallm:false while the app is stopped — a 200 alone means nothing
-    writeCurlStub(box, '{"ok":true,"pharmallm":false}');
+    // /healthz answers 200 with pharmaitchat:false while the app is stopped — a 200 alone means nothing
+    writeCurlStub(box, '{"ok":true,"pharmaitchat":false}');
 
     const result = setup(box, ["check"], stubPath(box));
 
     expect(result.status).toBe(1);
     const output = result.stdout + result.stderr;
-    expect(output).toContain("pharmallm-mcp: up, PharmaLLM not reachable");
-    expect(output).not.toContain("pharmallm-mcp: healthy");
+    expect(output).toContain("pharmaitchat-mcp: up, PharmaITChat not reachable");
+    expect(output).not.toContain("pharmaitchat-mcp: healthy");
   });
 
   it("reports the MCP service as not answering when nothing listens", () => {
@@ -566,6 +567,6 @@ describe("hermes-setup.sh check", () => {
     const result = setup(box, ["check"]);
 
     expect(result.status).toBe(1);
-    expect(result.stdout + result.stderr).toContain("pharmallm-mcp: not answering");
+    expect(result.stdout + result.stderr).toContain("pharmaitchat-mcp: not answering");
   });
 });

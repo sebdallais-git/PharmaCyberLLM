@@ -584,7 +584,7 @@ describe("watchlist ingest", () => {
 
     let body = feedBody(item("First of the day", "first"));
     const fetchImpl: FetchLike = async () => ({ ok: true, status: 200, text: async () => body });
-    const rss = rssAdapter({ fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaLLM-Test/1.0" });
+    const rss = rssAdapter({ fetchImpl, now: () => FIXED_NOW, userAgent: "PharmaITChat-Test/1.0" });
 
     const firstRun = makeHarness({ watchlist, store, rss });
     await firstRun.run();
