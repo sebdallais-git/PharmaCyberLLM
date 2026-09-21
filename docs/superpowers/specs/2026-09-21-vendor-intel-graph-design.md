@@ -37,7 +37,8 @@ The thin Dell/HPE answer was the system behaving correctly over nine Dell term h
 | Existing graph | Rebuilt clean; cyber history re-extracted as need-evidence |
 | Division of labour | **Graph plans, vectors evidence** |
 | Segments | Closed set of 8 |
-| Position values | `leader \| strong \| present \| absent` |
+| Position values | `leader \| strong \| present \| absent`, unranked |
+| Primary axis | **Incumbency**, not competitive position |
 | Confidence | `high \| medium \| low` — rates the evidence, not the vendor |
 
 ## Data model
@@ -116,6 +117,12 @@ sources:
 Frontmatter becomes graph facts; the body becomes vector chunks. One source of truth
 per fact, so the two layers cannot drift.
 
+**Frontmatter is strict, prose is free.** A product is declared in exactly one brief --
+the segment it is *sold* as -- so the graph gets one `OFFERS` edge per product. The body
+may discuss anything relevant: `dell-storage.md` declares nine storage products while its
+body argues cyber-resilience at length, because that is what a pharma account asks about.
+The machine contract and the human document have different jobs.
+
 Accounts are declared in `config/accounts.local.yaml` (gitignored; a committed
 `config/accounts.example.yaml` documents the shape), validated the way
 `watchlist-config.ts` validates domains.
@@ -165,12 +172,32 @@ competitive_position(vendor?, account?, segment?)
 Resolution for `competitive_position(vendor: "dell")`:
 
 1. accounts from `accounts.local.yaml`
-2. `HAS_NEED` → the needs those accounts have
-3. `ADDRESSED_BY` → the segments those needs imply
-4. `COMPETES_IN` → Dell's position and every competitor's, per segment
-5. rank segments where Dell outranks the field
+2. `USES` → **who is incumbent per segment** -- resolved first, see below
+3. `HAS_NEED` → the needs those accounts have
+4. `ADDRESSED_BY` → the segments those needs imply
+5. `COMPETES_IN` → the vendor's position and rationale, per segment
 6. fetch curated chunks filtered `vendor`, `segment`, `source_tier: curated`
 7. attach recent `Evidence`
+
+**Incumbency is the primary axis, not competitive position.** In enterprise
+infrastructure sales, who already holds the account outweighs function and price, so the
+same competitive fact means opposite things depending on it -- Dell storage sitting
+mid-quadrant with shrinking hybrid lines is survivable where Dell is incumbent and
+disqualifying where a rival is. The tool therefore answers in one of three modes per
+segment:
+
+| Incumbency | Mode | What matters |
+|---|---|---|
+| The vendor | defend / expand | roadmap, lifecycle, adjacent attach; function gaps tolerable |
+| A rival | displace | needs a disqualifying weakness or a triggering event |
+| Nobody | greenfield | function and price actually decide |
+
+Vendors are **not ranked** within a segment: `position` is a four-value label whose own
+evidence says the label carries little signal (six of eight vendors are Gartner Leaders).
+Ranking was deliberately deferred as too complex. The tool must therefore return
+`rationale` alongside `position` -- the rationale is where the honesty lives, and
+"Dell leads in storage" without it is precisely the false confidence this design exists
+to remove.
 
 One tool rather than two primitives, because the local model demonstrably fails at
 orchestration — on 2026-09-21 it called three tools by stale names and then batched them

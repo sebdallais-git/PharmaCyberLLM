@@ -4,7 +4,12 @@ segment: storage
 position: leader
 confidence: high
 as_of: 2026-09-21
-products: [PowerStore, PowerStore Elite, PowerMax, PowerFlex, PowerVault, PowerScale, ObjectScale, Lightning, Dell Exascale, PowerRack, PowerProtect Data Domain, PowerProtect Data Manager, PowerProtect Cyber Recovery, PowerProtect One, CyberSense, Cyber Detect, Dell AI Data Platform, Dell Private Cloud]
+# Storage products only: a product is declared in exactly one brief, the segment
+# it is sold as, so the graph gets one OFFERS edge per product. The body is free
+# to discuss anything relevant -- PowerProtect, Cyber Recovery, CyberSense and
+# Cyber Detect belong to dell-data-protection; PowerRack and Dell AI Data
+# Platform to dell-ai-infrastructure; Dell Private Cloud to dell-hci.
+products: [PowerStore, PowerStore Elite, PowerMax, PowerFlex, PowerVault, PowerScale, ObjectScale, Lightning, Dell Exascale]
 competitors: [hpe, netapp, everpure, vast-data, ibm, huawei, exagrid, weka]
 rationale: >
   Dell holds the broadest portfolio in enterprise storage, is a Leader in the 2026 Gartner MQ for
