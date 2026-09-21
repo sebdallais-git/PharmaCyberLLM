@@ -36,7 +36,8 @@ The thin Dell/HPE answer was the system behaving correctly over nine Dell term h
 | Accounts | Named list with per-account context, kept local (gitignored) |
 | Existing graph | Rebuilt clean; cyber history re-extracted as need-evidence |
 | Division of labour | **Graph plans, vectors evidence** |
-| Segments | Closed set of 8 |
+| Segments | Closed set of 10 |
+| Scope line | Install base, never pipeline |
 | Position values | `leader \| strong \| present \| absent`, unranked |
 | Primary axis | **Incumbency**, not competitive position |
 | Confidence | `high \| medium \| low` — rates the evidence, not the vendor |
@@ -61,8 +62,24 @@ Seven relationship types. **Both labels and relationship types are validated at 
 time**; anything outside the closed set is rejected. This is the direct fix for the
 174-type sprawl.
 
-`segments`: `compute, storage, data-protection, hci, networking, ai-infrastructure,
-client, services`
+`segments` (10, closed):
+
+```
+compute-ai         compute-standard
+storage-block      storage-file       storage-object
+data-protection    hci                networking
+client             services
+```
+
+The splits are not cosmetic: they are the granularity at which **incumbency actually
+exists**. An account can run NetApp in file, Dell in block and a third vendor in object,
+with different rivals in each -- this brief argues PowerScale against VAST and WEKA in
+file but PowerMax against IBM and Huawei in block. A single `storage` segment cannot
+express that, and incumbency is the primary axis.
+
+`ai-infrastructure` from the first draft is dissolved: GPU servers are `compute-ai`,
+AI filesystems are `storage-file`, and the remainder was a cross-segment bundle rather
+than a segment.
 
 Vendor ids follow the vendor's current legal name, not its historical one: Pure Storage
 became Everpure in SEC filings on 2026-01-09, so the id is `everpure` everywhere and
@@ -231,6 +248,22 @@ Coverage: schema validation rejects unknown labels *and* unknown relationship ty
 frontmatter round-trips including `confidence`; query resolution runs against a fixture
 graph; `confidence` propagates into the tool result; `source_tier` backfill is idempotent
 and never re-embeds.
+
+## The CRM boundary
+
+Modelling an account's install base takes this close to CRM territory, deliberately and
+with a line drawn:
+
+| | Holds | Owner |
+|---|---|---|
+| **Install base** | what is deployed, per account per segment, since when | this system |
+| **Pipeline** | opportunities, stages, amounts, close dates, forecast | the real CRM |
+
+Install base belongs here: it is slow-moving, it is what makes an answer account-specific
+rather than generic, and no CRM report presents it in a form a model can reason over.
+Pipeline is where this stops. Modelling deal stages would mean building a worse
+Salesforce and inheriting its data-entry burden, and the question this system exists to
+answer never needs it. Revisit only under real pressure, never by drift.
 
 ## Out of scope
 
