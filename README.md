@@ -6,7 +6,9 @@
 
 PharmaITChat watches the IT and security scene around three pharma customers, their competitors and the vendors that shape their tech stack — **71 named entities**, collected nightly, deduplicated across sources, tagged by a 27B model and stored in a knowledge base you can then ask questions of, in a browser or on Telegram.
 
-**Every model call happens on this machine.** Chat, embeddings, nightly tagging, retrieval, storage. No cloud LLM, no API key for the model, no per-token bill. The only traffic that leaves the Mac is the news it goes out to fetch and the Telegram message it sends back.
+**Every model call happens on this machine.** Chat, embeddings, nightly tagging, retrieval, storage. No cloud LLM, no API key for the model, no per-token bill — and customer intelligence that never leaves your network. The only traffic going out is the news the system fetches and the Telegram message it sends back.
+
+**Last night, unattended:** 1,165 items fetched, 57 collapsed by cross-source dedupe, 250 tagged and stored, 2 failed feeds, 0 anomalies, 42 minutes — and not a word on Telegram, because nothing went wrong.
 
 [![Node.js](https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -25,11 +27,12 @@ PharmaITChat watches the IT and security scene around three pharma customers, th
 [![Telegram](https://img.shields.io/badge/Telegram-5_scheduled_jobs-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](#hermes-agent-on-telegram)
 [![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#the-mcp-server-and-the-model-gateway)
 
-[![Tests](https://img.shields.io/badge/Jest-541_tests_%C2%B7_41_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
+[![Tests](https://img.shields.io/badge/Jest-606_tests_%C2%B7_48_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
 [![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%C2%B7_MLX_%C2%B7_oMLX-6E56CF?style=flat-square)](#three-interchangeable-stacks)
 [![UI switch](https://img.shields.io/badge/UI_switch-Telegram_confirmed-26A5E4?style=flat-square)](#switching-from-the-web-ui)
 [![Context](https://img.shields.io/badge/context-64K_all_stacks-064e3b?style=flat-square)](#three-interchangeable-stacks)
 [![Cloud calls](https://img.shields.io/badge/cloud_LLM_calls-0-064e3b?style=flat-square)](#everything-local-on-one-machine)
+[![Nightly run](https://img.shields.io/badge/last_nightly_run-1%2C165_items_%C2%B7_42_min_%C2%B7_0_anomalies-0f766e?style=flat-square)](#the-first-unattended-run)
 
 [Stacks](#three-interchangeable-stacks) · [Benchmarks](#benchmarks) · [Watchlist](#the-watchlist) · [Chat & knowledge base](#chat-retrieval-and-the-knowledge-base) · [Telegram](#hermes-agent-on-telegram) · [Setup](#setup) · [API](#api-reference)
 
@@ -39,7 +42,7 @@ PharmaITChat watches the IT and security scene around three pharma customers, th
 
 ## Everything local, on one machine
 
-The whole system runs on a single Mac mini (M4 Pro, 48 GB). A 27B Qwen model answers the chat, embeds the documents, tags every item the watchlist collects and drives the Telegram assistant. Nothing about what is watched, what is asked or what is stored is handed to a third party.
+The whole system runs on one local box with 48 GB of unified memory — no cloud tenancy, no inference bill, no rate limit. A 27B Qwen model answers the chat, embeds the documents, tags every item the watchlist collects and drives the Telegram assistant. Nothing about what is watched, what is asked or what is stored is handed to a third party.
 
 | What | Where it runs |
 |---|---|
@@ -69,6 +72,7 @@ Outbound traffic is limited to what the system goes out to *get* and the one cha
 | 🩹 | **Self-healing knowledge** | Low-confidence answers trigger an n8n workflow that researches, ingests and re-checks the gap |
 | 🎙️ | **Voice input** | Local speech-to-text with whisper.cpp; HTTPS mode for iPad and phone microphones |
 | ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX vs oMLX comparison with retrieval overlap and a blind A/B review page |
+| ✅ | **606 tests** | 48 Jest suites across the app and the MCP server, plus 27 Python tests for the Telegram plugin — every one of them against fakes, none touching a real model server, ChromaDB, Docker, launchd or Telegram |
 
 ---
 
@@ -100,7 +104,7 @@ scripts/switch-stack.sh ollama-ctx   # recreate qwen3.8-pharma if its context di
 
 ### Switching from the web UI
 
-The chat header has a stack selector next to the model selector. Choosing a different stack does not switch immediately: PharmaITChat sends a Telegram message with **Switch** and **Cancel** buttons, valid for 5 minutes. Tapping Switch starts it, tapping Cancel or ignoring the message reverts the selector. The tap goes through the Hermes gateway (the `pharmaitchat-switch` plugin), which calls the app on localhost — so the phone never has to reach the Mac. The UI then follows the switch (stopping, starting, warming up, checking indexes) and shows the new stack with how long it took: `OMLX stack ready (96 s)`. Telegram gets a completion message with the same line.
+The chat header has a stack selector next to the model selector. Choosing a different stack does not switch immediately: PharmaITChat sends a Telegram message with **Switch** and **Cancel** buttons, valid for 5 minutes. Tapping Switch starts it, tapping Cancel or ignoring the message reverts the selector. The tap goes through the Hermes gateway (the `pharmaitchat-switch` plugin), which calls the app on localhost — so the phone never has to reach the server at all. The UI then follows the switch (stopping, starting, warming up, checking indexes) and shows the new stack with how long it took: `OMLX stack ready (96 s)`. Telegram gets a completion message with the same line.
 
 The switch route itself needs no token, because approval comes from tapping the Telegram button. Store the credentials once:
 
@@ -108,7 +112,7 @@ The switch route itself needs no token, because approval comes from tapping the 
 scripts/switch-stack.sh telegram         # prompts for the bot token and your chat id, stores them at mode 600
 ```
 
-Without them the selector is disabled and says so. The Hermes gateway must also be running on this Mac with the `pharmaitchat-switch` plugin installed (`scripts/hermes-setup.sh install-plugin`), or the selector is disabled and says why. A two-Mac Hermes setup can't confirm switches this way — use `scripts/switch-stack.sh` there instead. A switch is refused while another switch is pending confirmation or already in progress, while a benchmark or a reindex is running, or when the requested stack is already active.
+Without them the selector is disabled and says so. The Hermes gateway must also be running on this machine with the `pharmaitchat-switch` plugin installed (`scripts/hermes-setup.sh install-plugin`), or the selector is disabled and says why. A split, two-machine Hermes setup can't confirm switches this way — use `scripts/switch-stack.sh` there instead. A switch is refused while another switch is pending confirmation or already in progress, while a benchmark or a reindex is running, or when the requested stack is already active.
 
 ### The embedding-parity guard
 
@@ -152,7 +156,7 @@ flowchart LR
 
 ### RAG answers (the web chat workload)
 
-All three stacks measured on the same day, **2026-09-19**, on a Mac mini M4 Pro, 48 GB (macOS 26.4). Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024, background LLM jobs paused. The stacks were switched between runs and nothing else ran on the machine.
+All three stacks measured on the same day, **2026-09-19**, on the **same workstation-class machine** — one local box, 48 GB unified memory. Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024, background LLM jobs paused. The stacks were switched between runs on that one machine (macOS 26.4); only the stack changed, and nothing else ran while a run was in flight.
 
 | Metric (median) | 🦙 Ollama | 🍎 MLX | ⚡ oMLX |
 |---|---:|---:|---:|
@@ -397,7 +401,7 @@ All LLM steps call `POST /api/llm/complete`, so they run on the active stack. Se
 
 ## Hermes Agent on Telegram
 
-[`hermes/`](hermes/README.md) runs [Hermes Agent](https://hermes-agent.nousresearch.com/) as a Telegram assistant **on the same local 27B model** — the phone talks to a Mac mini, not to a cloud. Everything needed to rebuild it lives in the repo; secrets stay in `~/.hermes/.env` and `data/run/*-token` at mode 600.
+[`hermes/`](hermes/README.md) runs [Hermes Agent](https://hermes-agent.nousresearch.com/) as a Telegram assistant **on the same local 27B model** — the phone talks to your own machine, not to a cloud. Everything needed to rebuild it lives in the repo; secrets stay in `~/.hermes/.env` and `data/run/*-token` at mode 600.
 
 ```bash
 scripts/switch-stack.sh token           # PharmaITChat API token
@@ -482,13 +486,13 @@ Each search chunk used to carry a ~30 KB embedding object next to ~440 character
 
 ## Setup
 
-**Prerequisites:** a Mac with Apple Silicon (MLX requires it), [Homebrew](https://brew.sh), Node.js 22, Python 3, about 33 GB of free disk for the models, and `ffmpeg` if you want voice input.
+**Prerequisites:** [Homebrew](https://brew.sh), Node.js 22, Python 3, about 33 GB of free disk for the models, and `ffmpeg` if you want voice input. The **MLX and oMLX stacks require Apple Silicon**; the Ollama stack only needs Ollama, so a host without Apple Silicon still gets the whole pipeline — on one stack instead of three. The setup scripts themselves drive Homebrew and `launchctl`, so they assume macOS.
 
 ```bash
 # 1. Install Ollama and the Node dependencies
 brew install ollama && brew services start ollama
-git clone https://github.com/sebdallais-git/PharmaITChat.git
-cd PharmaITChat
+git clone git@github.com:sebdallais-git/PharmaIT_Chat_and_Digest.git
+cd PharmaIT_Chat_and_Digest
 npm install
 
 # 2. One-time setup: download the Ollama and MLX models (~33 GB), create the MLX
@@ -513,7 +517,7 @@ npm run dev          # runs scripts/start-services.sh
 ```
 
 > [!NOTE]
-> The first index build re-embeds the whole knowledge base and took 12–16 minutes on an M4 Pro. Ollama 0.17.6 could not pull Qwen3.8; the setup was verified with Ollama 0.34.0.
+> The first index build re-embeds the whole knowledge base and took 12–16 minutes here. Ollama 0.17.6 could not pull Qwen3.8; the setup was verified with Ollama 0.34.0.
 
 > [!IMPORTANT]
 > Nothing starts the app or the model stack after a reboot. Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before you expect answers. Only the MCP service and the Hermes gateway come back on their own, and until the app is up they report it as unreachable.
@@ -593,7 +597,7 @@ Creating the API token does not enable it: restart the app (`scripts/switch-stac
 
 The mic button records audio in the browser (MediaRecorder), uploads it to `POST /api/chat/transcribe` (max 25 MB), converts it to 16 kHz WAV with `ffmpeg`, and transcribes it locally with whisper.cpp (`ggml-base.en`, bundled with `whisper-node`).
 
-Browsers only allow microphone access on secure origins, so an **iPad or phone needs HTTPS**. Put `certs/key.pem` and `certs/cert.pem` in place and the server also listens on **https://&lt;your-mac&gt;:3443** (`HTTPS_PORT`). The device must trust the certificate. A token, once set, is required on both ports.
+Browsers only allow microphone access on secure origins, so an **iPad or phone needs HTTPS**. Put `certs/key.pem` and `certs/cert.pem` in place and the server also listens on **https://&lt;your-host&gt;:3443** (`HTTPS_PORT`). The device must trust the certificate. A token, once set, is required on both ports.
 
 ---
 
@@ -879,7 +883,7 @@ PharmaITChat/
 
 ## Testing
 
-Tests run against fakes. None of them reaches a real model server, ChromaDB, the live app, Docker, launchd or Telegram.
+**606 Jest tests across 48 suites** — 541 for the app, 65 for the MCP server — plus 27 Python tests for the Telegram switch plugin. All of them run against fakes: not one reaches a real model server, ChromaDB, the live app, Docker, launchd or Telegram, so a fresh checkout runs the whole Jest suite in under 20 seconds with nothing but `npm install`.
 
 ```bash
 npm run test                 # Jest: 41 suites, 541 tests
@@ -950,7 +954,7 @@ npm --prefix mcp run typecheck
 
 <div align="center">
 
-**One Mac mini. 71 entities watched every night. Zero cloud model calls.**
+**One machine. 71 entities watched every night. Zero cloud model calls.**
 
 Built by [@sebdallais-git](https://github.com/sebdallais-git).
 
