@@ -17,6 +17,9 @@ export interface ChatOptions {
   // Omitted means off: benchmarks, MCP and the Telegram path must not start
   // thinking just because a UI switch exists.
   thinking?: ThinkingLevel;
+  // Called with each reasoning fragment. Kept off the yielded stream so the
+  // answer a caller concatenates never contains thinking.
+  onReasoning?: (text: string) => void;
 }
 
 export interface TokenStats {
@@ -49,7 +52,9 @@ interface Usage {
 }
 
 interface ChatCompletionChunk {
-  choices?: Array<{ delta?: { content?: string | null } }>;
+  // mlx_lm returns model thinking as a sibling of `content`, never as inline
+  // <think> tags. Verified against mlx_lm 0.31.3 on 2026-09-21.
+  choices?: Array<{ delta?: { content?: string | null; reasoning?: string | null } }>;
   usage?: Usage | null;
 }
 
@@ -189,6 +194,9 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
           }
           const chunk = JSON.parse(data) as ChatCompletionChunk;
           if (chunk.usage) usage = chunk.usage;
+          const reasoning = chunk.choices?.[0]?.delta?.reasoning;
+          if (reasoning) options.onReasoning?.(reasoning);
+
           const content = chunk.choices?.[0]?.delta?.content;
           if (content) {
             // Timestamp on arrival, before the consumer processes the token

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
 import { buildStacks } from "../src/config/llm-stacks.js";
 import { thinkingBody, thinkingLevels, isThinkingLevel } from "../src/services/thinking.js";
-import { splitThinking } from "../src/services/thinking.js";
 
 const stacks = buildStacks({});
 
@@ -37,41 +36,5 @@ describe("thinking capability per stack", () => {
   it("recognises only declared levels", () => {
     expect(isThinkingLevel(stacks.ollama, "medium")).toBe(true);
     expect(isThinkingLevel(stacks.mlx, "medium")).toBe(false);
-  });
-});
-
-describe("splitThinking", () => {
-  // The model emits <think>...</think> inline. Tags split across stream chunks,
-  // which is exactly where a naive implementation breaks.
-  it("separates thinking from the answer in a single chunk", () => {
-    const s = splitThinking();
-
-    expect(s.push("<think>weighing options</think>the answer")).toEqual({
-      thinking: "weighing options",
-      answer: "the answer",
-    });
-  });
-
-  it("handles a tag split across chunk boundaries", () => {
-    const s = splitThinking();
-
-    expect(s.push("<thi")).toEqual({ thinking: "", answer: "" });
-    expect(s.push("nk>partial")).toEqual({ thinking: "partial", answer: "" });
-    expect(s.push(" more</thi")).toEqual({ thinking: " more", answer: "" });
-    expect(s.push("nk>done")).toEqual({ thinking: "", answer: "done" });
-  });
-
-  it("treats text with no tags as answer", () => {
-    const s = splitThinking();
-
-    expect(s.push("plain answer")).toEqual({ thinking: "", answer: "plain answer" });
-  });
-
-  it("does not leak a partial closing tag into the answer", () => {
-    const s = splitThinking();
-    s.push("<think>reasoning");
-
-    expect(s.push("</th")).toEqual({ thinking: "", answer: "" });
-    expect(s.push("ink>visible")).toEqual({ thinking: "", answer: "visible" });
   });
 });

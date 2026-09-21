@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { isThinkingLevel, splitThinking, thinkingLevels, type ThinkingLevel } from "../services/thinking.js";
+import { isThinkingLevel, thinkingLevels, type ThinkingLevel } from "../services/thinking.js";
 import { getActiveStack } from "../config/llm-stacks.js";
 import { getLlmClient } from "../services/llm-client.js";
 import type { ChatMessage, StatsCollector } from "../services/llm-client.js";
@@ -353,26 +353,23 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     let fullResponse = "";
     const statsCollector: StatsCollector = {};
 
-    // <think> content is separated here rather than in the browser: the MCP
-    // client consumes this same stream and does `answer += event.token`, so
-    // reasoning must never ride on `token`.
-    const splitter = splitThinking();
-
-    for await (const chunk of llm.streamChat(
+    // Thinking is emitted as its own event, never as `token`: the MCP client
+    // consumes this same stream for the Telegram path and does
+    // `answer += event.token`.
+    for await (const token of llm.streamChat(
       messages,
       {
         temperature: benchmark ? 0 : undefined,
         maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined,
         thinking: thinking as ThinkingLevel | undefined,
+        onReasoning: (text) => {
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ thinking: text })}\n\n`);
+        },
       },
       statsCollector
     )) {
-      const { thinking: thought, answer } = splitter.push(chunk);
-      if (thought) res.write(`data: ${JSON.stringify({ thinking: thought })}\n\n`);
-      if (answer) {
-        fullResponse += answer;
-        res.write(`data: ${JSON.stringify({ token: answer })}\n\n`);
-      }
+      fullResponse += token;
+      res.write(`data: ${JSON.stringify({ token })}\n\n`);
     }
 
     // Store response metadata and generate response_id for feedback

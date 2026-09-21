@@ -255,3 +255,32 @@ describe("thinking level in the outgoing request", () => {
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
   });
 });
+
+describe("reasoning from the stream", () => {
+  // mlx_lm 0.31.3 returns model thinking as `delta.reasoning`, a sibling of
+  // `delta.content` -- it never emits <think> tags. Verified against the live
+  // server on 2026-09-21.
+  it("surfaces reasoning separately and keeps it out of the answer", async () => {
+    server = await startFakeServer((_req, res) =>
+      sendSse(res, [
+        { choices: [{ delta: { reasoning: "weighing " } }] },
+        { choices: [{ delta: { reasoning: "options" } }] },
+        delta("the answer"),
+        "[DONE]",
+      ]),
+    );
+    const client = createLlmClient(stackFor(server.baseUrl));
+    const reasoning: string[] = [];
+    let answer = "";
+
+    for await (const token of client.streamChat([{ role: "user", content: "q" }], {
+      thinking: "on",
+      onReasoning: (text) => reasoning.push(text),
+    })) {
+      answer += token;
+    }
+
+    expect(reasoning.join("")).toBe("weighing options");
+    expect(answer).toBe("the answer");
+  });
+});
