@@ -6,6 +6,15 @@
 #
 # PROPOSED 2026-09-21, for Seb to correct — these are reasoned, not researched.
 # Both keys and values are validated against the closed sets in graph-schema.ts.
+#
+# KNOWN FLAW, found against real data 2026-09-21: this map can hide an incumbent
+# we already know about. Novartis runs HDS in storage-block, but its declared
+# needs (manufacturing-ot, gxp-compliance, rnd-compute, cost-optimisation) reach
+# storage-block through none of them — block is gated behind cyber-resilience
+# and data-sovereignty only. The incumbent is in the graph and invisible to the
+# query. Either that account's needs are incomplete (every large pharma
+# plausibly has cyber-resilience) or this mapping is too narrow. Not widened
+# unilaterally: a wrong edge here changes which segments every answer covers.
 
 needs:
   rnd-compute:
