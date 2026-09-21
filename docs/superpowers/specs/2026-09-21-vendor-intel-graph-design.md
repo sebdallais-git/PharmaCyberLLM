@@ -63,6 +63,10 @@ time**; anything outside the closed set is rejected. This is the direct fix for 
 `segments`: `compute, storage, data-protection, hci, networking, ai-infrastructure,
 client, services`
 
+Vendor ids follow the vendor's current legal name, not its historical one: Pure Storage
+became Everpure in SEC filings on 2026-01-09, so the id is `everpure` everywhere and
+"Pure Storage" survives only as a matching alias.
+
 `needs`: `gxp-compliance, rnd-compute, ai-factory, cyber-resilience, data-sovereignty,
 manufacturing-ot, cost-optimisation, sustainability`
 
@@ -99,7 +103,7 @@ position: leader
 confidence: high
 as_of: 2026-09-21
 products: [PowerStore, PowerScale, PowerMax]
-competitors: [hpe, netapp, pure-storage, vast-data]
+competitors: [hpe, netapp, everpure, vast-data]
 rationale: >
   ...
 sources:

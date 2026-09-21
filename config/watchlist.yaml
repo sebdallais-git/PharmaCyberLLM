@@ -412,8 +412,11 @@ vendors:
   storage:
     # R8: Pure Storage Inc. renamed to Everpure, Inc. in SEC filings as of 2026-01-09
     # (SEC submissions API formerNames; corroborated by the "Everpure SafeMode
-    # ransomware healthcare" topic string below). Id kept as pure-storage.
-    - pure-storage:
+    # ransomware healthcare" topic string below). The id followed the rename on
+    # 2026-09-21 so that it matches the vendor briefs in knowledge/vendors/;
+    # nothing referenced the old id and the entity had no stored items, so no
+    # tagged row was orphaned. "Pure Storage" stays an alias for matching.
+    - everpure:
         name: Everpure
         aliases: ["Pure Storage"]
         feeds:
