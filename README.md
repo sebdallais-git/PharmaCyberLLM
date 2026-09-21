@@ -2,7 +2,7 @@
 
 # PharmaITChat
 
-### The IT landscape around pharma — tracked, tagged and answered on one Mac mini
+### The IT landscape around pharma — tracked, tagged and answered with a local LLM, VectorDB and neo4j based GraphRAG
 
 PharmaITChat watches the IT and security scene around three pharma customers, their competitors and the vendors that shape their tech stack — **71 named entities**, collected nightly, deduplicated across sources, tagged by a 27B model and stored in a knowledge base you can then ask questions of, in a browser or on Telegram.
 
