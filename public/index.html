@@ -3,14 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>CyberPharmaCHAT - Pharma Assistant</title>
+  <title>PharmaITChat — Pharma IT Intelligence</title>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* The brand name is written out in full in the markup below; suppress
+       styles.css's legacy ::after suffix, which appended "CHAT" onto the
+       previous brand's h1 text and would otherwise double up on the new
+       one, rendering "PharmaITChatCHAT". */
+    .header h1::after { content: ""; }
+  </style>
 </head>
 <body>
   <div class="app">
     <header class="header">
-      <h1>CyberPharma</h1>
-      <p class="subtitle">Cyber Threat Expert Assistant</p>
+      <h1>PharmaITChat</h1>
+      <p class="subtitle">The IT landscape around pharma — vendors, customers, competitors</p>
       <div class="header-controls">
         <select id="stack-select" title="LLM stack (deployment environment)">
           <option value="ollama">Ollama</option>
@@ -32,13 +39,12 @@
       <div class="message assistant">
         <div class="message-wrapper">
           <div class="message-content">
-            Hello! I'm <strong>CyberPharmaCHAT</strong> — I help pharma leaders understand cyber threats and their business impact, and take action to minimize risk.
+            Hello! I'm <strong>PharmaITChat</strong> — I track the IT landscape around pharma: three customers, their competitors, and the vendors that shape their tech stack.
             <ul>
-              <li><strong>Pharma business</strong>: M&amp;A, drug pipelines, manufacturing plants, market forecasts, FDA/EMA news</li>
+              <li><strong>Customers &amp; competitors</strong>: Roche, Novartis, Sandoz and their peers — M&amp;A, drug pipelines, manufacturing plants, market moves</li>
+              <li><strong>IT vendor landscape</strong>: 40 vendors across cyber, AI, cloud, infrastructure, R&amp;D IT, manufacturing IT, SAP, data, storage and backup</li>
               <li><strong>Cyber threats in pharma</strong>: ransomware, data breaches, IP theft, manufacturing shutdowns, supply chain attacks</li>
-              <li><strong>Cybersecurity concepts &amp; actors</strong>: threat actors, attack vectors, defense frameworks, IT/OT security</li>
               <li><strong>Business impact</strong>: downtime costs, batch losses, stock impact, regulatory consequences, remediation strategies</li>
-              <li><strong>Applications &amp; Infrastructure</strong>: SAP, ServiceNow, Snowflake, CrowdStrike, Splunk, Amazon, Google, NVIDIA</li>
               <li><strong>What to do about it</strong>: vendor solutions, incident response, recovery architectures, risk mitigation</li>
             </ul>
             Ask me anything!
@@ -51,7 +57,7 @@
       <div class="input-wrapper">
         <textarea
           id="user-input"
-          placeholder="Ask your pharma question..."
+          placeholder="Ask about a vendor, a customer, or what changed this week..."
           rows="1"
         ></textarea>
         <button id="mic-btn" class="btn-mic" title="Voice input" hidden>
@@ -116,7 +122,7 @@
           <button id="close-agent-modal" class="btn-close">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="agent-description">The news agent automatically scrubs Google News every 24 hours across 194 topics: pharma business, science, cybersecurity, threat actors, manufacturing, cloud, compliance, AI infrastructure, and more.</p>
+          <p class="agent-description">Every night at 02:30 the watchlist collects from company and vendor feeds, SEC filings and news across 71 watched entities — three customers, their competitors and the IT vendor scene — then tags each item by entity and IT domain (cyber, AI, cloud, infrastructure, R&amp;D IT, manufacturing IT, SAP, data, storage, backup) and stores it for search.</p>
           <div id="agent-status"></div>
           <button id="run-agent-btn" class="btn-primary">Run Now</button>
           <h3>Monitored Topics</h3>

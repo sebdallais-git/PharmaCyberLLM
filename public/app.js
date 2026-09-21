@@ -658,7 +658,7 @@ if (canRecord) {
         stream.getTracks().forEach((t) => t.stop());
 
         if (audioChunks.length === 0) {
-          userInput.placeholder = "Ask your pharma question...";
+          userInput.placeholder = "Ask about a vendor, a customer, or what changed this week...";
           return;
         }
 
@@ -689,7 +689,7 @@ if (canRecord) {
           setStatus("Transcription request failed", "error");
         }
 
-        userInput.placeholder = "Ask your pharma question...";
+        userInput.placeholder = "Ask about a vendor, a customer, or what changed this week...";
         userInput.focus();
       };
 
@@ -697,7 +697,7 @@ if (canRecord) {
         micBtn.classList.remove("listening");
         stream.getTracks().forEach((t) => t.stop());
         setStatus("Recording error: " + (e.error?.message || "unknown"), "error");
-        userInput.placeholder = "Ask your pharma question...";
+        userInput.placeholder = "Ask about a vendor, a customer, or what changed this week...";
       };
 
       mediaRecorder.start();
