@@ -2,8 +2,23 @@ import { describe, expect, it } from "@jest/globals";
 import { buildStacks, getActiveStack, isStackName, STACK_NAMES } from "../src/config/llm-stacks.js";
 
 describe("getActiveStack", () => {
-  it("defaults to the ollama stack", () => {
-    expect(getActiveStack({}).name).toBe("ollama");
+  it("falls back to the running stack when LLM_PROVIDER is unset", () => {
+    // A bare shell has no LLM_PROVIDER. Defaulting to ollama pointed such a
+    // process at the wrong collection -- and reindex.ts DELETEs the collection
+    // it is about to rebuild.
+    expect(getActiveStack({}, () => "mlx").name).toBe("mlx");
+  });
+
+  it("prefers an explicit LLM_PROVIDER over the running stack", () => {
+    expect(getActiveStack({ LLM_PROVIDER: "ollama" }, () => "mlx").name).toBe("ollama");
+  });
+
+  it("refuses to guess when neither the env nor the running stack says", () => {
+    expect(() => getActiveStack({}, () => null)).toThrow(/refusing to guess/);
+  });
+
+  it("rejects a corrupt running-stack file rather than falling back", () => {
+    expect(() => getActiveStack({}, () => "lmstudio")).toThrow(/lmstudio/);
   });
 
   it("selects the mlx stack", () => {

@@ -1,4 +1,6 @@
 // Stack definitions for the Ollama / MLX switch. Exactly one stack is active per process.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type StackName = "ollama" | "mlx" | "omlx";
 
@@ -84,8 +86,34 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
   };
 }
 
-export function getActiveStack(env: NodeJS.ProcessEnv = process.env): StackConfig {
-  const name = env.LLM_PROVIDER ?? "ollama";
+/**
+ * The stack actually running, as written by switch-stack.sh. Returns null when
+ * the file is missing or unreadable.
+ */
+export function readRunningStack(): string | null {
+  try {
+    const raw = readFileSync(join(process.cwd(), "data", "run", "active-stack"), "utf8").trim();
+    return raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getActiveStack(
+  env: NodeJS.ProcessEnv = process.env,
+  runningStack: () => string | null = readRunningStack,
+): StackConfig {
+  // An explicit LLM_PROVIDER wins -- switch-stack.sh sets it deliberately when
+  // acting on a stack that is not the running one. Otherwise use the stack that
+  // is actually running. Never fall back to a hardcoded default: this used to
+  // resolve to "ollama", so any script run from a bare shell silently operated
+  // on the wrong collection, and reindex.ts DELETEs the collection it rebuilds.
+  const name = env.LLM_PROVIDER ?? runningStack();
+  if (name === null || name === undefined) {
+    throw new Error(
+      "No LLM_PROVIDER set and data/run/active-stack is unreadable -- refusing to guess which stack to use",
+    );
+  }
   if (name !== "ollama" && name !== "mlx" && name !== "omlx") {
     throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama", "mlx" or "omlx")`);
   }
