@@ -1,0 +1,209 @@
+# Vendor-intelligence knowledge layer and graph schema
+
+**Date:** 2026-09-21
+**Status:** approved design, not yet implemented
+**Target query:** *"What is Dell doing best for my accounts?"* — Dell's competitive
+advantages per segment, mapped to what named big-pharma accounts need.
+
+## Why
+
+Three read-only audits on 2026-09-21 established that the system cannot answer that
+question, and that the cause is data, not retrieval:
+
+- **Vector DB** — `knowledge_base_mlx` holds 8,175 chunks: 7,227 (88.4%) undifferentiated
+  Google-News archive, 691 (8.5%) watchlist items, 252 (3.1%) legacy cyber documents.
+  The news chunks carry no entity/domain tags, so vendor queries cannot exclude them.
+  `entity` and `domain` are stored comma-joined, which makes ChromaDB `$eq` filtering
+  impossible.
+- **Graph** — every label models pharma cybersecurity (`ThreatActor`, `Attack`,
+  `AttackVector`, `Drug`, `RegulatoryBody`). No competitor, deal, account, peer-set or
+  segment exists. 174 distinct relationship types live against 20 declared, because
+  `src/api/knowledge.ts` validates labels but not relationships. `grep -ci graph
+  src/services/watchlist-ingest.ts` returns 0: the watchlist never feeds the graph, so
+  the 880 nodes are a frozen snapshot of the old knowledge base.
+- **Coverage** — 67 entities have feeds, 29 produced anything. `dell` = 4 EDGAR stubs
+  with no RSS configured; `hpe` = 202 items, 45% of the corpus, from a single
+  engineering blog. 39 entities have zero coverage. All 188 topic queries returned
+  nothing. No infrastructure knowledge file exists anywhere.
+
+The thin Dell/HPE answer was the system behaving correctly over nine Dell term hits.
+
+## Decisions
+
+| Decision | Choice |
+|---|---|
+| Knowledge source | Curated baseline, feed events layered on top |
+| Accounts | Named list with per-account context, kept local (gitignored) |
+| Existing graph | Rebuilt clean; cyber history re-extracted as need-evidence |
+| Division of labour | **Graph plans, vectors evidence** |
+| Segments | Closed set of 8 |
+| Position values | `leader \| strong \| present \| absent` |
+| Confidence | `high \| medium \| low` — rates the evidence, not the vendor |
+
+## Data model
+
+### Graph
+
+```
+Labels:   Vendor · Segment · Product · Account · Need · Evidence
+
+(Vendor)   -[:OFFERS]->        (Product)
+(Product)  -[:IN_SEGMENT]->    (Segment)
+(Vendor)   -[:COMPETES_IN]->   (Segment)  {position, confidence, rationale, asOf}
+(Account)  -[:HAS_NEED]->      (Need)     {priority, asOf}
+(Need)     -[:ADDRESSED_BY]->  (Segment)
+(Account)  -[:USES]->          (Vendor)   {segment, since, asOf}
+(Evidence) -[:SUPPORTS]->      (node|edge) {url, publishedAt}
+```
+
+Seven relationship types. **Both labels and relationship types are validated at write
+time**; anything outside the closed set is rejected. This is the direct fix for the
+174-type sprawl.
+
+`segments`: `compute, storage, data-protection, hci, networking, ai-infrastructure,
+client, services`
+
+`needs`: `gxp-compliance, rnd-compute, ai-factory, cyber-resilience, data-sovereignty,
+manufacturing-ot, cost-optimisation, sustainability`
+
+**Deliberately omitted:** a pairwise `BETTER_THAN` edge. Comparative strength is the
+`position` property plus curated prose. A pairwise edge explodes combinatorially and
+encodes a judgement that changes faster than the graph can track.
+
+### Vector layer
+
+One brief per `(vendor, segment)`, so every metadata value is a scalar and therefore
+filterable — the constraint that today's comma-joined fields violate.
+
+`source_tier` values:
+
+| Tier | Content | Retrieval treatment |
+|---|---|---|
+| `curated` | `knowledge/vendors/*.md` vendor briefs | preferred for vendor questions |
+| `reference` | legacy `knowledge/*.md` documents | background, not vendor evidence |
+| `feed` | watchlist items | freshness and citation |
+| `archive` | Google-News back-catalogue | excluded from vendor queries |
+
+Feed items keep their comma-joined lists for display and gain scalar `primary_entity`
+and `primary_segment` for filtering.
+
+## Authoring and ingestion
+
+A brief is one file carrying both structure and prose:
+
+```markdown
+---
+vendor: dell
+segment: storage
+position: leader
+confidence: high
+as_of: 2026-09-21
+products: [PowerStore, PowerScale, PowerMax]
+competitors: [hpe, netapp, pure-storage, vast-data]
+rationale: >
+  ...
+sources:
+  - https://www.blocksandfiles.com/...
+---
+
+## Portfolio ...
+```
+
+Frontmatter becomes graph facts; the body becomes vector chunks. One source of truth
+per fact, so the two layers cannot drift.
+
+Accounts are declared in `config/accounts.local.yaml` (gitignored; a committed
+`config/accounts.example.yaml` documents the shape), validated the way
+`watchlist-config.ts` validates domains.
+
+**The builder is deterministic wherever it can be:**
+
+| Source | Extraction | Produces |
+|---|---|---|
+| `knowledge/vendors/*.md` frontmatter | deterministic parse | Vendor, Product, Segment, COMPETES_IN |
+| `config/accounts.local.yaml` | deterministic parse | Account, HAS_NEED, USES |
+| `config/needs.yaml` | deterministic parse | Need, ADDRESSED_BY |
+| watchlist items (live hook) | deterministic, from existing tags | Evidence, SUPPORTS |
+| legacy `knowledge/*.md` | LLM, constrained to one label + one edge | Evidence → SUPPORTS → Need |
+
+The LLM may emit only `Evidence` and `SUPPORTS`. The old builder let an LLM invent both
+labels and relationships across 40 files; that is how 20 declared types became 174.
+
+`watchlist-ingest.ts` gains a best-effort, non-fatal graph write beside its existing
+`embed()` call, so a Neo4j outage cannot fail a feed run.
+
+`reindex.ts` reads three sources — `knowledge/`, `raw_documents/` and `watchlist.db` —
+making the index reproducible.
+
+### Source policy for curated briefs
+
+1. **Primary:** blocksandfiles.com — independent, current, covers this market.
+2. **Vendor material:** authoritative only for what products exist and what they do.
+   Never evidence of competitive superiority.
+3. **Gartner Magic Quadrant:** paywalled content is not accessed. Vendor-published
+   licensed reprints may be used, and the brief must note that such reprints are
+   self-selected — vendors publish the quadrants they win.
+4. Every non-obvious claim carries an inline source marker.
+5. A "where this vendor is weak" section is mandatory in every brief.
+
+Blocks & Files covers storage, data-protection and AI-infrastructure well and compute,
+networking, client and services poorly. Briefs in the weaker segments must carry a lower
+`confidence`, which is what the field exists for.
+
+## Query path
+
+`graph_search` is replaced by one composite tool:
+
+```
+competitive_position(vendor?, account?, segment?)
+```
+
+Resolution for `competitive_position(vendor: "dell")`:
+
+1. accounts from `accounts.local.yaml`
+2. `HAS_NEED` → the needs those accounts have
+3. `ADDRESSED_BY` → the segments those needs imply
+4. `COMPETES_IN` → Dell's position and every competitor's, per segment
+5. rank segments where Dell outranks the field
+6. fetch curated chunks filtered `vendor`, `segment`, `source_tier: curated`
+7. attach recent `Evidence`
+
+One tool rather than two primitives, because the local model demonstrably fails at
+orchestration — on 2026-09-21 it called three tools by stale names and then batched them
+illegally. The result is compact structured JSON: positions, confidence, short excerpts,
+source URLs. **No embeddings and no full documents** — a prior incident put 48k tokens of
+embeddings into a single tool result.
+
+A segment with a position but no brief returns the structure and states that no curated
+evidence exists, rather than letting the model improvise.
+
+## Migration order
+
+Ordered so nothing irreversible happens early:
+
+1. Export the existing graph (880 nodes, provenance unknown).
+2. **Backfill `source_tier` by metadata update, not re-embedding.** Cheapest win, fully
+   independent, ships first.
+3. Finish `reindex.ts` reading `watchlist.db`.
+4. Fix `/api/graph/rebuild`, currently gated on the Ollama stack and a no-op on MLX.
+5. Rebuild the graph from deterministic sources plus constrained extraction.
+6. Swap the MCP tool; retire `graph_search`.
+
+## Testing
+
+Every unit takes injected dependencies, following the existing `ReindexDeps` and
+watchlist harness patterns. **No test touches live Neo4j or ChromaDB** — a subagent has
+twice wiped the live ChromaDB, so this is a hard rule, and the graph builder takes a fake
+writer in tests.
+
+Coverage: schema validation rejects unknown labels *and* unknown relationship types;
+frontmatter round-trips including `confidence`; query resolution runs against a fixture
+graph; `confidence` propagates into the tool result; `source_tier` backfill is idempotent
+and never re-embeds.
+
+## Out of scope
+
+- The iCloud weekly Q&A document pipeline. It is the natural authoring path for curated
+  briefs and is designed separately.
+- Fixing feed coverage (Dell has no RSS; 265 of 300 feeds return nothing). Tracked as its
+  own work; this design does not depend on it.
