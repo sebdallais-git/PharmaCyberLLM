@@ -552,7 +552,7 @@ async function loadAgentStatus() {
 runAgentBtn.addEventListener("click", async () => {
   runAgentBtn.disabled = true;
   runAgentBtn.textContent = "Running...";
-  agentStatusEl.innerHTML = `<p class="agent-running">Scrubbing news sources... this may take a minute.</p>`;
+  agentStatusEl.innerHTML = `<p class="agent-running">Collecting from feeds and filings... this may take a minute.</p>`;
 
   try {
     const res = await fetch("/api/agent/run", { method: "POST" });
