@@ -21,3 +21,6 @@ python/omlx-venv/
 
 # Firecrawl scrape cache from vendor-brief research
 .firecrawl/
+
+# Account intelligence: install base, incumbents, notes. Never committed.
+config/accounts.local.yaml
