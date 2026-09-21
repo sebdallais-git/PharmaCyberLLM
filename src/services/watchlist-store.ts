@@ -45,6 +45,9 @@ export interface StoredItem {
   facts: Record<string, unknown> | null;
   publishedAt: string;
   fetchedAt: string;
+  // The fetched article text. "" when the fetch yielded nothing, or for rows
+  // stored before the body was persisted (schema v3).
+  body: string;
   entities: string[];
   domains: Domain[];
   urls: string[];
@@ -66,6 +69,8 @@ export interface NewItem {
   facts?: Record<string, unknown> | null;
   publishedAt: string;
   fetchedAt: string;
+  // Optional so callers that fetched no body keep working; stored as "".
+  body?: string;
   entities: string[];
   domains: Domain[];
   flagged?: boolean;
@@ -163,6 +168,8 @@ interface ItemRow {
   published_at: string;
   fetched_at: string;
   flagged: number;
+  // Absent on rows read from a pre-v3 database mid-migration; mapped to "".
+  body: string | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,6 +230,23 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
     }
     db.pragma("user_version = 2");
   }
+  if (schemaVersion < 3) {
+    // The fetched body used to be embedded into ChromaDB and then dropped, so a
+    // reindex -- which rebuilds the collection from knowledge/ and
+    // raw_documents/ only -- destroyed every watchlist chunk with nothing on
+    // disk to rebuild it from. Keeping the body makes the index reproducible.
+    const hasItemsTable =
+      db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'items'`).get() !== undefined;
+    if (hasItemsTable) {
+      const itemsColumns = (db.prepare(`PRAGMA table_info(items)`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      if (!itemsColumns.includes("body")) {
+        db.exec(`ALTER TABLE items ADD COLUMN body TEXT NOT NULL DEFAULT ''`);
+      }
+    }
+    db.pragma("user_version = 3");
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS items (
@@ -239,7 +263,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       facts TEXT,
       published_at TEXT NOT NULL,
       fetched_at TEXT NOT NULL,
-      flagged INTEGER NOT NULL DEFAULT 0
+      flagged INTEGER NOT NULL DEFAULT 0,
+      body TEXT NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_items_published_at ON items(published_at);
@@ -296,8 +321,8 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
   // making the insert idempotent (R5) -- see insertItemTxn below for how a
   // no-op insert is resolved back to the existing row's id.
   const insertItemStmt = db.prepare(`
-    INSERT INTO items (url_canonical, content_hash, title_key, source_kind, source_name, title, summary, signal, importance, facts, published_at, fetched_at, flagged)
-    VALUES (@urlCanonical, @contentHash, @titleKey, @sourceKind, @sourceName, @title, @summary, @signal, @importance, @facts, @publishedAt, @fetchedAt, @flagged)
+    INSERT INTO items (url_canonical, content_hash, title_key, source_kind, source_name, title, summary, signal, importance, facts, published_at, fetched_at, flagged, body)
+    VALUES (@urlCanonical, @contentHash, @titleKey, @sourceKind, @sourceName, @title, @summary, @signal, @importance, @facts, @publishedAt, @fetchedAt, @flagged, @body)
     ON CONFLICT DO NOTHING
   `);
   const insertEntityStmt = db.prepare(`INSERT OR IGNORE INTO item_entities (item_id, entity_id) VALUES (?, ?)`);
@@ -386,6 +411,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       facts,
       publishedAt: row.published_at,
       fetchedAt: row.fetched_at,
+      body: row.body ?? "",
       entities,
       domains,
       urls,
@@ -429,6 +455,7 @@ export function openWatchlistStore(path: string = join(process.cwd(), "data", "w
       publishedAt: item.publishedAt,
       fetchedAt: item.fetchedAt,
       flagged: item.flagged ?? false ? 1 : 0,
+      body: item.body ?? "",
     });
 
     if (result.changes === 0) {
