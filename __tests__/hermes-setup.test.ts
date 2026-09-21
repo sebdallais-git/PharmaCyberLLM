@@ -433,7 +433,11 @@ describe("hermes-setup.sh install-services", () => {
 
       expect(result.status).toBe(0);
       const calls = readFileSync(box.calls, "utf-8");
-      expect(calls.match(/\[bootstrap\]/g)).toHaveLength(3);
+      // Three bootstraps for the MCP plist -- two rejections then success --
+      // plus one for the n8n plist, which is bootstrapped after it. Counted per
+      // service rather than in total, so the retry still has to be a retry.
+      expect(calls.match(/\[bootstrap\].*com\.pharmaitchat\.mcp\.plist/g)).toHaveLength(3);
+      expect(calls.match(/\[bootstrap\].*com\.pharmaitchat\.n8n\.plist/g)).toHaveLength(1);
       expect(calls).toContain("hermes [gateway] [install]");
     },
     30_000

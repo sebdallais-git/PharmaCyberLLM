@@ -20,9 +20,17 @@ export N8N_PORT="${N8N_PORT:-5678}"
 # this machine, and n8n's editor has no auth in this deployment.
 export N8N_LISTEN_ADDRESS="${N8N_LISTEN_ADDRESS:-127.0.0.1}"
 export N8N_USER_FOLDER="${N8N_USER_FOLDER:-$HOME}"
-# Suppress the permissions warning launchd's umask would otherwise trigger.
-export N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS="${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-false}"
 export N8N_DIAGNOSTICS_ENABLED="${N8N_DIAGNOSTICS_ENABLED:-false}"
+
+# ~/.n8n holds the encryption key that protects every stored credential, so fix
+# the permissions rather than disabling the check that complains about them.
+# launchd's umask is laxer than a login shell's, which is what made n8n warn --
+# the warning was right and silencing it would have left the key readable.
+umask 077
+if [ -d "$N8N_USER_FOLDER/.n8n" ]; then
+  chmod 700 "$N8N_USER_FOLDER/.n8n" 2>/dev/null || true
+  [ -f "$N8N_USER_FOLDER/.n8n/config" ] && chmod 600 "$N8N_USER_FOLDER/.n8n/config" 2>/dev/null || true
+fi
 
 if [ -n "${N8N_BIN:-}" ] && [ -x "$N8N_BIN" ]; then
   exec "$N8N_BIN" start
