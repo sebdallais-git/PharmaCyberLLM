@@ -34,70 +34,12 @@ import { getLlmClient, StackUnavailableError } from "../services/llm-client.js";
 import { assertIndexUsable } from "../services/index-guard.js";
 import type { ChatMessage } from "../services/llm-client.js";
 import { getRunningJobs, isBenchmarkActive, trackJob } from "../services/bench-mode.js";
-import { isNeo4jAvailable, writeEntities } from "../services/graph-store.js";
 import type { GraphEntity, GraphRelationship } from "../services/graph-store.js";
 
 const router = Router();
 
 const KNOWLEDGE_DIR = join(process.cwd(), "knowledge");
 
-async function extractAndWriteEntities(text: string, source: string): Promise<void> {
-  try {
-    const neo4jOk = await isNeo4jAvailable();
-    if (!neo4jOk) return;
-
-    const extractionPrompt = `You are an entity extraction engine. Extract entities and relationships from this text.
-Entity types: Company, Subsidiary, Drug, TherapeuticArea, ManufacturingSite, Country, RegulatoryBody, Regulation, ThreatActor, Attack, AttackVector, Vendor, Product, Technology
-Return ONLY valid JSON: {"entities": [{"type": "...", "name": "...", "properties": {...}}], "relationships": [{"from": "...", "fromType": "...", "to": "...", "toType": "...", "type": "...", "properties": {...}}]}`;
-
-    const response = await trackJob("graph-extraction", () =>
-      getLlmClient().chat(
-        [
-          { role: "system", content: extractionPrompt },
-          { role: "user", content: text.slice(0, 12000) },
-        ],
-        { temperature: 0.1 }
-      )
-    );
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return;
-
-    const data = JSON.parse(jsonMatch[0]) as {
-      entities?: Array<{ type: string; name: string; properties: Record<string, unknown> }>;
-      relationships?: Array<{
-        from: string; fromType: string; to: string; toType: string;
-        type: string; properties: Record<string, unknown>;
-      }>;
-    };
-
-    const entities: GraphEntity[] = (data.entities ?? []).map((e) => ({
-      type: e.type,
-      name: e.name,
-      properties: Object.fromEntries(
-        Object.entries(e.properties ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number")
-      ),
-    }));
-
-    const relationships: GraphRelationship[] = (data.relationships ?? []).map((r) => ({
-      from: r.from,
-      fromType: r.fromType,
-      to: r.to,
-      toType: r.toType,
-      type: r.type.replace(/\s+/g, "_").toUpperCase(),
-      properties: Object.fromEntries(
-        Object.entries(r.properties ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number")
-      ),
-    }));
-
-    if (entities.length > 0 || relationships.length > 0) {
-      const result = await writeEntities(entities, relationships);
-      console.log(`[Graph] Extracted ${result.nodesProcessed} nodes, ${result.relsProcessed} rels from ${source}`);
-    }
-  } catch (err) {
-    console.error(`[Graph] Entity extraction failed for ${source}:`, err instanceof Error ? err.message : err);
-  }
-}
 
 // Multer configuration for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
@@ -146,13 +88,9 @@ router.post("/ingest-text", async (req: Request, res: Response): Promise<void> =
     res.status(unavailable ? 503 : 500).json({ error: message });
     return;
   }
-
-  // Async graph entity extraction (non-blocking)
-  setImmediate(() => {
-    extractAndWriteEntities(text, source).catch((err) =>
-      console.error("[Graph] Async extraction error:", err)
-    );
-  });
+  // Deliberately no graph write: the vendor graph is built from parsed
+  // frontmatter and declared install base only. See
+  // docs/superpowers/specs/2026-09-21-vendor-intel-graph-design.md.
 
   res.json({ message: `${added} chunks added from '${source}'`, added });
 });
@@ -195,13 +133,9 @@ router.post(
       res.status(unavailable ? 503 : 500).json({ error: message });
       return;
     }
-
-    // Async graph entity extraction (non-blocking)
-    setImmediate(() => {
-      extractAndWriteEntities(text, file.originalname).catch((err) =>
-        console.error("[Graph] Async extraction error:", err)
-      );
-    });
+  // Deliberately no graph write: the vendor graph is built from parsed
+  // frontmatter and declared install base only. See
+  // docs/superpowers/specs/2026-09-21-vendor-intel-graph-design.md.
 
     res.json({
       message: `File '${file.originalname}' ingested (${added} chunks)`,
