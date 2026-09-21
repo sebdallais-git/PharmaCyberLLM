@@ -46,6 +46,18 @@ def is_allowed(user_id: object, env: Mapping[str, str]) -> bool:
     return user_id is not None and str(user_id) in allowed
 
 
+def env_with_fallback(env: Mapping[str, str], suffix: str) -> str:
+    """Mirrors src/config/env-names.ts:readEnvWithFallback -- prefers PHARMAITCHAT_<suffix>, falls
+    back to the legacy PHARMALLM_<suffix>, trims both and treats blank as absent. Kept in sync by
+    hand (no shared module between TypeScript and this plugin); used for the API token so a token
+    rotation that only refreshes the new key in ~/.hermes/.env cannot leave this plugin sending a
+    stale one to /api/stack/confirm|cancel."""
+    preferred = env.get(f"PHARMAITCHAT_{suffix}", "").strip()
+    if preferred:
+        return preferred
+    return env.get(f"PHARMALLM_{suffix}", "").strip()
+
+
 def _json(raw: bytes) -> dict:
     try:
         value = json.loads(raw.decode("utf-8") or "{}")
@@ -91,5 +103,5 @@ def outcome_for(tap: Tap, reply: AppReply) -> Outcome:
 def resolve(tap: Tap, env: Mapping[str, str],
             post: Callable[[str, dict, str], AppReply] = post_json) -> Outcome:
     base = env.get("PHARMALLM_URL", "http://localhost:3000").rstrip("/")
-    reply = post(f"{base}/api/stack/{tap.action}", {"token": tap.token}, env.get("PHARMALLM_API_TOKEN", ""))
+    reply = post(f"{base}/api/stack/{tap.action}", {"token": tap.token}, env_with_fallback(env, "API_TOKEN"))
     return outcome_for(tap, reply)

@@ -88,9 +88,14 @@ os.chmod(path, 0o600)
 PY
 }
 
-# Value precedence: token file, current environment, existing .env, default, hidden prompt on a terminal
+# Value precedence: token file, current environment, existing .env, default, hidden prompt on a terminal.
+# An optional 4th argument is a legacy alias key: written with the same resolved value, so a reader
+# still keyed to the legacy name never sees a stale token after a rotation refreshes only the new
+# key. hermes/plugins/pharmaitchat-switch/tap.py falls back to PHARMALLM_API_TOKEN when the new one
+# is blank, so this belt-and-braces write matters most if that plugin is ever reverted independently.
+# Delete the alias argument at the one call site that uses it once the owner retires the legacy key.
 fill_env() {
-  local key="$1" default="$2" file="${3:-}" value=""
+  local key="$1" default="$2" file="${3:-}" legacy="${4:-}" value=""
   if [ -n "$file" ] && [ -s "$file" ]; then
     value="$(tr -d '[:space:]' <"$file")"
   elif [ -n "${!key:-}" ]; then
@@ -114,6 +119,10 @@ fill_env() {
   fi
   env_set "$key" "$value"
   log "  $key set"
+  if [ -n "$legacy" ]; then
+    env_set "$legacy" "$value"
+    log "  $legacy set (legacy alias, kept in sync until retired)"
+  fi
 }
 
 install_file() {
@@ -134,7 +143,7 @@ install_config() {
   fill_env PHARMALLM_URL "http://localhost:3000"
   fill_env PHARMALLM_MCP_URL "http://127.0.0.1:3200/mcp"
   fill_env SEARXNG_URL "http://localhost:8888"
-  fill_env PHARMAITCHAT_API_TOKEN "" "$RUN_DIR/api-token"
+  fill_env PHARMAITCHAT_API_TOKEN "" "$RUN_DIR/api-token" PHARMALLM_API_TOKEN
   fill_env PHARMALLM_MCP_TOKEN "" "$RUN_DIR/mcp-token"
   fill_env TELEGRAM_BOT_TOKEN ""
   fill_env TELEGRAM_ALLOWED_USERS ""

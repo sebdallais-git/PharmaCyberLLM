@@ -111,6 +111,9 @@ describe("hermes-setup.sh install-config", () => {
     expect(statSync(join(box.home, ".env")).mode & 0o777).toBe(0o600);
     const env = envFile(box);
     expect(env).toContain(`PHARMAITCHAT_API_TOKEN=${API_TOKEN}`);
+    // Legacy alias, kept fresh until the owner retires it: hermes/plugins/pharmaitchat-switch/tap.py
+    // still reads only PHARMALLM_API_TOKEN, with no fallback of its own.
+    expect(env).toContain(`PHARMALLM_API_TOKEN=${API_TOKEN}`);
     expect(env).toContain(`PHARMALLM_MCP_TOKEN=${MCP_TOKEN}`);
     expect(env).toContain("PHARMALLM_URL=http://localhost:3000");
     expect(env).toContain("PHARMALLM_MCP_URL=http://127.0.0.1:3200/mcp");
@@ -120,6 +123,25 @@ describe("hermes-setup.sh install-config", () => {
     expect(env).toContain("TELEGRAM_HOME_CHANNEL=424242");
     const output = result.stdout + result.stderr;
     for (const secret of [API_TOKEN, MCP_TOKEN, BOT_TOKEN]) expect(output).not.toContain(secret);
+  });
+
+  it("refreshes both the renamed and legacy API token keys on a second install-config (rotation)", () => {
+    const box = sandbox();
+
+    setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+    expect(envFile(box)).toContain(`PHARMAITCHAT_API_TOKEN=${API_TOKEN}`);
+
+    // Simulate `scripts/switch-stack.sh token` rotating the token file, then re-running install-config
+    // -- the exact cycle the plugin's Telegram buttons depend on staying in sync across.
+    const rotated = "rotated-token-value-9999";
+    writeFileSync(join(box.runDir, "api-token"), `${rotated}\n`);
+    const result = setup(box, ["install-config"], { TELEGRAM_BOT_TOKEN: BOT_TOKEN, TELEGRAM_ALLOWED_USERS: "424242" });
+
+    expect(result.status).toBe(0);
+    const env = envFile(box);
+    expect(env).toContain(`PHARMAITCHAT_API_TOKEN=${rotated}`);
+    expect(env).toContain(`PHARMALLM_API_TOKEN=${rotated}`);
+    expect(env).not.toContain(API_TOKEN);
   });
 
   it("takes only the first allowed user as the home channel", () => {

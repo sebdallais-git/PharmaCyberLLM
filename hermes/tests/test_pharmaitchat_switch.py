@@ -63,6 +63,28 @@ class AllowedTest(unittest.TestCase):
         self.assertFalse(tap.is_allowed(424242, {}))
 
 
+class EnvWithFallbackTest(unittest.TestCase):
+    """A token rotation refreshes PHARMAITCHAT_API_TOKEN in ~/.hermes/.env but (until the owner
+    retires it) leaves the legacy PHARMALLM_API_TOKEN holding whatever value it last had. This
+    plugin must still resolve to the value the app actually enforces (src/config/env-names.ts's
+    readEnvWithFallback), never the stale legacy one, when both are present."""
+
+    def test_prefers_the_new_key_when_both_are_present(self):
+        env = {"PHARMAITCHAT_API_TOKEN": "new", "PHARMALLM_API_TOKEN": "old"}
+        self.assertEqual(tap.env_with_fallback(env, "API_TOKEN"), "new")
+
+    def test_falls_back_to_the_legacy_key_alone(self):
+        env = {"PHARMALLM_API_TOKEN": "old"}
+        self.assertEqual(tap.env_with_fallback(env, "API_TOKEN"), "old")
+
+    def test_blank_on_both_names_is_absent(self):
+        self.assertEqual(tap.env_with_fallback({"PHARMAITCHAT_API_TOKEN": "  ", "PHARMALLM_API_TOKEN": " "}, "API_TOKEN"), "")
+        self.assertEqual(tap.env_with_fallback({}, "API_TOKEN"), "")
+
+    def test_trims_a_padded_value(self):
+        self.assertEqual(tap.env_with_fallback({"PHARMAITCHAT_API_TOKEN": " padded "}, "API_TOKEN"), "padded")
+
+
 class OutcomeTest(unittest.TestCase):
     def test_maps_each_app_reply(self):
         confirm, cancel = tap.Tap("confirm", TOKEN), tap.Tap("cancel", TOKEN)
@@ -118,6 +140,13 @@ class PostJsonTest(unittest.TestCase):
         outcome = tap.resolve(tap.Tap("confirm", TOKEN), self.env)
         self.assertEqual(self.seen, [("/api/stack/confirm", "Bearer api-secret", {"token": TOKEN})])
         self.assertTrue(outcome.text.startswith("✅ Switching to mlx"))
+
+    def test_sends_the_renamed_token_over_a_stale_legacy_one(self):
+        # A rotation refreshes PHARMAITCHAT_API_TOKEN but leaves PHARMALLM_API_TOKEN stale
+        # (scripts/hermes-setup.sh's fill_env now keeps both fresh, but this must not depend on that).
+        env = dict(self.env, **{"PHARMAITCHAT_API_TOKEN": "api-secret", "PHARMALLM_API_TOKEN": "stale"})
+        tap.resolve(tap.Tap("confirm", TOKEN), env)
+        self.assertEqual(self.seen[-1][1], "Bearer api-secret")
 
     def test_reads_a_410_as_expired(self):
         outcome = tap.resolve(tap.Tap("cancel", "f" * 32), self.env)
