@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
+import { thinkingBody } from "../src/services/thinking.js";
 import { buildStacks, getActiveStack, isStackName, STACK_NAMES } from "../src/config/llm-stacks.js";
 
 describe("getActiveStack", () => {
@@ -64,8 +65,8 @@ describe("buildStacks", () => {
 
   it("disables thinking on both stacks", () => {
     const { ollama, mlx } = buildStacks({});
-    expect(ollama.chatExtraBody).toEqual({ reasoning_effort: "none" });
-    expect(mlx.chatExtraBody).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+    expect(thinkingBody(ollama, "off")).toEqual({ reasoning_effort: "none" });
+    expect(thinkingBody(mlx, "off")).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   });
 });
 

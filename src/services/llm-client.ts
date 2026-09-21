@@ -3,6 +3,7 @@
 
 import { getActiveStack } from "../config/llm-stacks.js";
 import type { StackConfig } from "../config/llm-stacks.js";
+import { thinkingBody, type ThinkingLevel } from "./thinking.js";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -13,6 +14,9 @@ export interface ChatMessage {
 export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
+  // Omitted means off: benchmarks, MCP and the Telegram path must not start
+  // thinking just because a UI switch exists.
+  thinking?: ThinkingLevel;
 }
 
 export interface TokenStats {
@@ -147,7 +151,7 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
       max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-      ...stack.chatExtraBody,
+      ...thinkingBody(stack, options.thinking ?? "off"),
     };
   }
 

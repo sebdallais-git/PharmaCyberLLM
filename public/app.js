@@ -72,6 +72,29 @@ userInput.addEventListener("keydown", (e) => {
   }
 });
 
+const thinkingSelect = document.getElementById("thinking-select");
+const thinkingLabel = document.getElementById("thinking-label");
+
+// The model's own reasoning, collapsed by default. Deliberately a separate
+// component from buildReasoningPanel(), which reports RAG pipeline steps: one
+// is what the system did, the other is what the model thought.
+function createThinkingPanel() {
+  const el = document.createElement("details");
+  el.className = "reasoning-panel thinking-panel";
+  const summary = document.createElement("summary");
+  summary.className = "reasoning-header";
+  summary.textContent = "Reasoning";
+  const body = document.createElement("div");
+  body.className = "reasoning-steps";
+  el.append(summary, body);
+  return {
+    el,
+    append(text) {
+      body.textContent += text;
+    },
+  };
+}
+
 sendBtn.addEventListener("click", sendMessage);
 
 // Load models from the active LLM stack
@@ -85,6 +108,23 @@ async function loadModels() {
       setStatus(`${stackLabel} stack unavailable - run scripts/switch-stack.sh ${data.stack || ""}`.trim(), "error");
       return;
     }
+
+    // Render only what this stack can honour, so the UI can never offer a level
+    // the server would reject.
+    const levels = Array.isArray(data.thinkingLevels) ? data.thinkingLevels : [];
+    thinkingSelect.replaceChildren();
+    for (const level of levels) {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = level;
+      thinkingSelect.append(option);
+    }
+    thinkingLabel.hidden = levels.length === 0;
+    const remembered = localStorage.getItem("thinkingLevel");
+    thinkingSelect.value = levels.includes(remembered) ? remembered : levels[0] || "";
+    thinkingSelect.addEventListener("change", () => {
+      localStorage.setItem("thinkingLevel", thinkingSelect.value);
+    });
 
     // Embedding models can't chat; Ollama also lists the chat model as "<name>:latest"
     const chatModels = (data.models || []).filter(
@@ -285,6 +325,7 @@ async function sendMessage() {
         history: conversationHistory,
         model: modelSelect.value,
         webSearch: webSearchToggle.checked,
+        ...(thinkingSelect.value ? { thinking: thinkingSelect.value } : {}),
       }),
     });
 
@@ -300,6 +341,7 @@ async function sendMessage() {
 
     // Build reasoning panel (shown during processing, collapses when answer starts)
     const reasoningPanel = buildReasoningPanel();
+    let thinkingPanel = null;
     wrapperDiv.insertBefore(reasoningPanel.el, contentDiv);
     let reasoningCount = 0;
     let firstTokenReceived = false;
@@ -327,6 +369,15 @@ async function sendMessage() {
           contentDiv.style.color = "var(--error)";
           streamDone = true;
           break;
+        }
+        if (data.thinking) {
+          // Model cognition, kept separate from `data.reasoning`, which is RAG
+          // pipeline status ("searching knowledge base"). Different things.
+          if (!thinkingPanel) {
+            thinkingPanel = createThinkingPanel();
+            messageEl.insertBefore(thinkingPanel.el, messageEl.firstChild);
+          }
+          thinkingPanel.append(data.thinking);
         }
         if (data.reasoning) {
           reasoningCount++;

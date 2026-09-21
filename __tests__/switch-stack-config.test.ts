@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { thinkingBody } from "../src/services/thinking.js";
 import { buildStacks, STACK_NAMES } from "../src/config/llm-stacks.js";
 import { parseProgress } from "../src/services/stack-switch.js";
 
@@ -61,8 +62,8 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
   it("warms up with the same thinking switch the client sends", () => {
     expect(script).toContain(`'"reasoning_effort":"none"'`);
     expect(script).toContain(`'"chat_template_kwargs":{"enable_thinking":false}'`);
-    expect(JSON.stringify(ollama.chatExtraBody)).toBe('{"reasoning_effort":"none"}');
-    expect(JSON.stringify(mlx.chatExtraBody)).toBe('{"chat_template_kwargs":{"enable_thinking":false}}');
+    expect(JSON.stringify(thinkingBody(ollama, "off"))).toBe('{"reasoning_effort":"none"}');
+    expect(JSON.stringify(thinkingBody(mlx, "off"))).toBe('{"chat_template_kwargs":{"enable_thinking":false}}');
   });
 });
 

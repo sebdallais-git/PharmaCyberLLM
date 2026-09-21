@@ -27,8 +27,6 @@ export interface StackConfig {
   // the index guard would invalidate it — and a rebuild deletes the live ChromaDB collection.
   indexStack: string;
   indexEmbeddingModel: string;
-  // Extra request fields that keep both stacks comparable (thinking disabled)
-  chatExtraBody: Record<string, unknown>;
 }
 
 const EMBEDDING_DIM = 1024;
@@ -48,7 +46,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.ollama.json",
       indexStack: "ollama",
       indexEmbeddingModel: "qwen3-embedding:0.6b-q8_0",
-      chatExtraBody: { reasoning_effort: "none" },
     },
     mlx: {
       name: "mlx",
@@ -61,7 +58,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.mlx.json",
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
     // oMLX serves chat and embeddings from one process; its embeddings are identical to the MLX
     // server's (cosine 1.000000, see the verification doc), so it shares the MLX index
@@ -81,7 +77,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       // deletes the collection and re-embeds the whole knowledge base.
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
   };
 }

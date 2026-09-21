@@ -7,6 +7,8 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isThinkingLevel, splitThinking, thinkingLevels, type ThinkingLevel } from "../services/thinking.js";
+import { getActiveStack } from "../config/llm-stacks.js";
 import { getLlmClient } from "../services/llm-client.js";
 import type { ChatMessage, StatsCollector } from "../services/llm-client.js";
 import { getIndexStatus } from "../services/index-guard.js";
@@ -117,15 +119,27 @@ const BENCHMARK_MAX_TOKENS = 1024;
 router.post("/", async (req: Request, res: Response): Promise<void> => {
   // A "model" field in the body is ignored: the active stack's chat model is always used,
   // because mlx_lm.server would otherwise download and load any requested repository
-  const { message, history, webSearch, benchmark } = req.body as {
+  const { message, history, webSearch, benchmark, thinking } = req.body as {
     message: string;
     history?: ChatMessage[];
     webSearch?: boolean;
     benchmark?: boolean;
+    thinking?: string;
   };
 
   if (!message) {
     res.status(400).json({ error: "The 'message' field is required" });
+    return;
+  }
+
+  // Refused rather than downgraded: a level the stack cannot honour would
+  // otherwise look like it worked and change nothing.
+  const activeStack = getActiveStack();
+  if (thinking !== undefined && !isThinkingLevel(activeStack, thinking)) {
+    res.status(400).json({
+      error: `thinking level "${thinking}" is not supported on the ${activeStack.name} stack`,
+      supported: thinkingLevels(activeStack),
+    });
     return;
   }
 
@@ -339,13 +353,26 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     let fullResponse = "";
     const statsCollector: StatsCollector = {};
 
-    for await (const token of llm.streamChat(
+    // <think> content is separated here rather than in the browser: the MCP
+    // client consumes this same stream and does `answer += event.token`, so
+    // reasoning must never ride on `token`.
+    const splitter = splitThinking();
+
+    for await (const chunk of llm.streamChat(
       messages,
-      { temperature: benchmark ? 0 : undefined, maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined },
+      {
+        temperature: benchmark ? 0 : undefined,
+        maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined,
+        thinking: thinking as ThinkingLevel | undefined,
+      },
       statsCollector
     )) {
-      fullResponse += token;
-      res.write(`data: ${JSON.stringify({ token })}\n\n`);
+      const { thinking: thought, answer } = splitter.push(chunk);
+      if (thought) res.write(`data: ${JSON.stringify({ thinking: thought })}\n\n`);
+      if (answer) {
+        fullResponse += answer;
+        res.write(`data: ${JSON.stringify({ token: answer })}\n\n`);
+      }
     }
 
     // Store response metadata and generate response_id for feedback
@@ -425,6 +452,9 @@ router.get("/models", async (_req: Request, res: Response): Promise<void> => {
     stack: llm.stack.name,
     chatModel: llm.stack.chatModel,
     embeddingModel: llm.stack.embeddingModel,
+    // The UI renders exactly these and no more, so a level it offers is always
+    // one the active stack can honour.
+    thinkingLevels: thinkingLevels(llm.stack),
   };
   try {
     // Probe the stack so an unreachable stack still reports 503

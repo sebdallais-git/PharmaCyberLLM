@@ -231,3 +231,27 @@ describe("createLlmClient", () => {
     5000
   );
 });
+
+describe("thinking level in the outgoing request", () => {
+  // The switch is only real if the level reaches the model. Default must stay
+  // off so benchmarks, MCP and every existing caller are unaffected.
+  it("sends thinking disabled when no level is requested", async () => {
+    server = await startFakeServer((_req, res) => sendSse(res, [delta("hi"), "[DONE]"]));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }])) void _;
+
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it("enables thinking when the level asks for it", async () => {
+    server = await startFakeServer((_req, res) => sendSse(res, [delta("hi"), "[DONE]"]));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on" })) void _;
+
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+});
