@@ -96,6 +96,7 @@ function fakeDeps(overrides: Partial<ReindexDeps> = {}): { deps: ReindexDeps; ca
     ingestTexts: async (items) => items.length,
     addToChromaDB: async (texts) => texts.length,
     listRawDocuments: async () => rawDocs(130),
+    listWatchlistItems: async () => [],
     markIndexComplete: () => {
       calls.push("markIndexComplete");
     },
@@ -209,5 +210,45 @@ describe("reindexActiveStack", () => {
     await expect(reindexActiveStack(quiet)).rejects.toThrow(
       "reindexActiveStack called without injected deps in a test"
     );
+  });
+});
+
+describe("watchlist items in a rebuild", () => {
+  // reindex.ts recreates the collection -- a DELETE -- and used to rebuild it
+  // from knowledge/ and raw_documents/ only, so every watchlist chunk was lost
+  // and could not be restored without re-fetching feeds that mostly no longer
+  // return anything.
+  it("re-embeds stored watchlist items so a rebuild does not lose vendor intel", async () => {
+    const embedded: Record<string, unknown>[] = [];
+    const { deps } = fakeDeps({
+      listKnowledgeFiles: async () => [],
+      listRawDocuments: async () => [],
+      listWatchlistItems: async () => [
+        {
+          text: "Dell refreshes PowerStore\n\nDell said today...",
+          metadata: { source: "https://dell.com/a", entity: "dell", domain: "storage", watchlist_item_id: 7 },
+        },
+      ],
+      addToChromaDB: async (texts, metadatas) => {
+        embedded.push(...metadatas);
+        return texts.length;
+      },
+    });
+
+    const result = await reindexActiveStack(quiet, deps);
+
+    expect(result.watchlistItems).toBe(1);
+    expect(embedded).toHaveLength(1);
+    expect(embedded[0]).toMatchObject({ watchlist_item_id: 7, entity: "dell", source_tier: "feed" });
+  });
+
+  it("reports zero when there are no stored watchlist items", async () => {
+    const { deps } = fakeDeps({
+      listKnowledgeFiles: async () => [],
+      listRawDocuments: async () => [],
+      listWatchlistItems: async () => [],
+    });
+
+    expect((await reindexActiveStack(quiet, deps)).watchlistItems).toBe(0);
   });
 });

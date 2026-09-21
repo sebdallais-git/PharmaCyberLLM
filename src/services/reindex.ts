@@ -21,17 +21,24 @@ import {
   recreateChromaCollection,
 } from "./chromadb-store.js";
 import { listRawDocuments } from "./raw-documents.js";
+import { listWatchlistChunks } from "./watchlist-chunks.js";
 import type { RawDocument } from "./raw-documents.js";
 import { parseFile } from "./file-parser.js";
 import { toBatches } from "../utils/batches.js";
 
 const RAW_DOCUMENT_BATCH_SIZE = 64;
 
+export interface WatchlistChunk {
+  text: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface ReindexResult {
   stack: string;
   // Items actually ingested: failed files and skipped raw-document batches are not counted
   knowledgeFiles: number;
   rawDocuments: number;
+  watchlistItems: number;
   memoryChunks: number;
   chromaChunks: number;
   skippedRawDocuments: number;
@@ -65,6 +72,9 @@ export interface ReindexDeps {
   ingestTexts: (items: TextItem[]) => Promise<number>;
   addToChromaDB: (texts: string[], metadatas: Record<string, unknown>[]) => Promise<number>;
   listRawDocuments: () => Promise<RawDocument[]>;
+  // Stored watchlist items, already joined into the text that was embedded at
+  // ingest. Without this a rebuild silently drops every vendor-intel chunk.
+  listWatchlistItems: () => Promise<WatchlistChunk[]>;
   markIndexComplete: () => void;
   saveIndex: () => Promise<void>;
   markChromaCollectionComplete: () => Promise<void>;
@@ -79,10 +89,15 @@ const defaultDeps: ReindexDeps = {
   ingestTexts,
   addToChromaDB,
   listRawDocuments: () => listRawDocuments(),
+  listWatchlistItems: async () => listWatchlistChunks(),
   markIndexComplete,
   saveIndex,
   markChromaCollectionComplete,
 };
+
+function sourceOf(item: WatchlistChunk): string {
+  return typeof item.metadata.source === "string" ? item.metadata.source : "watchlist";
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -143,6 +158,7 @@ export async function reindexActiveStack(
   let knowledgeFiles = 0;
   let rawDocuments = 0;
   let skippedRawDocuments = 0;
+  let watchlistItems = 0;
 
   try {
     log(`[Reindex] ${stack.name}: rebuilding ${stack.indexFile} and ${stack.chromaCollection}`);
@@ -193,6 +209,19 @@ export async function reindexActiveStack(
       });
     }
 
+    // Watchlist items last: they are the smallest set and the one whose loss was
+    // unrecoverable, so a failure here is worth surfacing after the bulk is in.
+    const items = await deps.listWatchlistItems();
+    for (const batch of toBatches(items, RAW_DOCUMENT_BATCH_SIZE)) {
+      memoryChunks += await deps.ingestTexts(batch.map((item) => ({ text: item.text, source: sourceOf(item) })));
+      chromaChunks += await deps.addToChromaDB(
+        batch.map((item) => item.text),
+        batch.map((item) => ({ ...item.metadata, source_tier: "feed" })),
+      );
+      watchlistItems += batch.length;
+      log(`[Reindex] watchlist items ${watchlistItems}/${items.length}`);
+    }
+
     // The rebuild ran to the end (isolated skips are reported, not fatal): stamp both completeness markers
     deps.markIndexComplete();
     await deps.saveIndex();
@@ -213,6 +242,7 @@ export async function reindexActiveStack(
     stack: stack.name,
     knowledgeFiles,
     rawDocuments,
+    watchlistItems,
     memoryChunks,
     chromaChunks,
     skippedRawDocuments,
