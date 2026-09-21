@@ -1,14 +1,16 @@
-# Hermes Agent for PharmaLLM
+# Hermes Agent for PharmaITChat
 
-Everything needed to run [Hermes Agent](https://hermes-agent.nousresearch.com/) as a Telegram assistant on PharmaLLM, on this Mac or on a second Mac on the LAN. Secrets never live here: they stay in `~/.hermes/.env` and `data/run/*-token` (mode 600).
+Everything needed to run [Hermes Agent](https://hermes-agent.nousresearch.com/) as a Telegram assistant on PharmaITChat, on this Mac or on a second Mac on the LAN. Secrets never live here: they stay in `~/.hermes/.env` and `data/run/*-token` (mode 600).
 
 | File | Purpose |
 |---|---|
-| `config.template.yaml` | Hermes config: PharmaLLM `/v1` model with 64k context, `pharmallm` MCP server (15 tools, no `start_reindex`), a `pharmallm_cron` server for scheduled runs (14 tools, also no `add_knowledge`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
+| `config.template.yaml` | Hermes config: the app's `/v1` model with 64k context, a `pharmaitchat` MCP server (15 tools, no `start_reindex`), a `pharmaitchat_cron` server for scheduled runs (14 tools, also no `add_knowledge`), Docker sandbox without network, local SearXNG search, deny approvals when unattended |
 | `SOUL.md` | Assistant role and tool policy |
-| `cron/jobs.json` | Scheduled jobs: news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00, watchlist ingest 02:30 (Hermes `--no-agent` script mode -- no LLM step -- running `scripts/pharmallm-watchlist-ingest.sh`, `--deliver local --failure-deliver telegram`; see the root `README.md`) |
-| `scripts/pharmallm-watchlist-ingest.sh` | The watchlist ingest job's script body (Task 8); `install-cron` copies it into `~/.hermes/scripts/` with the repo's path baked in |
-| `com.pharmallm.mcp.plist.template` | launchd service for `pharmallm-mcp` |
+| `cron/jobs.json` | The five scheduled jobs: watchlist ingest 02:30, news digest 06:00, gap resolution 07:00, health watch 09/19 (silent when healthy), feedback digest Monday 08:00 |
+| `scripts/pharmaitchat-watchlist-ingest.sh` | The watchlist ingest job's script body; `install-cron` copies it into `~/.hermes/scripts/` with the repo's path baked in |
+| `plugins/pharmaitchat-switch/` | Plugin that receives the Telegram **Switch** / **Cancel** buttons for a stack switch |
+| `tests/test_pharmaitchat_switch.py` | The plugin's unit tests (`npm run test:hermes-plugin`) |
+| `com.pharmaitchat.mcp.plist.template` | launchd service for `pharmaitchat-mcp` |
 
 ## 1. Install Hermes (once)
 
@@ -46,9 +48,9 @@ nano ~/.hermes/.env
 `scripts/hermes-setup.sh` needs the system `python3` (`/usr/bin/python3`, from the Command Line Tools: `xcode-select --install`). Re-run `install-services` after changing Node versions — the launch agent records an absolute `node` path, so the service dies when that path disappears.
 
 ```bash
-scripts/switch-stack.sh token          # PharmaLLM API token (skip if it exists)
-scripts/switch-stack.sh mcp-token      # token Hermes uses for pharmallm-mcp
-scripts/hermes-setup.sh all            # config, .env, launchd services, cron jobs
+scripts/switch-stack.sh token          # PharmaITChat API token (skip if it exists)
+scripts/switch-stack.sh mcp-token      # token Hermes uses for pharmaitchat-mcp
+scripts/hermes-setup.sh all            # install-config, install-services, install-plugin, install-cron
 scripts/hermes-setup.sh check          # read-only status; prints variable names, never values
 ```
 
@@ -59,10 +61,25 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | `PHARMALLM_URL` | `http://localhost:3000` |
 | `PHARMALLM_MCP_URL` | `http://127.0.0.1:3200/mcp` |
 | `SEARXNG_URL` | `http://localhost:8888` |
-| `PHARMALLM_API_TOKEN` | from `data/run/api-token` |
+| `PHARMAITCHAT_API_TOKEN` | from `data/run/api-token` |
 | `PHARMALLM_MCP_TOKEN` | from `data/run/mcp-token` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS` | you add them (step 2) |
 | `TELEGRAM_HOME_CHANNEL` | defaults to the first id in `TELEGRAM_ALLOWED_USERS`, so scheduled jobs reach your DM |
+
+> [!NOTE]
+> The product was renamed from PharmaLLM, but three of these keys keep the old name on purpose: `config.template.yaml` expands `${PHARMALLM_URL}`, `${PHARMALLM_MCP_URL}` and `${PHARMALLM_MCP_TOKEN}` through Hermes, which has no fallback of its own, so renaming them would break the config. (`PHARMALLM_URL` is read by the MCP service too, which accepts either name.) The API token is different: the app and the switch plugin read it directly, so `install-config` writes `PHARMAITCHAT_API_TOKEN` **and** keeps `PHARMALLM_API_TOKEN` in step with it — a rotation updates both, and an `.env` that only has the legacy key still works.
+
+## Scheduled jobs
+
+| Job | Schedule | What it does |
+|---|---|---|
+| `pharmaitchat-watchlist-ingest` | 02:30 daily | `--no-agent` script mode — no LLM agent step. Runs `~/.hermes/scripts/pharmaitchat-watchlist-ingest.sh`, which calls `scripts/watchlist.ts ingest` in the repo. `--deliver local --failure-deliver telegram`: silent on success, Telegram only on failure. Full output in `data/logs/watchlist-ingest-<date>.log`. `script_timeout_seconds` is 7200; the ingest stops itself at a 45-minute budget well before that |
+| `pharmaitchat-news-digest` | 06:00 daily | Calls `run_news_agent`, then `knowledge_status`, and reports in at most 10 lines |
+| `pharmaitchat-gap-resolution` | 07:00 daily | Re-checks at most 3 triggered gaps, oldest first; `[SILENT]` when there are none |
+| `pharmaitchat-health-watch` | 09:00 and 19:00 | Reports failing checks; `[SILENT]` while healthy |
+| `pharmaitchat-feedback-digest` | Monday 08:00 | Weekly rating trends and the worst-rated answers |
+
+Edit `cron/jobs.json` and re-run `scripts/hermes-setup.sh install-cron` to change any of them.
 
 ## Operations
 
@@ -73,9 +90,10 @@ scripts/hermes-setup.sh check          # read-only status; prints variable names
 | Scheduled jobs | `hermes cron list`, `hermes cron run <id>` (runs on the next scheduler tick) |
 | One-shot question | `hermes chat -q "…" --format stream-json` (shows each tool call) |
 | Update jobs or config after editing this folder | `scripts/hermes-setup.sh install-config` or `install-cron` |
+| Update the switch plugin after editing it | `scripts/hermes-setup.sh install-plugin` (restarts the gateway) |
 | Switch the LLM stack | `scripts/switch-stack.sh omlx` (or `ollama`/`mlx`) — Hermes follows the active stack, so this also moves the agent, no Hermes change needed |
 
-**After a reboot.** `com.pharmallm.mcp` and the Hermes gateway come back on their own; the PharmaLLM app and the model stack do not (they have no launch agent). Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before the first job fires — until then `/healthz` reports `pharmallm:false`, `scripts/hermes-setup.sh check` says `pharmallm-mcp: up, PharmaLLM not reachable`, and the scheduled jobs deliver failure messages.
+**After a reboot.** `com.pharmaitchat.mcp` and the Hermes gateway come back on their own; the PharmaITChat app and the model stack do not (they have no launch agent). Run `scripts/start-services.sh` (or `scripts/switch-stack.sh ollama`) before the first job fires — until then `/healthz` reports `pharmaitchat:false`, `scripts/hermes-setup.sh check` says `pharmaitchat-mcp: up, PharmaITChat not reachable`, and the scheduled jobs deliver failure messages.
 
 ### Docker sandbox
 
@@ -87,15 +105,15 @@ docker pull nikolaik/python-nodejs:python3.11-nodejs20
 
 The sandbox is sized for a small VM (`container_cpu: 1`, `container_memory: 512`). The Docker VM must keep headroom beyond Neo4j and SearXNG, which already take about 700 MB of colima's 1.91 GB on this Mac; raise those two values only after giving the VM more RAM.
 
-If `docker pull` hangs with no output, the daemon is wedged: `colima restart` clears it. That also restarts Neo4j and SearXNG, so PharmaLLM's graph and web search are briefly unavailable.
+If `docker pull` hangs with no output, the daemon is wedged: `colima restart` clears it. That also restarts Neo4j and SearXNG, so the graph and web search are briefly unavailable.
 
-**Speed and GPU budget (measured).** Every Hermes step is a full cold prefill of about 160 s: Hermes' prompt prefix changes from request to request, so the prompt cache never hits. A Telegram answer with 3–4 tool calls therefore takes about 10–20 minutes, and the four LLM-agent scheduled jobs on this branch's schedule cost about 45–55 minutes of GPU per day. The watchlist ingest job (02:30) is script mode -- it never goes through a Hermes agent step, so this prefill math doesn't apply to it; its own GPU cost is one local-model tagging call per new item, sequential, capped at 250 items a night (see the root `README.md`). A PharmaLLM web chat between two Hermes steps evicts the shared Ollama prompt cache, so nothing is saved even when a prefix would have matched.
+**Speed and GPU budget (measured).** Every Hermes agent step is a full cold prefill of about 160 s: Hermes' prompt prefix changes from request to request, so the prompt cache never hits. A Telegram answer with 3–4 tool calls therefore takes about 10–20 minutes, and the four LLM-agent scheduled jobs cost about 45–55 minutes of GPU per day. The watchlist ingest (02:30) is script mode — it never goes through a Hermes agent step, so this prefill math doesn't apply to it; its GPU cost is one local-model tagging call per new item, sequential, capped at 250 items a night. A web chat between two Hermes steps evicts the shared Ollama prompt cache, so nothing is saved even when a prefix would have matched.
 
-**Stack switches and benchmarks.** Hermes always uses the active stack. During a switch or a benchmark, PharmaLLM is unavailable or answers 503, and Hermes says so.
+**Stack switches and benchmarks.** Hermes always uses the active stack. During a switch or a benchmark, the app is unavailable or answers 503, and Hermes says so.
 
 ## Stack-switch buttons
 
-PharmaLLM's web UI confirms a stack switch with Telegram buttons instead of a link. The app and Hermes share one bot, and Hermes' gateway is that bot's only update consumer, so the `pharmallm-switch` plugin (`hermes/plugins/pharmallm-switch/`) is what receives the tap.
+The web UI confirms a stack switch with Telegram buttons instead of a link. The app and Hermes share one bot, and Hermes' gateway is that bot's only update consumer, so the `pharmaitchat-switch` plugin (`hermes/plugins/pharmaitchat-switch/`) is what receives the tap.
 
 Install it with:
 
@@ -103,13 +121,13 @@ Install it with:
 scripts/hermes-setup.sh install-plugin
 ```
 
-This also restarts the gateway, because the plugin only wires its Telegram handler when the gateway connects. Once loaded, it writes `~/.hermes/pharmallm-switch.ready.json` with the gateway's pid and start time; PharmaLLM compares that file against the gateway's own status before it will let you request a stack switch. `scripts/hermes-setup.sh check` reports the plugin as `missing`, `loaded by the running gateway`, or `installed, waiting for a gateway restart`.
+This also restarts the gateway, because the plugin only wires its Telegram handler when the gateway connects. Once loaded, it writes `~/.hermes/pharmaitchat-switch.ready.json` with the gateway's pid and start time; the app compares that file against the gateway's own status before it will let you request a stack switch. `scripts/hermes-setup.sh check` reports the plugin as `missing`, `loaded by the running gateway`, or `installed, waiting for a gateway restart`.
 
-Its tests run with `npm run test:hermes-plugin`.
+The plugin reads `PHARMAITCHAT_API_TOKEN` and falls back to `PHARMALLM_API_TOKEN`, so a token rotation that only rewrites one of the two keys still leaves it working. Its tests run with `npm run test:hermes-plugin`.
 
 ## Moving Hermes to a second Mac
 
-On the PharmaLLM Mac, let the MCP service listen on the network:
+On the PharmaITChat Mac, let the MCP service listen on the network:
 
 ```bash
 MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services
@@ -117,19 +135,22 @@ MCP_HOST=0.0.0.0 scripts/hermes-setup.sh install-services
 
 This bakes `MCP_HOST` into the launch agent, so it survives a reboot — `launchctl setenv` would not, and `run-mcp.sh` would silently fall back to loopback. An MCP token is then required: `run-mcp.sh` refuses to listen on a non-loopback host without one (`scripts/switch-stack.sh mcp-token`).
 
-On the Hermes Mac, clone this repo, install Hermes (step 1), then set the URLs and copy the two token values into `~/.hermes/.env` by hand before running `scripts/hermes-setup.sh install-config`, `scripts/hermes-setup.sh install-cron` and `hermes gateway install --force --start-now --start-on-login`:
+On the Hermes Mac, clone this repo, install Hermes (step 1), then set the URLs and copy the two token values into `~/.hermes/.env` by hand before running `scripts/hermes-setup.sh install-config`, `scripts/hermes-setup.sh install-plugin`, `scripts/hermes-setup.sh install-cron` and `hermes gateway install --force --start-now --start-on-login`:
 
 ```
-PHARMALLM_URL=http://<pharmallm-mac>:3000
-PHARMALLM_MCP_URL=http://<pharmallm-mac>:3200/mcp
-SEARXNG_URL=http://<pharmallm-mac>:8888
+PHARMALLM_URL=http://<pharmaitchat-mac>:3000
+PHARMALLM_MCP_URL=http://<pharmaitchat-mac>:3200/mcp
+SEARXNG_URL=http://<pharmaitchat-mac>:8888
 ```
 
-On the Hermes Mac, `scripts/hermes-setup.sh check` reports `service com.pharmallm.mcp: not loaded` by design: that service runs on the PharmaLLM Mac, so its absence here is expected and not a fault. To make the health line meaningful there, point the probe at the other Mac: `MCP_HEALTH_URL=http://<pharmallm-mac>:3200/healthz scripts/hermes-setup.sh check`.
+On the Hermes Mac, `scripts/hermes-setup.sh check` reports `service com.pharmaitchat.mcp: not loaded` by design: that service runs on the other Mac, so its absence here is expected and not a fault. To make the health line meaningful there, point the probe at the other Mac: `MCP_HEALTH_URL=http://<pharmaitchat-mac>:3200/healthz scripts/hermes-setup.sh check`.
+
+A two-Mac setup cannot confirm UI-driven stack switches through Telegram — the plugin calls the app on localhost. Switch with `scripts/switch-stack.sh` on the model Mac instead.
 
 ## Troubleshooting
 
 - `hermes doctor --live` probes the model and MCP server.
-- `hermes mcp test pharmallm` checks the MCP connection and lists tools.
+- `hermes mcp test pharmaitchat` checks the MCP connection and lists tools.
 - "context length below minimum": the gateway model must run with 65536 (`scripts/switch-stack.sh ollama-ctx`).
-- MCP calls fail after 5 minutes: `pharmallm-mcp` must be the version that sends keepalives (restart it: `scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start`).
+- MCP calls fail after 5 minutes: `pharmaitchat-mcp` must be the version that sends keepalives (restart it: `scripts/switch-stack.sh mcp stop && scripts/switch-stack.sh mcp start`).
+- `check` reports the gateway as not loaded: it probes the `gui` launchd domain while the gateway loads in `user`. Confirm with `hermes gateway status`.
