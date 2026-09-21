@@ -58,16 +58,18 @@ needs:
     - networking
 
   ai-data-platform:
-    # The analytics layer over research and manufacturing data: object as the
-    # substrate, file where pipelines land, services to assemble it.
+    # The analytics layer itself, plus the storage it sits on. data-platform is
+    # where Snowflake, Databricks and Palantir compete; object and file are the
+    # substrate underneath, and a bid can be won or lost at either level.
+    - data-platform
     - storage-object
     - storage-file
-    - services
 
   end-user-computing:
-    # Devices, the workplace estate around them, and the refresh that funds it.
+    # Seb 2026-09-21: "end user computing is equal to client" -- the same thing
+    # named from two sides. Customers buy end user computing; vendors sell
+    # client. Deliberately 1:1, with no services tail bolted on.
     - client
-    - services
 
   multi-cloud:
     # Where data sits, what it costs to move, and the fabric reaching it.

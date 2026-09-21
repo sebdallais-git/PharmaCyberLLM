@@ -14,6 +14,11 @@ export const SEGMENTS = [
   "storage-block",
   "storage-file",
   "storage-object",
+  // Distinct from the storage segments beneath it: Snowflake, Databricks and
+  // Palantir compete with each other and with Dell AI Data Platform and HPE
+  // Ezmeral, not with NetApp. Filing them under storage-object would make the
+  // graph assert a rivalry that does not exist.
+  "data-platform",
   "data-protection",
   "hci",
   "networking",
