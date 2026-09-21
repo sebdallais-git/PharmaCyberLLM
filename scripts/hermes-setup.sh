@@ -20,6 +20,7 @@ HERMES_BIN="${HERMES_BIN:-hermes}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
 MCP_HEALTH_URL="${MCP_HEALTH_URL:-http://127.0.0.1:3200/healthz}"
 MCP_LABEL="com.pharmaitchat.mcp"
+N8N_LABEL="com.pharmaitchat.n8n"
 PLUGIN_NAME="pharmaitchat-switch"
 # Only the plugin's own files: the tests next to it in the repo stay out of ~/.hermes
 PLUGIN_FILES=(plugin.yaml __init__.py tap.py)
@@ -177,6 +178,25 @@ install_services() {
     sleep 1
   done
   log "Installed and started $MCP_LABEL"
+
+  # n8n hosts the knowledge-gap auto-fill workflow. It is a service rather than
+  # a cron job because the app's Gap Detector calls its webhook the moment a gap
+  # is detected. It had been down long enough for the loop to be dead without
+  # anyone noticing -- the app logs the caught ECONNREFUSED and carries on --
+  # so KeepAlive is the point of installing it.
+  plist="$LAUNCH_AGENTS_DIR/$N8N_LABEL.plist"
+  sed -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+      -e "s|__N8N_PORT__|${N8N_PORT:-5678}|g" \
+      -e "s|__PATH__|$(dirname "$node_bin"):/usr/bin:/bin:/usr/sbin:/sbin|g" \
+      "$TEMPLATE_DIR/com.pharmaitchat.n8n.plist.template" >"$plist"
+  "$LAUNCHCTL_BIN" bootout "$domain/$N8N_LABEL" >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5; do
+    if "$LAUNCHCTL_BIN" bootstrap "$domain" "$plist"; then break; fi
+    if [ "$attempt" -eq 5 ]; then log "launchctl bootstrap failed 5 times for $N8N_LABEL"; exit 1; fi
+    sleep 1
+  done
+  log "Installed and started $N8N_LABEL"
+
   "$HERMES_BIN" gateway install --force --start-now --start-on-login
   log "Installed the Hermes gateway service"
 }
