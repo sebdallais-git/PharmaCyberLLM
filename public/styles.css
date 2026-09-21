@@ -68,11 +68,6 @@ body {
   letter-spacing: -0.02em;
 }
 
-.header h1::after {
-  content: "CHAT";
-  color: var(--primary);
-}
-
 .subtitle {
   color: var(--text-secondary);
   font-size: 0.8rem;
