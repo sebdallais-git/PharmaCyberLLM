@@ -57,6 +57,31 @@ needs:
     - compute-standard
     - networking
 
+  ai-data-platform:
+    # The analytics layer over research and manufacturing data: object as the
+    # substrate, file where pipelines land, services to assemble it.
+    - storage-object
+    - storage-file
+    - services
+
+  end-user-computing:
+    # Devices, the workplace estate around them, and the refresh that funds it.
+    - client
+    - services
+
+  multi-cloud:
+    # Where data sits, what it costs to move, and the fabric reaching it.
+    - storage-object
+    - networking
+    - services
+
+  sap:
+    # S/4HANA is latency-bound and sits on certified compute with fast block
+    # underneath; the migration itself is a services engagement.
+    - compute-standard
+    - storage-block
+    - services
+
   cost-optimisation:
     - services
     - storage-object

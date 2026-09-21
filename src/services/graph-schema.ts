@@ -22,10 +22,19 @@ export const SEGMENTS = [
 ] as const;
 
 export const NEEDS = [
+  // The six the landing page advertises as use cases. __tests__/graph-accounts
+  // asserts the page and this list cannot drift apart: the page once promised
+  // SAP and Multi Cloud while the model had no need for either, so those
+  // questions reached a traversal with nothing to traverse.
+  "ai-factory",
+  "ai-data-platform",
+  "end-user-computing",
+  "cyber-resilience",
+  "multi-cloud",
+  "sap",
+  // Tracked but not all advertised.
   "gxp-compliance",
   "rnd-compute",
-  "ai-factory",
-  "cyber-resilience",
   "data-sovereignty",
   "manufacturing-ot",
   "cost-optimisation",

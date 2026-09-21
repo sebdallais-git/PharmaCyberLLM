@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "@jest/globals";
+import { NEEDS } from "../src/services/graph-schema.js";
 import {
   parseAccounts,
   accountToGraphFacts,
@@ -113,5 +115,25 @@ describe("parseNeedsMap", () => {
 
     expect(facts.relationships.filter((r) => r.type === "ADDRESSED_BY")).toHaveLength(2);
     expect(facts.nodes.map((n) => n.label).sort()).toEqual(["Need", "Segment", "Segment"]);
+  });
+});
+
+describe("the landing page and the model agree", () => {
+  // The page advertised six use cases while the model held eight differently
+  // named needs, so a visitor asking about SAP or Multi Cloud hit a traversal
+  // with nothing to traverse. This keeps the two vocabularies from drifting.
+  it("has a need for every use case the page advertises", () => {
+    const html = readFileSync("public/index.html", "utf8");
+    const line = /<strong>Use cases<\/strong>:\s*([^<]+)</.exec(html);
+    expect(line).not.toBeNull();
+
+    const slugs = line![1]
+      .split(",")
+      .map((s) => s.trim().toLowerCase().replace(/\s+/g, "-"))
+      .filter(Boolean);
+    expect(slugs.length).toBeGreaterThan(0);
+
+    const missing = slugs.filter((s) => !(NEEDS as readonly string[]).includes(s));
+    expect(missing).toEqual([]);
   });
 });
