@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { Driver } from "neo4j-driver";
-import { buildGatherDeps, buildNarrationChat, liveReader } from "../src/services/export-wiring.js";
+import { buildGatherDeps, buildNarrationChat, buildPipelineDeps, liveReader } from "../src/services/export-wiring.js";
+import { openExportJobs } from "../src/services/export-jobs.js";
 import { openWatchlistStore } from "../src/services/watchlist-store.js";
 import type { LlmClient, StatsCollector } from "../src/services/llm-client.js";
 
@@ -163,6 +164,33 @@ describe("liveReader", () => {
 
     store.close();
     anotherStore.close();
+  });
+});
+
+// Final review, important 1: buildPipelineDeps() used to call
+// openExportJobs() itself on every POST /api/export, leaking a WAL-mode
+// sqlite handle (three file descriptors) per export for the life of the
+// process -- and making the pipeline a SECOND writer against the same file
+// as the router's own memoised store, so concurrent exports could hit
+// SQLITE_BUSY. It now takes the router's store instead of opening one.
+//
+// No live service is touched: the job store is ":memory:", and liveReader()
+// is primed with injected fakes first, so the module-scope memo
+// buildPipelineDeps reads is already populated and neither a real Neo4j
+// driver nor the real watchlist database is ever opened.
+describe("buildPipelineDeps", () => {
+  it("uses the job store it is given instead of opening a second one", async () => {
+    const store = openWatchlistStore(":memory:");
+    const fakeDriver = { session: jest.fn() } as unknown as Driver;
+    liveReader({ getDriver: () => fakeDriver, openStore: () => store });
+
+    const jobs = openExportJobs(":memory:");
+    const deps = await buildPipelineDeps(jobs);
+
+    expect(deps.jobs).toBe(jobs);
+
+    jobs.close();
+    store.close();
   });
 });
 

@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import type { GatherDeps } from "./export-artifacts.js";
 import { gather } from "./export-artifacts.js";
 import { deliver } from "./export-delivery.js";
-import { openExportJobs } from "./export-jobs.js";
+import type { ExportJobStore } from "./export-jobs.js";
 import { narrateArtifact } from "./export-narrative.js";
 import type { PipelineDeps } from "./export-pipeline.js";
 import { getDriver } from "./graph-store.js";
@@ -266,20 +266,28 @@ export async function sendTelegramDocument(
   if (!resp.ok) throw new Error(`telegram sendDocument failed (${resp.status})`);
 }
 
-export async function buildPipelineDeps(): Promise<PipelineDeps> {
+// R6 (final review, important 1): this function used to call
+// openExportJobs() itself. buildPipelineDeps() runs once per POST
+// /api/export (src/api/export.ts's runPipeline), so every export opened a
+// fresh WAL-mode sqlite connection -- three file descriptors -- that nothing
+// ever closed, for the life of the server process. That is the same leak
+// R4 above fixed for liveReader(), and the comment that used to sit here
+// acknowledged it rather than fixing it.
+//
+// Of the two remedies the finding offered, this takes the second: rather
+// than memoising a second connection, the pipeline is handed the store the
+// ROUTER already holds (src/api/export.ts's lazyJobStore). A memo would have
+// removed the leak but not the deeper problem -- two connections writing the
+// same database file, so two concurrent exports could meet as SQLITE_BUSY.
+// There is exactly one writer now, and its lifetime is the router's.
+//
+// Passing it in also keeps this module free of a module-scope open: nothing
+// here opens a database at import time (the import side effect Task 9
+// removed), because the store arrives as an argument from a caller that
+// opens it lazily on first use.
+export async function buildPipelineDeps(jobs: ExportJobStore): Promise<PipelineDeps> {
   return {
-    // Note: openExportJobs() above is opened fresh on every call to
-    // buildPipelineDeps() (one per export job -- see src/api/export.ts's
-    // runPipeline) and is not closed here: PipelineDeps has no teardown
-    // hook, so there is no place in this function to call it once the job
-    // finishes. liveReader() below is different: it is memoised at module
-    // scope (see cachedReader above), so repeated calls here return the same
-    // reader and open the watchlist store at most once per process, the
-    // same lifecycle openExportJobs() itself gets from src/api/export.ts's
-    // own module-scope memo. liveReader()'s close() exists for callers
-    // (tests, or a future lifecycle hook) that do manage that scope
-    // explicitly.
-    jobs: openExportJobs(),
+    jobs,
     gather,
     gatherDeps: buildGatherDeps(liveReader()),
     // narrateArtifact (Task 11) writes the "Summary" prose section from the

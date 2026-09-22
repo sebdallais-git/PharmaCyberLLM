@@ -19,6 +19,32 @@ export function isArtifactKind(value: unknown): value is ArtifactKind {
   return typeof value === "string" && (ARTIFACT_KINDS as readonly string[]).includes(value);
 }
 
+// R1 (final review, important 3): which kinds have no external form was
+// expressed twice as two hand-written throws below, and nowhere the HTTP
+// layer could consult -- so a request that was known-invalid at validation
+// time was accepted with a 202 and a job id, then failed minutes later in
+// the gathering stage. src/api/export.ts now refuses the combination up
+// front using the predicate below, and the gatherer keeps its throw: this
+// module stays the authority, the route is only a fast-fail in front of it.
+// Both read the SAME predicate and the SAME message, so there is nothing for
+// them to disagree about; __tests__/export-route.test.ts pins that agreement
+// by comparing the validator's verdict against what gather() actually does
+// for every kind in ARTIFACT_KINDS.
+//
+// Why these two: a vendor comparison IS competitive framing, and a table of
+// who holds which account IS incumbency information. Strip that out for an
+// external reader and nothing is left to call by either name, so the answer
+// is a refusal, not a thinner artifact.
+const INTERNAL_ONLY_KINDS: readonly ArtifactKind[] = ["incumbency-matrix", "vendor-comparison"];
+
+export function hasExternalForm(kind: ArtifactKind): boolean {
+  return !INTERNAL_ONLY_KINDS.includes(kind);
+}
+
+export function internalOnlyKindMessage(kind: ArtifactKind): string {
+  return `${kind} is internal by nature; there is no external version`;
+}
+
 export interface GatherDeps {
   incumbency(): Promise<Array<{ account: string; segment: string; vendors: string[] }>>;
   positions(
@@ -97,12 +123,11 @@ async function gatherAccountOrVendorView(
   options: GatherOptions,
   deps: GatherDeps,
 ): Promise<Artifact> {
-  // A vendor comparison IS competitive framing; once that framing is
-  // stripped for an external audience there is nothing left to call a
-  // comparison, so this kind has no external form at all — same rule as
-  // incumbency-matrix below.
-  if (kind === "vendor-comparison" && audience === "external") {
-    throw new Error("vendor-comparison is internal by nature; there is no external version");
+  // No external form at all (see INTERNAL_ONLY_KINDS above, which is also
+  // what the API's validation consults so a caller hears this at request
+  // time rather than minutes later).
+  if (audience === "external" && !hasExternalForm(kind)) {
+    throw new Error(internalOnlyKindMessage(kind));
   }
 
   // account-brief is identified by account, vendor-comparison by vendor.
@@ -141,8 +166,8 @@ async function gatherAccountOrVendorView(
 // account IS incumbency information, so there is nothing to gather for an
 // external audience — this throws rather than returning a thinner artifact.
 async function gatherIncumbencyMatrix(audience: Audience, deps: GatherDeps): Promise<Artifact> {
-  if (audience === "external") {
-    throw new Error("incumbency-matrix is internal by nature; there is no external version");
+  if (audience === "external" && !hasExternalForm("incumbency-matrix")) {
+    throw new Error(internalOnlyKindMessage("incumbency-matrix"));
   }
 
   const rows = await deps.incumbency();

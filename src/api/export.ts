@@ -30,7 +30,7 @@ import type { Request, Response } from "express";
 import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { isAudience } from "../services/artifact.js";
-import { isArtifactKind } from "../services/export-artifacts.js";
+import { hasExternalForm, internalOnlyKindMessage, isArtifactKind } from "../services/export-artifacts.js";
 import { isDestination, resolveContainedPath } from "../services/export-delivery.js";
 import { isExportFormat, openExportJobs } from "../services/export-jobs.js";
 import type { ExportFormat, ExportJob, ExportJobStore, ExportRequest } from "../services/export-jobs.js";
@@ -56,6 +56,14 @@ export function validateExportRequest(body: unknown): ValidationResult {
   // missing audience must fail loudly rather than guess which one was meant.
   if (!isAudience(b.audience)) {
     return { ok: false, error: `audience is required and must be "internal" or "external"` };
+  }
+  // R11 (final review, important 3): some kinds have no external form, and
+  // export-artifacts.ts refuses them by design. Validating each field on its
+  // own accepted the combination anyway and failed minutes later in the
+  // gathering stage. The rule and its wording both come from that module --
+  // this is a fast-fail in front of the authority, not a second opinion.
+  if (!hasExternalForm(b.kind) && b.audience === "external") {
+    return { ok: false, error: internalOnlyKindMessage(b.kind) };
   }
   const destination = b.destination ?? "download";
   if (!isDestination(destination)) {
@@ -253,7 +261,13 @@ function lazyJobStore(): ExportJobStore {
 }
 
 const exportJobs = lazyJobStore();
-const runPipeline = createPipelineRunner({ jobs: exportJobs, buildPipelineDeps, runExport });
+// buildPipelineDeps is given the router's own store (R6 in export-wiring.ts):
+// the pipeline must not open a second connection to the same job database.
+const runPipeline = createPipelineRunner({
+  jobs: exportJobs,
+  buildPipelineDeps: () => buildPipelineDeps(exportJobs),
+  runExport,
+});
 
 export default createExportRouter({
   jobs: exportJobs,

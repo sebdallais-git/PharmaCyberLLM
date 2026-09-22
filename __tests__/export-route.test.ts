@@ -10,6 +10,8 @@ import type { ExportRouterDeps } from "../src/api/export.js";
 import { openExportJobs } from "../src/services/export-jobs.js";
 import type { ExportJobStore, ExportRequest } from "../src/services/export-jobs.js";
 import { downloadFilename } from "../src/services/export-pipeline.js";
+import { ARTIFACT_KINDS, gather } from "../src/services/export-artifacts.js";
+import type { GatherDeps } from "../src/services/export-artifacts.js";
 
 const good = {
   kind: "account-brief",
@@ -63,6 +65,61 @@ describe("validateExportRequest", () => {
     expect(validateExportRequest(null).ok).toBe(false);
     expect(validateExportRequest("hello").ok).toBe(false);
     expect(validateExportRequest(undefined).ok).toBe(false);
+  });
+
+  // Final review, important 3: these two kinds have no external form at all,
+  // and export-artifacts.ts throws for them by design. Validating each field
+  // independently accepted the combination anyway, returned 202 with a job
+  // id, and failed minutes later in the gathering stage -- for something the
+  // API could tell the caller at request time.
+  describe("audience/kind combinations with no valid form", () => {
+    for (const kind of ["vendor-comparison", "incumbency-matrix"] as const) {
+      it(`rejects external ${kind}`, () => {
+        const result = validateExportRequest({ ...good, kind, audience: "external", vendor: "acme" });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error).toMatch(/no external version/);
+      });
+
+      it(`still accepts internal ${kind}`, () => {
+        expect(validateExportRequest({ ...good, kind, audience: "internal", vendor: "acme" }).ok).toBe(true);
+      });
+    }
+
+    // The gatherer stays the authority; this is a fast-fail in front of it.
+    // The two derive the rule from one place (hasExternalForm), and this test
+    // is what would fail if they ever stopped agreeing: for every kind, the
+    // validator accepts an external request exactly when gather() does not
+    // throw for it. The GatherDeps here are fakes -- no live service.
+    it("agrees with gather() about which kinds have an external form", async () => {
+      const fakeGatherDeps: GatherDeps = {
+        async incumbency() {
+          return [];
+        },
+        async positions() {
+          return [];
+        },
+        async news() {
+          return [];
+        },
+      };
+
+      for (const kind of ARTIFACT_KINDS) {
+        const gatherRefused = await gather(kind, "external", { account: "roche", vendor: "acme" }, fakeGatherDeps).then(
+          () => false,
+          () => true,
+        );
+        const validatorRefused = !validateExportRequest({
+          ...good,
+          kind,
+          audience: "external",
+          account: "roche",
+          vendor: "acme",
+        }).ok;
+
+        expect({ kind, validatorRefused }).toEqual({ kind, validatorRefused: gatherRefused });
+      }
+    });
   });
 });
 
@@ -159,6 +216,25 @@ describe("POST /api/export", () => {
 
     expect(status).toBe(400);
     expect(String(body.error)).toMatch(/audience/i);
+    expect(fixture.started).toEqual([]);
+  });
+
+  // A combination the gatherer refuses by design must be refused here, before
+  // a job id is handed out and a pipeline is started for work that cannot
+  // succeed.
+  it("rejects an external vendor-comparison with 400 and starts no pipeline", async () => {
+    const fixture = await startApp();
+
+    const { status, body } = await postExport(fixture.url, {
+      ...goodRequest,
+      kind: "vendor-comparison",
+      audience: "external",
+      vendor: "acme",
+    });
+
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/no external version/);
+    expect(body.jobId).toBeUndefined();
     expect(fixture.started).toEqual([]);
   });
 });
