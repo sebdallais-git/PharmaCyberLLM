@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildStacks } from "../src/config/llm-stacks.js";
-import { aggregateHealth, CRITICAL_CHECKS, probeGeneration, probeUrl, stackProbeUrls } from "../src/services/health.js";
+import {
+  aggregateHealth,
+  CRITICAL_CHECKS,
+  isScorerConfigured,
+  probeGeneration,
+  probeUrl,
+  scorerInstallPaths,
+  stackProbeUrls,
+} from "../src/services/health.js";
 import { sendJson, startFakeServer } from "./helpers/fake-openai-server.js";
 import type { FakeServer } from "./helpers/fake-openai-server.js";
 
@@ -113,5 +124,57 @@ describe("the scorer is a non-critical dependency", () => {
         jev: { status: "ok" },
       }),
     ).toBe("unhealthy");
+  });
+
+  // Installing the scorer is optional and skippable (scripts/hermes-setup.sh
+  // returns 0 without it). On a machine where it was skipped, probing it and
+  // reporting "unreachable" pinned /api/health at degraded forever, and
+  // check-services.sh prints anything but "healthy" red -- the one place this
+  // feature made the app behave WORSE with the scorer absent than before it
+  // existed. A dependency that was never installed is not a fault.
+  it("stays healthy when the scorer was never installed", () => {
+    expect(
+      aggregateHealth({
+        llm_chat: { status: "ok" },
+        llm_embed: { status: "ok" },
+        search_index: { status: "ok" },
+        jev: { status: "not_configured" },
+      }),
+    ).toBe("healthy");
+  });
+
+  it("does not let not_configured excuse a critical check", () => {
+    expect(
+      aggregateHealth({
+        llm_chat: { status: "not_configured" },
+        llm_embed: { status: "ok" },
+        search_index: { status: "ok" },
+      }),
+    ).toBe("unhealthy");
+  });
+});
+
+describe("scorerInstallPaths / isScorerConfigured", () => {
+  // The same two artifacts scripts/hermes-setup.sh requires and renders. No
+  // launchctl, no scorer, no network: two paths on disk.
+  const jevDir = mkdtempSync(join(tmpdir(), "jev-"));
+  const launchAgentsDir = mkdtempSync(join(tmpdir(), "agents-"));
+  const paths = { plist: join(launchAgentsDir, "com.pharmaitchat.jev.plist"), binary: join(jevDir, ".venv", "bin", "openjev") };
+
+  it("derives the plist and venv paths from the same env vars as hermes-setup.sh", () => {
+    const derived = scorerInstallPaths({ LAUNCH_AGENTS_DIR: launchAgentsDir, JEV_DIR: jevDir });
+
+    expect(derived).toEqual(paths);
+  });
+
+  it("is not configured while either artifact is missing", () => {
+    expect(isScorerConfigured(paths)).toBe(false);
+
+    mkdirSync(join(jevDir, ".venv", "bin"), { recursive: true });
+    writeFileSync(paths.binary, "#!/bin/sh\n");
+    expect(isScorerConfigured(paths)).toBe(false); // venv but no launch agent
+
+    writeFileSync(paths.plist, "<plist/>");
+    expect(isScorerConfigured(paths)).toBe(true);
   });
 });
