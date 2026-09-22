@@ -38,7 +38,7 @@ import type { GraphEntity, GraphRelationship } from "../services/graph-store.js"
 import { decide } from "../services/decide.js";
 import { loadDecideConfig } from "../services/decide-config.js";
 import { applyGapVerdict, GAP_RESOLVED_QUESTION } from "../services/gap-outcome.js";
-import { readScorerKey } from "./decide.js";
+import { classifyDecideFailure, readScorerKey } from "./decide.js";
 
 const router = Router();
 
@@ -365,9 +365,19 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
       new_response: newResponse,
     });
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : "Unknown error";
-    console.error(`[Gap Resolution] Error checking gap ${gap_id}:`, errMsg);
-    res.status(500).json({ error: errMsg });
+    // This handler calls decide(), so scorer errors land here — and those
+    // interpolate text this codebase did not author: JSON.stringify of a
+    // scorer-controlled field, and undici's own message. Returning err.message
+    // verbatim put third-party text in a response body, which is the same
+    // class /api/decide was fixed for. Reuse its classifier rather than hold a
+    // second, differently-safe opinion: the detail goes to the log, a fixed
+    // message goes to the caller.
+    const failure = classifyDecideFailure(err);
+    console.error(
+      `[Gap Resolution] ${failure.logLabel} checking gap ${gap_id}:`,
+      err instanceof Error ? err.message : err,
+    );
+    res.status(failure.status).json({ error: failure.message });
   }
 });
 

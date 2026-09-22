@@ -167,14 +167,36 @@ describe("scorerInstallPaths / isScorerConfigured", () => {
     expect(derived).toEqual(paths);
   });
 
-  it("is not configured while either artifact is missing", () => {
+  // The VENV is what "a scorer exists here" means. The plist only says launchd
+  // manages it -- and scripts/run-jev.sh runs the scorer perfectly well without
+  // one, which is exactly what someone does first: `make serve` by hand, before
+  // committing to a launch agent.
+  //
+  // Requiring both used to mean that setup reported "not configured", so
+  // /api/health never probed a scorer that was actually running AND shadow
+  // detection (gap-detector.ts) never switched on -- silently withholding the
+  // evidence the shadow mode exists to collect.
+  it("is configured as soon as the venv exists, with or without a launch agent", () => {
     expect(isScorerConfigured(paths)).toBe(false);
 
     mkdirSync(join(jevDir, ".venv", "bin"), { recursive: true });
     writeFileSync(paths.binary, "#!/bin/sh\n");
-    expect(isScorerConfigured(paths)).toBe(false); // venv but no launch agent
+    expect(isScorerConfigured(paths)).toBe(true); // hand-run scorer, no launch agent
 
     writeFileSync(paths.plist, "<plist/>");
     expect(isScorerConfigured(paths)).toBe(true);
+  });
+
+  it("is not configured when only a launch agent exists and the venv does not", () => {
+    const bare = mkdtempSync(join(tmpdir(), "jev-bare-"));
+    const agents = mkdtempSync(join(tmpdir(), "agents-bare-"));
+    const orphan = {
+      plist: join(agents, "com.pharmaitchat.jev.plist"),
+      binary: join(bare, ".venv", "bin", "openjev"),
+    };
+    writeFileSync(orphan.plist, "<plist/>");
+
+    // A plist pointing at a venv that is gone is a stale install, not a scorer.
+    expect(isScorerConfigured(orphan)).toBe(false);
   });
 });

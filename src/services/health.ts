@@ -81,13 +81,18 @@ export interface ScorerInstallPaths {
 }
 
 /**
- * The two artifacts that decide whether the scorer is installed on this
- * machine, read from the same env vars and the same defaults as
- * scripts/hermes-setup.sh: the launch agent it renders, and the open-jev venv
- * it refuses to install without. Asking about these files rather than about a
- * port is what lets /api/health tell "never installed" from "installed and
- * down" -- the scorer is optional by design, and only the second one is a
- * fault.
+ * Where the scorer's two artifacts live, read from the same env vars and the
+ * same defaults as scripts/hermes-setup.sh: the launch agent it renders, and
+ * the open-jev venv it refuses to install without.
+ *
+ * Only the venv decides whether a scorer exists -- see isScorerConfigured.
+ * The plist is derived here because the installer owns it and a future caller
+ * may want to distinguish "launchd runs it" from "it exists".
+ *
+ * Asking about files rather than about a port is what lets /api/health tell
+ * "never installed" from "installed and down": the scorer is optional by
+ * design, and only the second one is a fault. A port nobody ever listened on
+ * and a port that just died look identical from the outside.
  */
 export function scorerInstallPaths(env: NodeJS.ProcessEnv = process.env): ScorerInstallPaths {
   const launchAgentsDir = env.LAUNCH_AGENTS_DIR ?? join(homedir(), "Library", "LaunchAgents");
@@ -98,6 +103,20 @@ export function scorerInstallPaths(env: NodeJS.ProcessEnv = process.env): Scorer
   };
 }
 
+/**
+ * True when a scorer exists on this machine, whether or not launchd runs it.
+ *
+ * The VENV is the signal. The plist only records that launchd manages the
+ * process, and scripts/run-jev.sh starts the scorer perfectly well without one
+ * -- which is what someone actually does first: `make serve` by hand, before
+ * committing to a launch agent.
+ *
+ * R1: this deliberately does NOT require the plist. It used to, and the cost
+ * was silent: a hand-run scorer reported "not configured", so /api/health never
+ * probed a service that was genuinely running and up, and shadow detection
+ * (gap-detector.ts) never switched on -- withholding the very evidence shadow
+ * mode exists to collect, in exactly the setup someone tries first.
+ */
 export function isScorerConfigured(paths: ScorerInstallPaths = scorerInstallPaths()): boolean {
-  return existsSync(paths.plist) && existsSync(paths.binary);
+  return existsSync(paths.binary);
 }
