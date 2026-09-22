@@ -79,6 +79,47 @@ describe("gather", () => {
     await expect(gather("incumbency-matrix", "external", {}, deps)).rejects.toThrow(/internal/i);
   });
 
+  // Finding 2: a vendor comparison stripped of competitive framing has
+  // nothing left to compare, so it must refuse rather than degrade to a
+  // news list under a comparison title. Mirrors the incumbency-matrix
+  // refusal above.
+  it("refuses a vendor comparison for an external audience", async () => {
+    await expect(gather("vendor-comparison", "external", { account: "roche", vendor: "dell" }, deps)).rejects.toThrow(
+      /internal/i,
+    );
+  });
+
+  // Finding 1 & 4: no option may silently default. A missing identifying
+  // option must throw naming the option, not fall back to a hardcoded
+  // vendor or filter on the empty string.
+  describe("required options", () => {
+    it("throws naming the missing option for an internal account brief with no account", async () => {
+      await expect(gather("account-brief", "internal", { vendor: "dell" }, deps)).rejects.toThrow(/account/i);
+    });
+
+    it("throws naming the missing option for an external account brief with no account", async () => {
+      await expect(gather("account-brief", "external", { vendor: "dell" }, deps)).rejects.toThrow(/account/i);
+    });
+
+    it("throws naming the missing option for an internal account brief with no vendor", async () => {
+      await expect(gather("account-brief", "internal", { account: "roche" }, deps)).rejects.toThrow(/vendor/i);
+    });
+
+    it("throws naming the missing option for an internal vendor comparison with no vendor", async () => {
+      await expect(gather("vendor-comparison", "internal", { account: "roche" }, deps)).rejects.toThrow(/vendor/i);
+    });
+
+    it("throws naming the missing option for an internal vendor comparison with no account", async () => {
+      await expect(gather("vendor-comparison", "internal", { vendor: "dell" }, deps)).rejects.toThrow(/account/i);
+    });
+
+    it("never assumes a hardcoded vendor when vendor is omitted", async () => {
+      // Before the fix, a missing vendor silently defaulted to "dell" instead
+      // of throwing. Assert the rejection, not any particular vendor name.
+      await expect(gather("account-brief", "internal", { account: "roche" }, deps)).rejects.toThrow();
+    });
+  });
+
   it("includes competitive position with confidence for an internal vendor comparison", async () => {
     const artifact = await gather("vendor-comparison", "internal", { account: "roche", vendor: "dell" }, deps);
 
@@ -106,9 +147,15 @@ describe("gather", () => {
   // deliberately contain the forbidden words here, to prove they are excluded
   // because the section that carries them is never built for this audience,
   // not because of a string filter applied afterwards.
-  const nonMatrixKinds = ARTIFACT_KINDS.filter((k): k is Exclude<ArtifactKind, "incumbency-matrix"> => k !== "incumbency-matrix");
+  // "incumbency-matrix" and "vendor-comparison" both refuse an external
+  // gather entirely (see the two "refuses..." tests above); there is no
+  // artifact for a substring check to run against for either.
+  const kindsWithExternalForm = ARTIFACT_KINDS.filter(
+    (k): k is Exclude<ArtifactKind, "incumbency-matrix" | "vendor-comparison"> =>
+      k !== "incumbency-matrix" && k !== "vendor-comparison",
+  );
 
-  describe.each(nonMatrixKinds)("external %s", (kind) => {
+  describe.each(kindsWithExternalForm)("external %s", (kind) => {
     const loadedDeps: GatherDeps = {
       async incumbency() {
         return [{ account: "roche", segment: "storage-file", vendors: ["dell"] }];
@@ -142,5 +189,55 @@ describe("gather", () => {
       // failed to find it after the fact.
       expect(() => assertExternalSafe(artifact)).not.toThrow();
     });
+  });
+
+  // Finding 3: the substring checks above can only catch a leak that spells
+  // out a banned word. A "Competitive position" section with columns
+  // ["segment", "position", "rationale"] and values like "leader"/"absent"
+  // carries the full competitive meaning with no banned substring anywhere,
+  // and would pass both the test above AND assertExternalSafe. These two
+  // assertions are what actually hold the boundary:
+  //   (a) whitelist the exact section headings an external artifact may
+  //       contain, so an added section fails immediately regardless of name;
+  //   (b) prove the internal-only deps (incumbency, positions) are never
+  //       even called for an external gather — the "never fetched" property,
+  //       not just "not present in the output".
+  // Driven from ARTIFACT_KINDS (not a hand-picked subset) so a future kind
+  // is covered automatically, whether it turns out to have an external form
+  // or to refuse one.
+  it("whitelists the external section shape and never calls internal deps, for every kind", async () => {
+    for (const kind of ARTIFACT_KINDS) {
+      let incumbencyCalls = 0;
+      let positionsCalls = 0;
+      const countingDeps: GatherDeps = {
+        async incumbency() {
+          incumbencyCalls++;
+          return [{ account: "roche", segment: "storage-file", vendors: ["dell"] }];
+        },
+        async positions(vendor: string) {
+          positionsCalls++;
+          return [{ segment: "storage-file", position: "leader", confidence: "high", rationale: "Defend it." }];
+        },
+        async news() {
+          return [{ title: "Roche builds AI factory", url: "https://example.test/a", publishedAt: "2026-09-20" }];
+        },
+      };
+
+      let artifact;
+      try {
+        artifact = await gather(kind, "external", { account: "roche", vendor: "dell" }, countingDeps);
+      } catch {
+        // This kind refuses an external form entirely (incumbency-matrix,
+        // vendor-comparison); that refusal has its own test. Either way the
+        // internal deps must never have been touched, so fall through to
+        // the same zero-call assertions below.
+      }
+
+      if (artifact !== undefined) {
+        expect(artifact.sections.map((s) => s.heading)).toEqual(["Recent developments"]);
+      }
+      expect(incumbencyCalls).toBe(0);
+      expect(positionsCalls).toBe(0);
+    }
   });
 });

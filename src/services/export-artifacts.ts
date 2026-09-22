@@ -32,6 +32,18 @@ interface GatherOptions {
   vendor?: string;
 }
 
+// No option that identifies a vendor or an account may default silently: a
+// missing one must fail loudly, naming what was missing, rather than
+// falling back to a hardcoded vendor or an empty-string filter that quietly
+// produces a thin or wrong artifact.
+function requireOption(value: string | undefined, name: "account" | "vendor", needed: boolean): string {
+  if (!needed) return "";
+  if (value === undefined || value === "") {
+    throw new Error(`gather: missing required option "${name}"`);
+  }
+  return value;
+}
+
 // News is the only source that is safe for both audiences: it is public
 // reporting, not our own assessment of an account.
 function citationsFrom(items: Array<{ title: string; url: string }>): Citation[] {
@@ -85,9 +97,23 @@ async function gatherAccountOrVendorView(
   options: GatherOptions,
   deps: GatherDeps,
 ): Promise<Artifact> {
-  const account = options.account ?? "";
-  const vendor = options.vendor ?? "dell";
-  const news = await deps.news(account || vendor, 10);
+  // A vendor comparison IS competitive framing; once that framing is
+  // stripped for an external audience there is nothing left to call a
+  // comparison, so this kind has no external form at all — same rule as
+  // incumbency-matrix below.
+  if (kind === "vendor-comparison" && audience === "external") {
+    throw new Error("vendor-comparison is internal by nature; there is no external version");
+  }
+
+  // account-brief is identified by account, vendor-comparison by vendor.
+  // Whichever kind, an internal gather additionally builds the other axis
+  // (the account's incumbency table, the vendor's competitive position), so
+  // an internal audience requires both regardless of which one names the
+  // title.
+  const account = requireOption(options.account, "account", kind === "account-brief" || audience === "internal");
+  const vendor = requireOption(options.vendor, "vendor", kind === "vendor-comparison" || audience === "internal");
+
+  const news = await deps.news(kind === "account-brief" ? account : vendor, 10);
   const sections: Section[] = [];
 
   if (audience === "internal") {
@@ -100,7 +126,7 @@ async function gatherAccountOrVendorView(
 
   sections.push(newsSection(news));
 
-  const title = kind === "vendor-comparison" ? `${vendor} — competitive view` : `${account || vendor} — brief`;
+  const title = kind === "vendor-comparison" ? `${vendor} — competitive view` : `${account} — brief`;
 
   return {
     title,
