@@ -15,11 +15,21 @@ export function registerExportTools(server: McpServer, client: PharmaITChatClien
   server.registerTool(
     "create_artifact",
     {
+      // The destination is a free choice for the model, and one of the three
+      // options is an egress: an INTERNAL artifact is account intelligence,
+      // and 'icloud' syncs it off this machine. A model cannot weigh that if
+      // the description does not say it, so it says it here, in the text the
+      // model actually reads, rather than only in a comment.
       description:
         "Produce a document from PharmaITChat's data: an account brief, incumbency matrix or vendor " +
         "comparison, as xlsx, pdf or pptx. `audience` is required -- 'internal' includes incumbency and " +
-        "competitive position, 'external' omits them for something a customer may see. Returns a job id; " +
-        "a deck takes several minutes. Poll with artifact_status.",
+        "competitive position, 'external' omits them for something a customer may see. " +
+        "`destination` defaults to 'download', which keeps the file on this machine behind an " +
+        "authenticated URL; 'telegram' sends it to the configured chat. Choose 'icloud' ONLY when the " +
+        "user asked for it: it writes into an iCloud-synced folder, so the file leaves this machine and " +
+        "reaches their other devices -- which for an 'internal' artifact means account intelligence " +
+        "leaves this machine. When in doubt use 'download', which stays on this machine. " +
+        "Returns a job id; a deck takes several minutes. Poll with artifact_status.",
       inputSchema: {
         kind: z.enum(["account-brief", "incumbency-matrix", "vendor-comparison"]),
         format: z.enum(["xlsx", "pdf", "pptx"]),

@@ -63,6 +63,23 @@ describe("export tools", () => {
     expect(isToolError(result)).toBe(false);
   });
 
+  // Final review, important 4: `destination` is a free choice for the model,
+  // and the description never said that "icloud" writes to a synced folder --
+  // i.e. that the file leaves the machine. That is the one path by which an
+  // INTERNAL artifact, full of account intelligence, reaches an egress
+  // without the user having explicitly asked for it. The schema keeps the
+  // option; the description has to say what choosing it means.
+  it("says what the icloud destination does before the model can choose it", async () => {
+    const { tools } = await harness.client.listTools();
+    const description = tools.find((tool) => tool.name === "create_artifact")?.description ?? "";
+
+    expect(description).toMatch(/icloud/i);
+    expect(description).toMatch(/synced folder/i);
+    expect(description).toMatch(/leaves this machine/i);
+    expect(description).toMatch(/defaults to 'download'/i);
+    expect(description).toMatch(/stays (on this machine|local)/i);
+  });
+
   it("rejects an empty job id before calling PharmaITChat", async () => {
     const result = await call("artifact_status", { job_id: "" });
     expect(isToolError(result)).toBe(true);
