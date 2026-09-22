@@ -269,7 +269,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Log the resolution result\nconst resolution = $input.first().json;\nconst summary = $('Summary & Log').first().json;\n\nconst result = {\n  status: resolution.resolved ? 'gap_resolved' : 'gap_still_open',\n  gap_id: summary.gap_id,\n  search_topic: summary.search_topic,\n  original_query: summary.original_query,\n  resolved: resolution.resolved || false,\n  confidence_reason: resolution.confidence_reason || 'unknown',\n  ingestion_stats: summary.stats,\n  timestamp: new Date().toISOString()\n};\n\nconsole.log('[N8N Resolution] ' + JSON.stringify(result));\n\nreturn [{ json: result }];"
+        "jsCode": "// Log the resolution result. The app returns a three-way verdict; \"review\"\n// means the scorer was not confident either way, so the gap is parked for a\n// human and does NOT spend a retry.\nconst resolution = $input.first().json;\nconst summary = $('Summary & Log').first().json;\n\nconst verdict = resolution.verdict || (resolution.resolved ? 'resolved' : 'unresolved');\nconst statusByVerdict = {\n  resolved: 'gap_resolved',\n  review: 'gap_review',\n  unresolved: 'gap_still_open',\n};\n\nconst result = {\n  status: statusByVerdict[verdict] || 'gap_still_open',\n  verdict: verdict,\n  probability: resolution.probability ?? null,\n  gap_id: summary.gap_id,\n  search_topic: summary.search_topic,\n  original_query: summary.original_query,\n  resolved: verdict === 'resolved',\n  ingestion_stats: summary.stats,\n  timestamp: new Date().toISOString()\n};\n\nconsole.log('[N8N Resolution] ' + JSON.stringify(result));\n\nreturn [{ json: result }];"
       },
       "id": "a1b2c3d4-0015-4000-8000-000000000015",
       "name": "Resolution Result Log",

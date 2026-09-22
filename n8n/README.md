@@ -72,6 +72,16 @@ Utiliser `webhook-test` (pas `webhook`) pour tester sans activer le workflow en 
 | 9  | Filter Relevant Only           | Code         | Filtre les réponses NOT_RELEVANT               |
 | 10 | Store in Knowledge Base        | HTTP Request | POST vers PharmaLLM /api/knowledge/ingest-text |
 | 11 | Summary & Log                  | Code         | Agrège les stats et log le résultat            |
+| 12 | Check Gap Resolution           | HTTP Request | POST vers PharmaLLM pour vérifier la résolution |
+| 13 | Resolution Result Log          | Code         | Log le verdict en trois états                   |
+
+## Résolution de lacune (trois états)
+
+The resolution check returns a three-way verdict from the local scorer
+(`resolved` / `review` / `unresolved`) plus the probability behind it. A
+`review` gap is parked for a human and does **not** increment `retry_count`:
+the middle of the scorer's distribution is the part least worth acting on.
+Thresholds live in `config/decide.yaml`.
 
 ## Gestion des erreurs
 
