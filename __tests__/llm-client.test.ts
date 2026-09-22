@@ -287,11 +287,13 @@ describe("reasoning from the stream", () => {
 });
 
 describe("token budget and truncation", () => {
-  // Reasoning spends the same budget as the answer. 4096 was sized for an
-  // answer alone, so with thinking on the model could burn the whole budget
-  // reasoning and emit no content at all -- the stream ended cleanly and the UI
-  // rendered an empty bubble beside "4000 out".
-  it("gives thinking turns a bigger budget than answer-only turns", async () => {
+  // Reasoning spends the same budget as the answer, so the ceiling is the only
+  // bound on how long a thinking turn runs. Raising it was tried and was wrong:
+  // at the ~3.4 tok/s this stack manages with a RAG-sized prompt, 24576 tokens
+  // is a two-hour turn nobody waits for. A thinking turn is therefore capped
+  // BELOW the answer-only default, so it fails inside ~10 minutes and says why,
+  // rather than succeeding eventually.
+  it("caps thinking turns tighter than answer-only turns so they fail fast", async () => {
     server = await startFakeServer((_req, res) => sendSse(res, [delta("hi"), "[DONE]"]));
     const client = createLlmClient(stackFor(server.baseUrl));
 
@@ -301,7 +303,8 @@ describe("token budget and truncation", () => {
     for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on" })) void _;
     const thinking = (server.requests.at(-1)?.body as Record<string, unknown>).max_tokens as number;
 
-    expect(thinking).toBeGreaterThan(answerOnly);
+    expect(thinking).toBeLessThan(answerOnly);
+    expect(thinking).toBeGreaterThan(0);
   });
 
   it("still honours an explicit maxTokens", async () => {

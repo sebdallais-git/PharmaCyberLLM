@@ -86,11 +86,27 @@ const DEFAULT_TEMPERATURE = 0.3;
 const PROBE_TIMEOUT_MS = 3000;
 // Stacks have different server defaults (mlx_lm.server stops at 512), so the client always sends an explicit limit.
 const DEFAULT_MAX_TOKENS = 4096;
-// Reasoning is billed against the same ceiling as the answer, and a thinking
-// model routinely spends thousands of tokens before writing a word. 4096 was
-// sized for an answer alone: on a hard question the budget was gone before the
-// answer began, so the turn ended cleanly with no content at all.
-const DEFAULT_MAX_TOKENS_THINKING = 24576;
+// Reasoning is billed against the same ceiling as the answer -- verified:
+// max_tokens 50 returns completion_tokens 50, finish_reason "length", 266
+// characters of reasoning and no content. So the ceiling is the only bound on
+// how long a thinking turn runs.
+//
+// Sized from measured throughput, not from what the model would like. On the
+// real path -- RAG context plus history -- this stack generates ~3.4 tok/s
+// (1024 tokens took ~300s). A short prompt straight to MLX does 13.2 tok/s,
+// which is the number I first sized against and it was 4x optimistic.
+//
+//     2048 tokens / 3.4 tok/s  ~= 10 minutes worst case
+//    24576 tokens / 3.4 tok/s  ~= 2 HOURS, which is what this was before
+//
+// 2048 is not enough for this model to finish reasoning on a research-shaped
+// question -- 1024 was not, and more would not be waited for either. That is
+// the honest state of thinking mode here: on this model, at this speed, with
+// prompts this size, it cannot both finish and be worth waiting for. So the
+// budget is set to fail fast and say so, rather than to succeed eventually.
+// Thinking is genuinely useful on short questions, where it finishes in
+// seconds. The UI default stays off.
+const DEFAULT_MAX_TOKENS_THINKING = 2048;
 
 // Qwen3-Embedding expects an instruction on queries only; documents are embedded as-is
 export const QUERY_INSTRUCTION =
