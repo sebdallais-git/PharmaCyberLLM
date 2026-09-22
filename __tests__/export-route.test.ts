@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { createExportRouter, createPipelineRunner, validateExportRequest } from "../src/api/export.js";
 import type { ExportRouterDeps } from "../src/api/export.js";
 import { openExportJobs } from "../src/services/export-jobs.js";
-import type { ExportJobStore } from "../src/services/export-jobs.js";
+import type { ExportJobStore, ExportRequest } from "../src/services/export-jobs.js";
+import { downloadFilename } from "../src/services/export-pipeline.js";
 
 const good = {
   kind: "account-brief",
@@ -184,63 +185,151 @@ describe("GET /api/export/:id", () => {
   });
 });
 
-describe("GET /api/export/file/:filename", () => {
-  it("serves a normal file from the download directory", async () => {
-    const fixture = await startApp();
-    writeFileSync(join(fixture.downloadDir, "roche-brief.pdf"), "hello pdf");
+// The download route resolves through the JOB, never through a
+// caller-supplied filename: a caller holding a job id gets that job's bytes
+// and has no way to name a file directly. That is what stops an internal
+// export from being served at a URL already handed to a customer -- the two
+// are different jobs, so they are different URLs over different files.
+describe("GET /api/export/file/:id", () => {
+  // Stands in for a finished download export: the job row plus the file the
+  // delivery step wrote for it, named the way export-pipeline.ts names it.
+  function finishedJob(fixture: Fixture, over: Partial<ExportRequest> = {}, bytes = "hello pdf"): string {
+    const id = fixture.jobs.create({
+      kind: "account-brief",
+      format: "pdf",
+      audience: "internal",
+      destination: "download",
+      account: "roche",
+      ...over,
+    });
+    const job = fixture.jobs.get(id);
+    writeFileSync(join(fixture.downloadDir, downloadFilename({ id, format: job?.format ?? "pdf" })), bytes);
+    fixture.jobs.complete(id, `/api/export/file/${id}`);
+    return id;
+  }
 
-    const res = await fetch(`${fixture.url}/api/export/file/roche-brief.pdf`);
-    const text = await res.text();
+  it("serves the bytes belonging to the requested job", async () => {
+    const fixture = await startApp();
+    const external = finishedJob(fixture, { audience: "external" }, "the customer copy");
+    const internal = finishedJob(fixture, { audience: "internal" }, "incumbency by segment");
+
+    const res = await fetch(`${fixture.url}/api/export/file/${external}`);
 
     expect(res.status).toBe(200);
-    expect(text).toBe("hello pdf");
+    expect(await res.text()).toBe("the customer copy");
+    expect(internal).not.toBe(external);
+  });
+
+  // The whole point of the critical fix: an internal export of the same kind,
+  // account and format must not be reachable at the external export's URL.
+  it("keeps an internal export off the external export's url", async () => {
+    const fixture = await startApp();
+    const external = finishedJob(fixture, { audience: "external" }, "the customer copy");
+    finishedJob(fixture, { audience: "internal" }, "incumbency by segment");
+
+    const res = await fetch(`${fixture.url}/api/export/file/${external}`);
+
+    expect(await res.text()).not.toContain("incumbency");
+  });
+
+  it("returns 404 for a job id that does not exist", async () => {
+    const fixture = await startApp();
+
+    const res = await fetch(`${fixture.url}/api/export/file/00000000-0000-4000-8000-000000000000`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 for a job that has not finished delivering", async () => {
+    const fixture = await startApp();
+    const id = fixture.jobs.create({
+      kind: "account-brief",
+      format: "pdf",
+      audience: "internal",
+      destination: "download",
+      account: "roche",
+    });
+
+    const res = await fetch(`${fixture.url}/api/export/file/${id}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  // A telegram or iCloud export has no servable file in the download
+  // directory; its job id must not become a way to read one.
+  it("returns 404 for a job that was not delivered as a download", async () => {
+    const fixture = await startApp();
+    const id = finishedJob(fixture, { destination: "icloud" });
+
+    const res = await fetch(`${fixture.url}/api/export/file/${id}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("sets the content type and a sanitised attachment filename", async () => {
+    const fixture = await startApp();
+    const id = finishedJob(fixture, { format: "xlsx", account: "roche/../evil" });
+
+    const res = await fetch(`${fixture.url}/api/export/file/${id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    const disposition = res.headers.get("content-disposition") ?? "";
+    expect(disposition).toMatch(/^attachment; filename="[A-Za-z0-9._-]+"$/);
+    expect(disposition).not.toContain("..");
+    expect(disposition).not.toContain("/");
   });
 
   // The read-side mirror of export-delivery.ts's write-side containment
-  // check: a bare regex-strip of disallowed characters leaves ".." intact
-  // (dots are inside [a-z0-9._-]), so this must be refused by path
-  // resolution and containment, not by character stripping alone. The dots
-  // are percent-encoded so the HTTP client does not normalise them away
-  // before the request even leaves the process.
-  it("refuses a filename containing ..", async () => {
-    const fixture = await startApp();
-
-    const res = await fetch(`${fixture.url}/api/export/file/%2E%2E`);
-
-    expect([400, 404]).toContain(res.status);
-  });
-
-  // "%2F" decodes (by Express's param decoding) to a bare "/", whose
-  // basename() is "". path.resolve(dir, "") collapses back to dir itself,
-  // which a guard that only checks resolvedPath !== resolvedDir would miss.
-  it("refuses a filename that sanitises to empty", async () => {
-    const fixture = await startApp();
-
-    const res = await fetch(`${fixture.url}/api/export/file/%2F`);
-
-    expect([400, 404]).toContain(res.status);
-  });
-
-  it("does not let a filename containing a path separator escape the download directory", async () => {
-    const fixture = await startApp();
-    // A sibling file outside downloadDir that must never be reachable
+  // check. The filename is no longer caller-supplied, but it is still built
+  // from a stored job id, so the containment check stays: a bare regex-strip
+  // of disallowed characters leaves ".." intact (dots are inside [a-z0-9._-]),
+  // so escape must be refused by path resolution and containment, not by
+  // character stripping alone.
+  it("refuses to serve a file whose stored job id would escape the download directory", async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "export-route-outside-"));
     writeFileSync(join(outsideDir, "secret.pdf"), "top secret");
-    const escaping = encodeURIComponent(`${outsideDir}/secret.pdf`);
+    const hostileId = `${outsideDir}/secret`;
+    const jobs = openExportJobs(":memory:");
+    // A store that hands back a job whose id is a traversal string, standing
+    // in for any way a row could arrive holding one.
+    const hostileJobs: ExportJobStore = {
+      ...jobs,
+      get: () => ({
+        id: hostileId,
+        kind: "account-brief",
+        format: "pdf",
+        audience: "internal",
+        destination: "download",
+        stage: "done",
+        location: `/api/export/file/${hostileId}`,
+        error: null,
+        createdAt: "2026-09-22T10:00:00.000Z",
+      }),
+    };
+    const fixture = await startApp({ jobs: hostileJobs });
 
-    const res = await fetch(`${fixture.url}/api/export/file/${escaping}`);
+    const res = await fetch(`${fixture.url}/api/export/file/${encodeURIComponent(hostileId)}`);
 
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain("top secret");
   });
 
-  it("returns 404 for a filename that does not exist", async () => {
-    const fixture = await startApp();
+  // Traversal attempts aimed at the route itself: these are simply job ids
+  // that do not exist, and must stay refused.
+  it.each([["%2E%2E"], ["%2F"], ["nope.pdf"], ["..%2F..%2Fetc%2Fpasswd"]])(
+    "refuses %s as a job id",
+    async (attempt: string) => {
+      const fixture = await startApp();
+      writeFileSync(join(fixture.downloadDir, "nope.pdf"), "should not be reachable by name");
 
-    const res = await fetch(`${fixture.url}/api/export/file/nope.pdf`);
+      const res = await fetch(`${fixture.url}/api/export/file/${attempt}`);
 
-    expect(res.status).toBe(404);
-  });
+      expect([400, 404]).toContain(res.status);
+    },
+  );
 });
 
 // createPipelineRunner is the fix for the finding in

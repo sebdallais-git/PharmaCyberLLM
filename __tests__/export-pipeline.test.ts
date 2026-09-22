@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import { runExport, type PipelineDeps } from "../src/services/export-pipeline.js";
-import { openExportJobs } from "../src/services/export-jobs.js";
+import { openExportJobs, type ExportRequest } from "../src/services/export-jobs.js";
+import { deliver } from "../src/services/export-delivery.js";
 import { gather, type GatherDeps } from "../src/services/export-artifacts.js";
 import type { Artifact } from "../src/services/artifact.js";
 
@@ -163,6 +164,120 @@ describe("runExport", () => {
       "gathering: vendor-comparison is internal by nature; there is no external version",
     );
     expect(job?.stage).toBe("failed");
+    d.jobs.close();
+  });
+});
+
+// Critical finding of the whole-branch review: an internal and an external
+// account-brief for the same account were given the same title, the delivered
+// filename was derived from that title alone, and the download route served by
+// filename. So an internal export silently overwrote the bytes behind a URL
+// already handed to a customer -- and, for the iCloud destination, that
+// overwrite left the machine.
+//
+// These tests drive the REAL gather() (so the titles are the ones production
+// actually produces) and the REAL deliver() (so the assertion is on the path
+// that reaches writeFile), with only the leaf I/O faked. Nothing here touches
+// a live service: GatherDeps is a fake, the job store is ":memory:", and
+// writeFile only records what it was asked to write.
+function deliveryFixture(): { deps: PipelineDeps; written: Array<{ path: string; bytes: Buffer }> } {
+  const written: Array<{ path: string; bytes: Buffer }> = [];
+  const gatherDeps: GatherDeps = {
+    async incumbency() {
+      return [{ account: "roche", segment: "hpc", vendors: ["acme"] }];
+    },
+    async positions() {
+      return [{ segment: "hpc", position: "defend", confidence: "high", rationale: "installed" }];
+    },
+    async news() {
+      return [{ title: "AI factory", url: "https://example.test/a", publishedAt: "2026-09-20" }];
+    },
+  };
+  return {
+    written,
+    deps: deps({
+      gather,
+      gatherDeps,
+      deliver,
+      deliveryDeps: {
+        downloadDir: "/tmp/exports",
+        icloudDir: "/tmp/icloud/PharmaITChat_Artifacts",
+        async writeFile(path, bytes) {
+          written.push({ path, bytes });
+        },
+        async sendDocument() {},
+      },
+    }),
+  };
+}
+
+const brief = (over: Partial<ExportRequest>): ExportRequest => ({
+  kind: "account-brief",
+  format: "xlsx",
+  audience: "internal",
+  destination: "download",
+  account: "roche",
+  vendor: "acme",
+  ...over,
+});
+
+describe("delivered paths never collide", () => {
+  for (const destination of ["download", "icloud"] as const) {
+    it(`gives an internal and an external ${destination} brief for the same account and format different paths`, async () => {
+      const { deps: d, written } = deliveryFixture();
+      const internal = d.jobs.create(brief({ destination, audience: "internal" }));
+      const external = d.jobs.create(brief({ destination, audience: "external" }));
+
+      await runExport(internal, d);
+      await runExport(external, d);
+
+      expect(d.jobs.get(internal)?.stage).toBe("done");
+      expect(d.jobs.get(external)?.stage).toBe("done");
+      expect(written).toHaveLength(2);
+      expect(written[0].path).not.toBe(written[1].path);
+      d.jobs.close();
+    });
+  }
+
+  // Two requests that are identical in every field are still two different
+  // exports of data that may have changed in between; neither may overwrite
+  // the other's bytes.
+  it("gives two identical requests different paths", async () => {
+    const { deps: d, written } = deliveryFixture();
+    const first = d.jobs.create(brief({}));
+    const second = d.jobs.create(brief({}));
+
+    await runExport(first, d);
+    await runExport(second, d);
+
+    expect(written[0].path).not.toBe(written[1].path);
+    d.jobs.close();
+  });
+
+  // The iCloud folder is browsed by a human, so its filenames have to say what
+  // they are -- above all which audience, since that is the difference between
+  // a customer handout and an account-intelligence document.
+  it("names the audience in the iCloud filename", async () => {
+    const { deps: d, written } = deliveryFixture();
+    const id = d.jobs.create(brief({ destination: "icloud", audience: "external" }));
+
+    await runExport(id, d);
+
+    expect(written[0].path.startsWith("/tmp/icloud/PharmaITChat_Artifacts/")).toBe(true);
+    expect(written[0].path).toContain("external");
+    expect(written[0].path).toContain(id);
+    d.jobs.close();
+  });
+
+  // The location a caller polls for must address the JOB, not a filename the
+  // caller could have named itself.
+  it("records a download location that addresses the job", async () => {
+    const { deps: d } = deliveryFixture();
+    const id = d.jobs.create(brief({}));
+
+    await runExport(id, d);
+
+    expect(d.jobs.get(id)?.location).toBe(`/api/export/file/${id}`);
     d.jobs.close();
   });
 });

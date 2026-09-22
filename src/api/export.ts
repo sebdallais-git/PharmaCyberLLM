@@ -3,7 +3,7 @@
 //
 // POST /api/export             -> { jobId }          (returns immediately)
 // GET  /api/export/:id         -> job status          (poll for the location)
-// GET  /api/export/file/:name  -> the file             (download destination)
+// GET  /api/export/file/:id   -> the file              (download destination)
 //
 // Every route here is asynchronous end to end: narration runs at roughly
 // 3.4 tok/s behind a single local model server, so a deck can take minutes
@@ -28,13 +28,13 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { createReadStream, existsSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { isAudience } from "../services/artifact.js";
 import { isArtifactKind } from "../services/export-artifacts.js";
-import { isDestination } from "../services/export-delivery.js";
+import { isDestination, resolveContainedPath } from "../services/export-delivery.js";
 import { isExportFormat, openExportJobs } from "../services/export-jobs.js";
-import type { ExportJobStore, ExportRequest } from "../services/export-jobs.js";
-import { runExport } from "../services/export-pipeline.js";
+import type { ExportFormat, ExportJob, ExportJobStore, ExportRequest } from "../services/export-jobs.js";
+import { downloadFilename, runExport } from "../services/export-pipeline.js";
 import type { PipelineDeps } from "../services/export-pipeline.js";
 import { buildPipelineDeps } from "../services/export-wiring.js";
 
@@ -83,18 +83,8 @@ export interface ExportRouterDeps {
   runPipeline(jobId: string): void;
 }
 
-// Mirrors export-delivery.ts's resolveDestinationPath: this is the read-side
-// half of the same containment check the write side already applies.
-// filename.replace(/[^a-z0-9._-]/gi, "") is NOT enough on its own -- dots
-// are inside that allowed character class, so ".." survives the strip
-// untouched and only an embedded "/" gets removed. Strip to a bare
-// basename, resolve it against the download directory, and require the
-// result to sit STRICTLY inside that directory (never equal to the
-// directory itself, which is what a filename that sanitises down to "",
-// ".", or ".." would otherwise resolve to). Returns null for anything that
-// fails that check.
 // Express's ParamsDictionary types a param as string | string[] to account
-// for repeated wildcard segments; neither ":filename" nor ":id" here ever
+// for repeated wildcard segments; neither ":id" declared here ever
 // matches more than one segment, so this always narrows to a plain string
 // at runtime. An array would only ever appear for a route pattern this file
 // does not declare.
@@ -102,11 +92,30 @@ function singleParam(value: string | string[]): string {
   return Array.isArray(value) ? value[0] ?? "" : value;
 }
 
-function resolveDownloadPath(dir: string, filename: string): string | null {
-  const safeName = basename(filename);
-  const resolvedDir = resolve(dir);
-  const resolvedPath = resolve(resolvedDir, safeName);
-  return resolvedPath.startsWith(resolvedDir + sep) ? resolvedPath : null;
+// R10 (final review, minor 3): an .xlsx served with no Content-Type is
+// sniffed by the browser and may render as text. The type is chosen from the
+// job's own format, which is a closed vocabulary validated at the storage
+// boundary (export-jobs.ts), so this map is total and needs no fallback.
+const CONTENT_TYPES: Record<ExportFormat, string> = {
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pdf: "application/pdf",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+// The name the browser saves the download as. The file on disk is named
+// "<jobId>.<format>" (export-pipeline.ts), which is meaningless in a
+// Downloads folder, so a readable name is rebuilt here from the job's own
+// fields -- including the audience, so a customer-facing brief and an
+// internal one for the same account do not land side by side under one name.
+//
+// account/vendor are caller-supplied strings, so this goes into a header:
+// everything outside [A-Za-z0-9._-] is replaced rather than echoed, which
+// removes the quote, CR and LF that could otherwise break out of the header
+// value, and the path separators and ".." a client might be tempted to obey.
+function attachmentName(job: ExportJob): string {
+  const parts = [job.kind, job.account ?? job.vendor ?? "", job.audience].filter((p) => p !== "");
+  const stem = parts.join("-").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/\.+/g, ".").replace(/^[.-]+|[.-]+$/g, "");
+  return `${stem === "" ? "artifact" : stem}.${job.format}`;
 }
 
 export function createExportRouter(deps: ExportRouterDeps): Router {
@@ -126,19 +135,40 @@ export function createExportRouter(deps: ExportRouterDeps): Router {
     res.status(202).json({ jobId });
   });
 
-  // A malformed or unreachable filename is refused with 404, the same
-  // status a filename that is well-formed but simply does not exist gets --
-  // both mean "no such export is servable at that name" from the caller's
-  // point of view, and neither should distinguish "you tried to escape the
-  // directory" from "that file isn't there" to an unauthenticated-looking
-  // path (this route still sits behind the API token, but the response
-  // shape does not need to advertise which case happened).
-  router.get("/file/:filename", (req: Request, res: Response): void => {
-    const path = resolveDownloadPath(deps.downloadDir, singleParam(req.params.filename));
+  // R9 (final review, CRITICAL): this route used to serve by FILENAME, with
+  // no link to the job that produced the file. Any caller could name any file
+  // in the download directory, and two exports that differed only in audience
+  // shared a name -- so the URL a customer had been given could start
+  // serving an internal artifact. It now resolves through the job: the param
+  // is a job id, the filename is recomputed from that job row
+  // (downloadFilename), and a caller has no way to name a file at all.
+  //
+  // Every refusal is the same 404: an unknown job, a job still running, a job
+  // delivered somewhere other than the download directory, and a path that
+  // fails containment all mean "no such export is servable here" from the
+  // caller's point of view, and the response shape should not tell an
+  // enumerating caller which case it hit (this route sits behind the API
+  // token regardless -- see the header comment).
+  //
+  // Containment is still applied even though the filename is no longer
+  // caller-supplied: it is built from a stored id, and resolveContainedPath
+  // is the same check the write side applies (minor 1), so a row holding
+  // something unexpected cannot reach outside the download directory.
+  router.get("/file/:id", (req: Request, res: Response): void => {
+    const job = deps.jobs.get(singleParam(req.params.id));
+    if (job === null || job.destination !== "download" || job.stage !== "done") {
+      res.status(404).json({ error: "no such export" });
+      return;
+    }
+
+    const path = resolveContainedPath(deps.downloadDir, downloadFilename(job));
     if (path === null || !existsSync(path)) {
       res.status(404).json({ error: "no such export" });
       return;
     }
+
+    res.setHeader("Content-Type", CONTENT_TYPES[job.format]);
+    res.setHeader("Content-Disposition", `attachment; filename="${attachmentName(job)}"`);
     createReadStream(path).pipe(res);
   });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import { deliver, isDestination, type DeliveryDeps } from "../src/services/export-delivery.js";
 
-const file = { filename: "roche-brief.pdf", bytes: Buffer.from("hello") };
+const file = { jobId: "job-1", filename: "roche-brief.pdf", bytes: Buffer.from("hello") };
 
 function fakeDeps(): DeliveryDeps & { written: Array<{ path: string; bytes: Buffer }>; sent: string[] } {
   const written: Array<{ path: string; bytes: Buffer }> = [];
@@ -36,7 +36,8 @@ describe("deliver", () => {
     const where = await deliver(file, "download", deps);
 
     expect(deps.written[0].path).toBe("/tmp/exports/roche-brief.pdf");
-    expect(where).toContain("/api/export/file/roche-brief.pdf");
+    // The URL names the job, not the file: see export-pipeline.ts R8/R9.
+    expect(where).toBe("/api/export/file/job-1");
   });
 
   it("writes into the iCloud artifacts folder", async () => {
@@ -63,7 +64,7 @@ describe("deliver", () => {
   describe("path traversal", () => {
     it("strips parent-directory segments before writing to the download directory", async () => {
       const deps = fakeDeps();
-      const hostile = { filename: "../../../../etc/evil.pdf", bytes: Buffer.from("x") };
+      const hostile = { jobId: "job-1", filename: "../../../../etc/evil.pdf", bytes: Buffer.from("x") };
 
       await deliver(hostile, "download", deps);
 
@@ -75,7 +76,7 @@ describe("deliver", () => {
 
     it("strips parent-directory segments before writing to the iCloud folder", async () => {
       const deps = fakeDeps();
-      const hostile = { filename: "../../../../etc/evil.pdf", bytes: Buffer.from("x") };
+      const hostile = { jobId: "job-1", filename: "../../../../etc/evil.pdf", bytes: Buffer.from("x") };
 
       await deliver(hostile, "icloud", deps);
 
@@ -87,7 +88,7 @@ describe("deliver", () => {
 
     it("strips embedded directory separators from an otherwise plain filename", async () => {
       const deps = fakeDeps();
-      const hostile = { filename: "sub/dir/evil.pdf", bytes: Buffer.from("x") };
+      const hostile = { jobId: "job-1", filename: "sub/dir/evil.pdf", bytes: Buffer.from("x") };
 
       await deliver(hostile, "download", deps);
 
@@ -109,7 +110,7 @@ describe("deliver", () => {
     for (const { destination, dir } of destinations) {
       it(`rejects an empty filename for ${destination} instead of writing to the directory itself`, async () => {
         const deps = fakeDeps();
-        const degenerate = { filename: "", bytes: Buffer.from("x") };
+        const degenerate = { jobId: "job-1", filename: "", bytes: Buffer.from("x") };
 
         await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
 
@@ -118,7 +119,7 @@ describe("deliver", () => {
 
       it(`rejects a "." filename for ${destination} instead of writing to the directory itself`, async () => {
         const deps = fakeDeps();
-        const degenerate = { filename: ".", bytes: Buffer.from("x") };
+        const degenerate = { jobId: "job-1", filename: ".", bytes: Buffer.from("x") };
 
         await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
 
@@ -127,7 +128,7 @@ describe("deliver", () => {
 
       it(`rejects a ".." filename for ${destination} instead of writing to the directory itself`, async () => {
         const deps = fakeDeps();
-        const degenerate = { filename: "..", bytes: Buffer.from("x") };
+        const degenerate = { jobId: "job-1", filename: "..", bytes: Buffer.from("x") };
 
         await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
 
@@ -139,7 +140,7 @@ describe("deliver", () => {
         // or ".."), so this is a legitimate — if odd — filename and must be
         // accepted, landing strictly inside the destination directory.
         const deps = fakeDeps();
-        const dotsOnly = { filename: "...", bytes: Buffer.from("x") };
+        const dotsOnly = { jobId: "job-1", filename: "...", bytes: Buffer.from("x") };
 
         await deliver(dotsOnly, destination, deps);
 
@@ -149,7 +150,7 @@ describe("deliver", () => {
 
       it(`rejects a filename made only of characters the sanitiser strips, for ${destination}, instead of writing to the directory itself`, async () => {
         const deps = fakeDeps();
-        const strippedAway = { filename: "///", bytes: Buffer.from("x") };
+        const strippedAway = { jobId: "job-1", filename: "///", bytes: Buffer.from("x") };
 
         await expect(deliver(strippedAway, destination, deps)).rejects.toThrow();
 
