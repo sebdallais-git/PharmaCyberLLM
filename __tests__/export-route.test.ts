@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createExportRouter, validateExportRequest } from "../src/api/export.js";
+import { createExportRouter, createPipelineRunner, validateExportRequest } from "../src/api/export.js";
 import type { ExportRouterDeps } from "../src/api/export.js";
 import { openExportJobs } from "../src/services/export-jobs.js";
 import type { ExportJobStore } from "../src/services/export-jobs.js";
@@ -240,5 +240,112 @@ describe("GET /api/export/file/:filename", () => {
     const res = await fetch(`${fixture.url}/api/export/file/nope.pdf`);
 
     expect(res.status).toBe(404);
+  });
+});
+
+// createPipelineRunner is the fix for the finding in
+// .superpowers/sdd/2026-09-22-artifact-export/task-9-fix-1.md: the catch
+// on the un-awaited pipeline promise must not just console.error -- it
+// must fail the job so a poller can see why an export never arrived. This
+// only fires for a rejection BEFORE runExport's own total try/catch, i.e.
+// buildPipelineDeps() itself (in production: Neo4j / the watchlist store
+// being unreachable), which is exactly what these fakes simulate. No test
+// here touches a live service: buildPipelineDeps and runExport are both
+// fakes, and jobs is the same in-memory store the route reads back from.
+describe("createPipelineRunner", () => {
+  it("fails the job with a stage and message when the pipeline runner rejects, readable through the status route", async () => {
+    const jobs = openExportJobs(":memory:");
+    const runner = createPipelineRunner({
+      jobs,
+      buildPipelineDeps: async () => {
+        throw new Error("Neo4j is not running");
+      },
+      runExport: async () => {},
+    });
+    let pending: Promise<void> | undefined;
+    const fixture = await startApp({
+      jobs,
+      runPipeline: (jobId) => {
+        pending = runner(jobId);
+      },
+    });
+
+    const { status, body } = await postExport(fixture.url, goodRequest);
+    expect(status).toBe(202);
+    await pending;
+
+    const res = await fetch(`${fixture.url}/api/export/${body.jobId as string}`);
+    const job = (await res.json()) as Record<string, unknown>;
+
+    expect(res.status).toBe(200);
+    expect(job.stage).toBe("failed");
+    // "queued" because the job never started gathering -- that is the
+    // honest stage to report, not a guess at where it would have gotten to.
+    expect(String(job.error)).toMatch(/queued/);
+    expect(String(job.error)).toMatch(/Neo4j is not running/);
+  });
+
+  it("returns the job id immediately -- the failure is only recorded after the response was already sent", async () => {
+    let rejectGate!: (err: Error) => void;
+    const gate = new Promise<never>((_resolve, reject) => {
+      rejectGate = reject;
+    });
+    const jobs = openExportJobs(":memory:");
+    const runner = createPipelineRunner({
+      jobs,
+      buildPipelineDeps: () => gate,
+      runExport: async () => {},
+    });
+    let pending: Promise<void> | undefined;
+    const fixture = await startApp({
+      jobs,
+      runPipeline: (jobId) => {
+        pending = runner(jobId);
+      },
+    });
+
+    const { status, body } = await postExport(fixture.url, goodRequest);
+    expect(status).toBe(202);
+    expect(typeof body.jobId).toBe("string");
+
+    // The response is already sent; the job must still be at "queued"
+    // because the pipeline wiring has not settled (rejected or not) yet.
+    const queuedRes = await fetch(`${fixture.url}/api/export/${body.jobId as string}`);
+    const queuedJob = (await queuedRes.json()) as Record<string, unknown>;
+    expect(queuedJob.stage).toBe("queued");
+
+    rejectGate(new Error("Neo4j is not running"));
+    await pending;
+
+    const failedRes = await fetch(`${fixture.url}/api/export/${body.jobId as string}`);
+    const failedJob = (await failedRes.json()) as Record<string, unknown>;
+    expect(failedJob.stage).toBe("failed");
+  });
+
+  it("does not let a failure inside the fail() call become an unhandled rejection", async () => {
+    // jobs.fail() throws when the id does not exist (export-jobs.ts). This
+    // fake reproduces that throw unconditionally, standing in for any
+    // reason fail() might throw, to prove the guard around it holds: the
+    // runner must still settle (not reject) instead of letting this escape
+    // as the unhandled rejection the original .catch() existed to prevent.
+    const throwingJobs: ExportJobStore = {
+      create: () => "job-1",
+      get: () => null,
+      setStage: () => {},
+      complete: () => {},
+      fail: () => {
+        throw new Error('no export job with id "job-1"');
+      },
+      close: () => {},
+    };
+    const runner = createPipelineRunner({
+      jobs: throwingJobs,
+      buildPipelineDeps: async () => {
+        throw new Error("Neo4j is not running");
+      },
+      runExport: async () => {},
+    });
+
+    await expect(runner("job-1")).resolves.toBeUndefined();
   });
 });

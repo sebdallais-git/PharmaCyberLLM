@@ -35,6 +35,7 @@ import { isDestination } from "../services/export-delivery.js";
 import { isExportFormat, openExportJobs } from "../services/export-jobs.js";
 import type { ExportJobStore, ExportRequest } from "../services/export-jobs.js";
 import { runExport } from "../services/export-pipeline.js";
+import type { PipelineDeps } from "../services/export-pipeline.js";
 import { buildPipelineDeps } from "../services/export-wiring.js";
 
 export type ValidationResult = { ok: true; value: ExportRequest } | { ok: false; error: string };
@@ -153,6 +154,53 @@ export function createExportRouter(deps: ExportRouterDeps): Router {
   return router;
 }
 
+export interface PipelineRunnerDeps {
+  jobs: ExportJobStore;
+  buildPipelineDeps: () => Promise<PipelineDeps>;
+  runExport: (id: string, deps: PipelineDeps) => Promise<void>;
+}
+
+// Wraps buildPipelineDeps() -> runExport() so a rejection that happens
+// BEFORE runExport's own total try/catch (in practice: buildPipelineDeps()
+// failing to reach Neo4j or the watchlist store) does not leave the job
+// stranded at "queued" forever. runExport has its own error handling once
+// it starts, so this only ever needs to record a failure for a job that
+// never got that far -- "queued" is the honest stage to report, since
+// gathering never began.
+//
+// Returns the underlying promise (rather than void) so tests can await it
+// deterministically instead of guessing at a settle delay. Production
+// wiring below discards the return value, which is fine: a function
+// returning Promise<void> is assignable to ExportRouterDeps.runPipeline's
+// "(jobId: string): void" precisely because a void-returning function type
+// ignores whatever the assigned function returns.
+//
+// This function itself must never reject -- it is called fire-and-forget
+// by the route handler, and a rejection here would become the unhandled
+// rejection the original .catch() existed to avoid. jobs.fail() throws if
+// the job id is unknown (export-jobs.ts); that should not happen here
+// since create() already returned this id, but the inner try/catch guards
+// against it regardless.
+export function createPipelineRunner(deps: PipelineRunnerDeps): (jobId: string) => Promise<void> {
+  return async (jobId: string): Promise<void> => {
+    try {
+      const pipelineDeps = await deps.buildPipelineDeps();
+      await deps.runExport(jobId, pipelineDeps);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`export ${jobId}: pipeline wiring failed:`, message);
+      try {
+        deps.jobs.fail(jobId, "queued", `export could not be started: ${message}`);
+      } catch (failErr: unknown) {
+        console.error(
+          `export ${jobId}: failed to record job failure:`,
+          failErr instanceof Error ? failErr.message : failErr,
+        );
+      }
+    }
+  };
+}
+
 // openExportJobs() opens a real sqlite file (mkdirSync + a live connection) --
 // real I/O, not just an object construction. Calling it at module load would
 // mean simply IMPORTING this file (as every test that imports
@@ -174,14 +222,16 @@ function lazyJobStore(): ExportJobStore {
   };
 }
 
+const exportJobs = lazyJobStore();
+const runPipeline = createPipelineRunner({ jobs: exportJobs, buildPipelineDeps, runExport });
+
 export default createExportRouter({
-  jobs: lazyJobStore(),
+  jobs: exportJobs,
   downloadDir: join(process.cwd(), "data", "exports"),
+  // void: fire-and-forget, matching this route's comment above -- POST
+  // must not await the pipeline. createPipelineRunner's returned promise
+  // never rejects (see its own comment), so there is nothing to catch here.
   runPipeline: (jobId) => {
-    void buildPipelineDeps()
-      .then((pipelineDeps) => runExport(jobId, pipelineDeps))
-      .catch((err) => {
-        console.error(`export ${jobId}: pipeline wiring failed:`, err instanceof Error ? err.message : err);
-      });
+    void runPipeline(jobId);
   },
 });
