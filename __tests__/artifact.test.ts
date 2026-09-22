@@ -87,6 +87,35 @@ describe("assertExternalSafe", () => {
     expect(() => assertExternalSafe(artifact)).toThrow(/internal-only/i);
   });
 
+  // Final review, important 5: the backstop scanned every section kind, the
+  // title and the subtitle, but not the citation list -- which every renderer
+  // emits into the document. Citations come from public news today, so the
+  // present risk is low, but the guard's stated job is to scan everything an
+  // artifact carries.
+  it("rejects an external artifact whose citation title leaks internal framing", () => {
+    const artifact = base({
+      citations: [{ id: "c1", title: "Why we defend Roche's storage estate", url: "https://example.test/a" }],
+    });
+
+    expect(() => assertExternalSafe(artifact)).toThrow(/internal-only/i);
+  });
+
+  it("rejects an external artifact whose citation url leaks internal framing", () => {
+    const artifact = base({
+      citations: [{ id: "c1", title: "Blocks & Files", url: "https://example.test/incumbency-matrix" }],
+    });
+
+    expect(() => assertExternalSafe(artifact)).toThrow(/internal-only/i);
+  });
+
+  it("allows an external artifact whose citations say nothing internal", () => {
+    const artifact = base({
+      citations: [{ id: "c1", title: "Roche builds an AI factory", url: "https://example.test/a" }],
+    });
+
+    expect(() => assertExternalSafe(artifact)).not.toThrow();
+  });
+
   it("allows external prose that says nothing internal", () => {
     const artifact = base({
       sections: [{ kind: "prose", heading: "Summary", body: "Roche is scaling its AI estate.", cites: [] }],

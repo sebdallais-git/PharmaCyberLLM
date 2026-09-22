@@ -30,11 +30,24 @@ export interface Artifact {
   citations: Citation[];
 }
 
+// R1 (final review, minor 5): the "chart" section kind above is RESERVED and
+// currently unproduced -- no gatherer builds one, so the chart branch in all
+// three renderers is unreachable today. That is deliberate, not an
+// oversight: this artifact model is the documented extension point between
+// gathering and rendering, and the export spec names charts explicitly, so
+// the kind and its renderer branches stay. A gatherer that emits one needs no
+// change here or in any renderer.
+
 // Words that must never appear in an external artifact's structure. The
 // gatherer omits these sections rather than redacting them, so this is a
 // backstop against a gatherer bug, not the primary control. Every section
 // kind is scanned, including model-written prose and chart specs, as are the
-// artifact's own title and subtitle.
+// artifact's own title and subtitle -- and its citations (R2, final review,
+// important 5): every renderer emits the citation list into the document, so
+// a citation title or url is as visible to a customer as a heading. They
+// come from public news items today, which is why this was missed; the
+// guard's job is to scan everything the artifact carries, whatever its
+// current provenance.
 const INTERNAL_ONLY = ["incumben", "confidence", "displace", "defend", "greenfield"];
 
 export function assertExternalSafe(artifact: Artifact): void {
@@ -51,6 +64,7 @@ export function assertExternalSafe(artifact: Artifact): void {
     if (section.kind === "prose") haystack.push(section.body);
     if (section.kind === "chart") haystack.push(JSON.stringify(section.spec));
   }
+  for (const citation of artifact.citations) haystack.push(citation.title, citation.url);
 
   for (const term of INTERNAL_ONLY) {
     const hit = haystack.find((text) => text.toLowerCase().includes(term));

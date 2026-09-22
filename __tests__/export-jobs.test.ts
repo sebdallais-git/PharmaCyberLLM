@@ -110,6 +110,16 @@ describe("export jobs", () => {
     jobs.close();
   });
 
+  // Final review, minor 2: setStage() used to be the odd sibling -- it
+  // silently no-opped on an unknown id while complete() and fail() threw, so
+  // a stale or mistyped id advanced nothing and said nothing.
+  it("throws when setting the stage of an unknown job id", () => {
+    const jobs = openExportJobs(":memory:");
+
+    expect(() => jobs.setStage("nope", "narrating")).toThrow(/nope/);
+    jobs.close();
+  });
+
   // complete() and fail() must not silently no-op on an unknown id: get()
   // already returns null for one, and a silent no-op would turn a wiring bug
   // (a stale or mistyped id) into a job that looks like a slow export forever.

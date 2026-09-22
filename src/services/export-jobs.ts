@@ -200,9 +200,20 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
       return row === undefined ? null : hydrateJob(row);
     },
 
+    // R3 (final review, minor 2): this used to no-op silently on an unknown
+    // id while complete() and fail() threw for the same mistake. A stage
+    // transition that updates no row means the caller is holding an id this
+    // store has never seen -- a wiring bug, not a state the pipeline can
+    // continue through -- and swallowing it leaves a job that looks like a
+    // slow export forever. runExport() already treats a throw from any step
+    // as that step's recorded failure, so the three siblings now behave the
+    // same way.
     setStage(id: string, stage: Stage): void {
       assertKnownStage(stage);
-      setStageStmt.run(stage, id);
+      const result = setStageStmt.run(stage, id);
+      if (result.changes === 0) {
+        throw new Error(`no export job with id "${id}"`);
+      }
     },
 
     complete(id: string, location: string): void {
