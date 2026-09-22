@@ -58,6 +58,18 @@ describe("isProtectedRequest", () => {
     expect(isProtectedRequest("GET", "/api/stack/confirm")).toBe(true);
     expect(isProtectedRequest("POST", "/api/stack/cancel")).toBe(true);
   });
+
+  // Pin: the export routes carry account intelligence that
+  // config/accounts.local.yaml is gitignored to protect, and they are
+  // deliberately absent from BROWSER_ROUTES so they stay protected. This
+  // test exists so a future well-meaning "add /api/export beside /api/chat"
+  // edit to BROWSER_ROUTES fails the suite instead of silently opening the
+  // export API to anyone on the network without a bearer token.
+  it("protects the export routes: request, poll and download", () => {
+    expect(isProtectedRequest("POST", "/api/export")).toBe(true);
+    expect(isProtectedRequest("GET", "/api/export/some-job-id")).toBe(true);
+    expect(isProtectedRequest("GET", "/api/export/file/x.pdf")).toBe(true);
+  });
 });
 
 describe("authorizeRequest", () => {
