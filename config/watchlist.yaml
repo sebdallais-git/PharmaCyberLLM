@@ -46,7 +46,7 @@ customers:
       # queries currently yield nothing for exactly that reason.
       rss:
         - "https://www.roche.com/med_news_xml.xml"
-        - "https://news.google.com/rss/search?q=Roche+(AI+OR+cloud+OR+datacenter+OR+%22digital+transformation%22+OR+IT)&hl=en-US&gl=US&ceid=US:en"
+        - "https://news.google.com/rss/search?q=Roche+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)&hl=en-US&gl=US&ceid=US:en"
       ir_page: "https://www.roche.com/investors/reports"
     # no edgar: Roche does not file with the SEC (absent from SEC company_tickers.json)
     verifiedAt: "2026-09-20"
@@ -69,7 +69,13 @@ customers:
   novartis:
     name: Novartis
     feeds:
-      rss: ["https://www.novartis.com/news-rss.xml"]
+      # news-rss.xml is clinical, exactly like Roche's: of what it carried on
+      # 2026-09-22, every item was a trial result or regulatory opinion
+      # (Cosentyx, pelacarsen, remibrutinib, ESC Congress data). Kept for the
+      # occasional corporate item; the IT signal comes from the second feed.
+      rss:
+        - "https://www.novartis.com/news-rss.xml"
+        - "https://news.google.com/rss/search?q=Novartis+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)&hl=en-US&gl=US&ceid=US:en"
       edgar: "0001114448"
       ir_page: "https://www.novartis.com/investors/financial-data/quarterly-results"
     verifiedAt: "2026-09-20"
@@ -92,6 +98,12 @@ customers:
   sandoz:
     name: Sandoz
     feeds:
+      # Sandoz publishes no RSS at all (see the note below), so this is its only
+      # news source and the reason it had 0 stored items. Coverage is genuinely
+      # thin -- Sandoz IT press barely exists, and the feed skews to biosimilars
+      # and finance. That is the market, not a bad query.
+      rss:
+        - "https://news.google.com/rss/search?q=Sandoz+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)&hl=en-US&gl=US&ceid=US:en"
       ir_page: "https://www.sandoz.com/investors/financials/"
     # no rss: tried /rss, /rss.xml, /media/rss.xml, /media/news/rss, /media/news/feed,
     # /news/news-archive/rss, /rss/media.xml, /news/rss.xml, /media/press-releases/rss --
