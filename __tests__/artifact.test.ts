@@ -72,6 +72,21 @@ describe("assertExternalSafe", () => {
     expect(() => assertExternalSafe(artifact)).toThrow(/confidence/i);
   });
 
+  // The title and subtitle are rendered as prominently as any section — the PDF
+  // writes the title into the document metadata and the deck puts it on slide 1.
+  // A leak there reaches the customer exactly as a section leak would.
+  it("rejects an external artifact whose title leaks internal framing", () => {
+    const artifact = base({ title: "Incumbency matrix" });
+
+    expect(() => assertExternalSafe(artifact)).toThrow(/internal-only/i);
+  });
+
+  it("rejects an external artifact whose subtitle leaks internal framing", () => {
+    const artifact = base({ subtitle: "where we defend and where we displace" });
+
+    expect(() => assertExternalSafe(artifact)).toThrow(/internal-only/i);
+  });
+
   it("allows external prose that says nothing internal", () => {
     const artifact = base({
       sections: [{ kind: "prose", heading: "Summary", body: "Roche is scaling its AI estate.", cites: [] }],

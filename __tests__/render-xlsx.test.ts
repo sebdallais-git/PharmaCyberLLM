@@ -22,6 +22,19 @@ describe("renderXlsx", () => {
     expect(book.worksheets.map((w) => w.name)).toEqual(["By segment", "Summary", "Notes", "Sources"]);
   });
 
+  // The gate that stops account intelligence reaching a customer. Excel is the
+  // likeliest format for an incumbency matrix, so this renderer is the one most
+  // exposed to the mistake.
+  it("refuses an external artifact that carries internal content", async () => {
+    const leaky: Artifact = {
+      ...artifact,
+      audience: "external",
+      sections: [{ kind: "facts", heading: "Position", items: [{ label: "confidence", value: "high" }] }],
+    };
+
+    await expect(renderXlsx(leaky)).rejects.toThrow(/internal-only/i);
+  });
+
   it("writes a table's columns as the header row and its rows beneath", async () => {
     const book = await loadWorkbook(await renderXlsx(artifact));
     const sheet = book.getWorksheet("By segment");

@@ -33,13 +33,17 @@ export interface Artifact {
 // Words that must never appear in an external artifact's structure. The
 // gatherer omits these sections rather than redacting them, so this is a
 // backstop against a gatherer bug, not the primary control. Every section
-// kind is scanned, including model-written prose and chart specs.
+// kind is scanned, including model-written prose and chart specs, as are the
+// artifact's own title and subtitle.
 const INTERNAL_ONLY = ["incumben", "confidence", "displace", "defend", "greenfield"];
 
 export function assertExternalSafe(artifact: Artifact): void {
   if (artifact.audience !== "external") return;
 
-  const haystack: string[] = [];
+  // The title and subtitle are rendered as prominently as any section: the PDF
+  // writes the title into the document metadata, the deck puts it on slide 1.
+  const haystack: string[] = [artifact.title];
+  if (artifact.subtitle !== undefined) haystack.push(artifact.subtitle);
   for (const section of artifact.sections) {
     haystack.push(section.heading);
     if (section.kind === "table") haystack.push(...section.columns, ...section.rows.flat());
