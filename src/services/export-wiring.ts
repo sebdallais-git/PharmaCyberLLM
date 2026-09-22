@@ -241,6 +241,31 @@ export function buildNarrationChat(llm: Pick<LlmClient, "streamChat">): (prompt:
   };
 }
 
+/**
+ * Upload a rendered file to Telegram. Separate from telegram-notify.ts, which
+ * sends text: sendDocument needs multipart, not JSON.
+ */
+export async function sendTelegramDocument(
+  filename: string,
+  bytes: Buffer,
+  config: { botToken: string; chatId: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const form = new FormData();
+  form.set("chat_id", config.chatId);
+  // Buffer's `buffer` property is typed as ArrayBufferLike (it may be backed
+  // by a SharedArrayBuffer), which BlobPart's stricter ArrayBuffer typing
+  // rejects. Copying into a fresh Uint8Array gives Blob a plain ArrayBuffer
+  // it accepts, without an `any` cast.
+  form.set("document", new Blob([new Uint8Array(bytes)]), filename);
+
+  const resp = await fetchImpl(`https://api.telegram.org/bot${config.botToken}/sendDocument`, {
+    method: "POST",
+    body: form,
+  });
+  if (!resp.ok) throw new Error(`telegram sendDocument failed (${resp.status})`);
+}
+
 export async function buildPipelineDeps(): Promise<PipelineDeps> {
   return {
     // Note: openExportJobs() above is opened fresh on every call to
@@ -273,8 +298,11 @@ export async function buildPipelineDeps(): Promise<PipelineDeps> {
         await mkdir(dirname(path), { recursive: true });
         await writeFile(path, bytes);
       },
-      async sendDocument() {
-        throw new Error("telegram delivery is wired in Task 12");
+      async sendDocument(filename, bytes) {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
+        const chatId = process.env.TELEGRAM_CHAT_ID ?? "";
+        if (!botToken || !chatId) throw new Error("telegram delivery needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID");
+        await sendTelegramDocument(filename, bytes, { botToken, chatId });
       },
     },
   };
