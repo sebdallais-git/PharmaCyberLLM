@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { buildStacks } from "../src/config/llm-stacks.js";
-import { aggregateHealth, probeUrl, stackProbeUrls } from "../src/services/health.js";
+import { aggregateHealth, probeGeneration, probeUrl, stackProbeUrls } from "../src/services/health.js";
 import { sendJson, startFakeServer } from "./helpers/fake-openai-server.js";
 import type { FakeServer } from "./helpers/fake-openai-server.js";
 
@@ -52,5 +52,34 @@ describe("probeUrl", () => {
     expect(typeof ok.latency_ms).toBe("number");
     expect((await probeUrl(`${server.baseUrl}/fail`)).status).toBe("error");
     expect((await probeUrl("http://127.0.0.1:9/")).status).toBe("unreachable");
+  });
+});
+
+describe("generation probe", () => {
+  // /v1/models answers from a wedged server: on 2026-09-22 MLX sat at 0% CPU
+  // accepting connections and serving /v1/models while a 5-token generation
+  // timed out at 90s, and /api/health reported llm_chat ok throughout. Liveness
+  // is not readiness -- only generating a token proves the model works.
+  it("reports ok when the model actually produces a token", async () => {
+    const server = await startFakeServer((_req, res) =>
+      sendJson(res, 200, { choices: [{ message: { content: "ok" } }] }),
+    );
+    try {
+      const check = await probeGeneration(server.baseUrl, 5000);
+      expect(check.status).toBe("ok");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports unreachable when generation hangs, even though the port is open", async () => {
+    // Never responds: the wedged case, which a /v1/models probe would pass.
+    const server = await startFakeServer(() => {});
+    try {
+      const check = await probeGeneration(server.baseUrl, 300);
+      expect(check.status).toBe("unreachable");
+    } finally {
+      await server.close();
+    }
   });
 });

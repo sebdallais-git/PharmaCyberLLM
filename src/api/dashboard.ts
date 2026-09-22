@@ -9,7 +9,7 @@ import { getStats } from "../services/knowledge-store.js";
 import { getActiveStack } from "../config/llm-stacks.js";
 import { getIndexStatus } from "../services/index-guard.js";
 import { isBenchmarkActive } from "../services/bench-mode.js";
-import { aggregateHealth, probeUrl, stackProbeUrls } from "../services/health.js";
+import { aggregateHealth, probeGeneration, probeUrl, stackProbeUrls } from "../services/health.js";
 import type { HealthCheck } from "../services/health.js";
 
 const router = Router();
@@ -64,7 +64,14 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   const checks: Record<string, HealthCheck> = {};
 
   // Active LLM stack only; the inactive stack is expected to be stopped
-  const [chat, embed] = await Promise.all([probeUrl(urls.llm_chat), probeUrl(urls.llm_embed)]);
+  // llm_chat asks the model for a token rather than pinging /v1/models. A
+  // wedged MLX serves /v1/models perfectly while generating nothing -- on
+  // 2026-09-22 this endpoint reported llm_chat "ok" for a server that timed out
+  // a 5-token request at 90s. Liveness is not readiness.
+  const [chat, embed] = await Promise.all([
+    probeGeneration(stack.chatBaseUrl),
+    probeUrl(urls.llm_embed),
+  ]);
   checks.llm_chat = chat;
   checks.llm_embed = embed;
 

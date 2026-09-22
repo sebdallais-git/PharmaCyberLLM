@@ -9,6 +9,7 @@
 #   com.pharmaitchat.stack    ChromaDB + the active LLM stack + the app
 #   com.pharmaitchat.mcp      the MCP server the agent tools reach
 #   com.pharmaitchat.n8n      the knowledge-gap auto-fill workflow
+#   com.pharmaitchat.mlx-watchdog  restarts MLX when it stops generating
 #   ai.hermes.gateway         the Hermes gateway behind Telegram
 #
 # Docker is deliberately not managed here: Neo4j and SearXNG are containers with
@@ -25,7 +26,7 @@ LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
 DOMAIN="gui/$(id -u)"
 
 # Rendered from a template here; the gateway's plist is written by hermes itself.
-OWN_LABELS=(com.pharmaitchat.stack com.pharmaitchat.mcp com.pharmaitchat.n8n)
+OWN_LABELS=(com.pharmaitchat.stack com.pharmaitchat.mcp com.pharmaitchat.n8n com.pharmaitchat.mlx-watchdog)
 ALL_LABELS=("${OWN_LABELS[@]}" ai.hermes.gateway)
 
 log() { printf "[autostart] %s\n" "$*"; }
@@ -60,7 +61,9 @@ bootstrap_with_retry() {
 }
 
 state_of() {
-  "$LAUNCHCTL_BIN" print "$DOMAIN/$1" 2>/dev/null | awk '/state = /{print $3; exit}'
+  # Capture the whole value: an interval job between runs reports "not running",
+  # and taking only the first field showed it as "not".
+  "$LAUNCHCTL_BIN" print "$DOMAIN/$1" 2>/dev/null | sed -n 's/^[[:space:]]*state = //p' | head -1
 }
 
 cmd_on() {
@@ -99,7 +102,13 @@ cmd_status() {
   local label state
   for label in "${ALL_LABELS[@]}"; do
     state="$(state_of "$label")"
-    printf "  %-26s %s\n" "$label" "${state:-not loaded}"
+    # An interval job is "not running" between firings, which is its healthy
+    # state; only "not loaded" means autostart is off for it.
+    case "$state" in
+      "not running") state="loaded (idle between runs)" ;;
+      "") state="NOT LOADED" ;;
+    esac
+    printf "  %-26s %s\n" "$label" "$state"
   done
   printf "  %-26s %s\n" "docker (neo4j, searxng)" "$(docker info >/dev/null 2>&1 && echo running || echo 'not running')"
 }
