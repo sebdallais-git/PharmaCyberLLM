@@ -8,18 +8,34 @@ const MARGIN = 50;
 const BODY = 11;
 const HEADING = 14;
 
-function wrap(text: string, max: number): string[] {
+// Word-wraps text to at most `max` characters per line. A word that alone
+// exceeds `max` (e.g. a long URL with no spaces) is hard-split into
+// `max`-sized chunks instead of being left to overflow the margin or
+// triggering a spurious blank line ahead of it.
+export function wrap(text: string, max: number): string[] {
   const out: string[] = [];
   let line = "";
-  for (const word of text.split(/\s+/)) {
-    if ((line + " " + word).trim().length > max) {
-      out.push(line.trim());
-      line = word;
+  for (const word of text.split(/\s+/).filter((w) => w.length > 0)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (candidate.length <= max) {
+      line = candidate;
+      continue;
+    }
+
+    if (line) out.push(line);
+
+    if (word.length > max) {
+      let rest = word;
+      while (rest.length > max) {
+        out.push(rest.slice(0, max));
+        rest = rest.slice(max);
+      }
+      line = rest;
     } else {
-      line += ` ${word}`;
+      line = word;
     }
   }
-  if (line.trim()) out.push(line.trim());
+  if (line) out.push(line);
   return out;
 }
 
@@ -35,15 +51,29 @@ export async function renderPdf(artifact: Artifact): Promise<Buffer> {
   let page = doc.addPage();
   let y = page.getHeight() - MARGIN;
 
+  const newPage = () => {
+    page = doc.addPage();
+    y = page.getHeight() - MARGIN;
+  };
+
   const write = (text: string, size: number, useBold = false) => {
     for (const line of wrap(text, size === HEADING ? 70 : 95)) {
-      if (y < MARGIN) {
-        page = doc.addPage();
-        y = page.getHeight() - MARGIN;
-      }
+      if (y < MARGIN) newPage();
       page.drawText(line, { x: MARGIN, y, size, font: useBold ? bold : font, color: rgb(0, 0, 0) });
       y -= size + 4;
     }
+  };
+
+  // Keep-with-next guard: a heading with nothing under it is worse than no
+  // heading at all. Before writing one, require room for the heading's own
+  // (possibly wrapped) lines plus at least one more line of body content;
+  // otherwise start a fresh page first, rather than let `write`'s per-line
+  // check strand the heading alone at the bottom of the current page.
+  const writeHeading = (text: string) => {
+    const headingLines = wrap(text, 70);
+    const needed = headingLines.length * (HEADING + 4) + (BODY + 4);
+    if (y - needed < MARGIN) newPage();
+    write(text, HEADING, true);
   };
 
   write(artifact.title, HEADING + 4, true);
@@ -51,7 +81,7 @@ export async function renderPdf(artifact: Artifact): Promise<Buffer> {
   y -= 10;
 
   for (const section of artifact.sections) {
-    write(section.heading, HEADING, true);
+    writeHeading(section.heading);
     switch (section.kind) {
       case "prose":
         write(section.body, BODY);
@@ -71,7 +101,7 @@ export async function renderPdf(artifact: Artifact): Promise<Buffer> {
   }
 
   if (artifact.citations.length > 0) {
-    write("Sources", HEADING, true);
+    writeHeading("Sources");
     for (const cite of artifact.citations) write(`[${cite.id}] ${cite.title} — ${cite.url}`, BODY);
   }
 
