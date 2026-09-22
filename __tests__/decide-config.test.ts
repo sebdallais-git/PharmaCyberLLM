@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import { isVerdict, parseDecideConfig, VERDICTS } from "../src/services/decide-config.js";
+import { parseDecideConfig, VERDICTS } from "../src/services/decide-config.js";
 
 const good = {
   base_url: "http://127.0.0.1:8000",
@@ -8,12 +8,9 @@ const good = {
   thresholds: { resolved: 0.85, unresolved: 0.5 },
 };
 
-describe("isVerdict", () => {
-  it("accepts the three declared verdicts and rejects anything else", () => {
+describe("VERDICTS", () => {
+  it("is the three-way vocabulary the thresholds map onto", () => {
     expect(VERDICTS).toEqual(["resolved", "review", "unresolved"]);
-    expect(isVerdict("review")).toBe(true);
-    expect(isVerdict("confident")).toBe(false);
-    expect(isVerdict(undefined)).toBe(false);
   });
 });
 

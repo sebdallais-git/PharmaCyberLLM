@@ -1,13 +1,27 @@
-import { afterEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import express from "express";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createDecideRouter, parseDecideRequest } from "../src/api/decide.js";
-import { ScorerUnavailableError } from "../src/services/decide.js";
+import { createDecideRouter, DECIDE_ERROR_MESSAGES, parseDecideRequest } from "../src/api/decide.js";
+import { ScorerResponseError, ScorerUnavailableError } from "../src/services/decide.js";
 import { isProtectedRequest } from "../src/api/auth.js";
 
 const servers: Server[] = [];
+
+// The route logs the failure detail instead of returning it, so the suite
+// captures console.error rather than printing it.
+const realConsoleError = console.error;
+let errorLog: string[] = [];
+
+beforeEach(() => {
+  errorLog = [];
+  console.error = (...args: unknown[]): void => {
+    errorLog.push(args.map((arg) => String(arg)).join(" "));
+  };
+});
+
 afterEach(async () => {
+  console.error = realConsoleError;
   for (const s of servers.splice(0)) await new Promise<void>((r) => s.close(() => r()));
 });
 
@@ -92,9 +106,9 @@ describe("POST /api/decide", () => {
     expect(res.status).toBe(503);
   });
 
-  it("never echoes the scorer key in an error body", async () => {
+  it("returns 500 with its own message when the scorer answers with nonsense", async () => {
     const url = await startApp(async () => {
-      throw new ScorerUnavailableError("decide: scorer returned 401");
+      throw new ScorerResponseError('decide: scorer returned an invalid noul for "resolved": "yes"');
     });
 
     const res = await fetch(`${url}/api/decide`, {
@@ -103,7 +117,78 @@ describe("POST /api/decide", () => {
       body: JSON.stringify(good),
     });
 
-    expect(JSON.stringify(await res.json())).not.toMatch(/bearer|token|key/i);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: DECIDE_ERROR_MESSAGES.invalidResponse });
+  });
+
+  // The old version of this test threw an error whose message contained nothing
+  // secret, so it could not fail: it asserted that text nobody put in was not
+  // coming out. What has to hold is stronger -- the body is a FIXED string, and
+  // the detail it was handed is not in it -- because decide.ts interpolates a
+  // scorer-controlled body and undici's own messages into its errors, and
+  // neither string is authored here.
+  it.each([
+    [
+      "a scorer-controlled body",
+      new ScorerUnavailableError('decide: scorer at http://127.0.0.1:8000 said {"hint":"send Bearer sk-live-9f3a"}'),
+      503,
+      DECIDE_ERROR_MESSAGES.unavailable,
+    ],
+    [
+      "an undici message",
+      new ScorerUnavailableError("decide: scorer at http://10.0.0.4:8000 is unreachable (ECONNREFUSED 10.0.0.4:8000)"),
+      503,
+      DECIDE_ERROR_MESSAGES.unavailable,
+    ],
+    [
+      "an unexpected internal error",
+      new Error("ENOENT: no such file or directory, open '/Users/seb/claude/PharmaLLM/data/run/jev-token'"),
+      500,
+      DECIDE_ERROR_MESSAGES.internal,
+    ],
+  ])("answers %s with a fixed message that omits the detail", async (
+    _label: string,
+    thrown: Error,
+    status: number,
+    message: string,
+  ) => {
+    const url = await startApp(async () => {
+      throw thrown;
+    });
+
+    const res = await fetch(`${url}/api/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(good),
+    });
+    const body = JSON.stringify(await res.json());
+
+    expect(res.status).toBe(status);
+    expect(JSON.parse(body)).toEqual({ error: message });
+    // Nothing from the thrown message survives into the response.
+    expect(body).not.toContain("sk-live-9f3a");
+    expect(body).not.toContain("jev-token");
+    expect(body).not.toMatch(/bearer|token|key|ECONNREFUSED|127\.0\.0\.1|10\.0\.0\.4/i);
+    for (const word of thrown.message.split(/\s+/).filter((w) => w.length > 6)) {
+      expect(body).not.toContain(word);
+    }
+  });
+
+  // The other half of the ruling: the detail is not discarded, it moves to the
+  // server log, where an operator can read it and n8n cannot.
+  it("logs the detail server-side instead of returning it", async () => {
+    const url = await startApp(async () => {
+      throw new ScorerUnavailableError("decide: scorer at http://127.0.0.1:8000 rejected Bearer sk-live-9f3a");
+    });
+
+    const res = await fetch(`${url}/api/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(good),
+    });
+
+    expect(await res.json()).toEqual({ error: DECIDE_ERROR_MESSAGES.unavailable });
+    expect(errorLog.join("\n")).toContain("sk-live-9f3a");
   });
 });
 

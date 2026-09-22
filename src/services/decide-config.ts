@@ -13,10 +13,6 @@ import { parse as parseYamlDocument } from "yaml";
 export const VERDICTS = ["resolved", "review", "unresolved"] as const;
 export type Verdict = (typeof VERDICTS)[number];
 
-export function isVerdict(value: unknown): value is Verdict {
-  return typeof value === "string" && (VERDICTS as readonly string[]).includes(value);
-}
-
 export interface DecideThresholds {
   resolved: number;
   unresolved: number;
@@ -29,8 +25,9 @@ export interface DecideConfig {
   thresholds: DecideThresholds;
 }
 
-// Type guard that distinguishes objects from arrays: typeof handles both as "object"
-function isRecord(value: unknown): value is Record<string, unknown> {
+// Type guard that distinguishes objects from arrays: typeof handles both as "object".
+// Exported because decide.ts reads the scorer's body with the same guard.
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

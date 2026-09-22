@@ -13,6 +13,7 @@
 // a false "resolved" closes an open gap, a false "unresolved" burns a retry
 // and re-runs the whole ingest.
 
+import { isRecord } from "./decide-config.js";
 import type { DecideConfig, Verdict } from "./decide-config.js";
 
 export interface DecisionQuestion {
@@ -40,21 +41,35 @@ export class ScorerUnavailableError extends Error {
   }
 }
 
+// The scorer answered, but not with something this client can read. Separate
+// from ScorerUnavailableError so callers can tell "the service is down, retry"
+// from "the service is talking nonsense, do not retry".
+export class ScorerResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScorerResponseError";
+  }
+}
+
+// isRecord, not a typeof check: typeof [] is "object", and an array body would
+// otherwise walk straight into the property reads below.
 function readNoul(body: unknown, questionId: string): number {
-  if (typeof body !== "object" || body === null) {
-    throw new Error("decide: scorer returned a non-object body");
+  if (!isRecord(body)) {
+    throw new ScorerResponseError("decide: scorer returned a non-object body");
   }
-  const answers = (body as Record<string, unknown>).answers;
-  if (typeof answers !== "object" || answers === null) {
-    throw new Error("decide: scorer response has no answers");
+  const answers = body.answers;
+  if (!isRecord(answers)) {
+    throw new ScorerResponseError("decide: scorer response has no answers");
   }
-  const answer = (answers as Record<string, unknown>)[questionId];
-  if (typeof answer !== "object" || answer === null) {
-    throw new Error(`decide: scorer response has no answer for "${questionId}"`);
+  const answer = answers[questionId];
+  if (!isRecord(answer)) {
+    throw new ScorerResponseError(`decide: scorer response has no answer for "${questionId}"`);
   }
-  const noul = (answer as Record<string, unknown>).noul;
+  const noul = answer.noul;
   if (typeof noul !== "number" || !Number.isFinite(noul) || noul < 0 || noul > 1) {
-    throw new Error(`decide: scorer returned an invalid noul for "${questionId}": ${JSON.stringify(noul)}`);
+    throw new ScorerResponseError(
+      `decide: scorer returned an invalid noul for "${questionId}": ${JSON.stringify(noul)}`,
+    );
   }
   return noul;
 }
@@ -102,6 +117,17 @@ export async function decide(
     throw new ScorerUnavailableError(`decide: scorer returned ${resp.status}`);
   }
 
-  const noul = readNoul(await resp.json(), question.id);
+  // A 200 carrying HTML (a proxy's error page, say) makes .json() throw a bare
+  // SyntaxError, which is not something this client should hand on: the scorer
+  // is not answering usefully, which is the same outage every other branch
+  // here reports, so the caller gets the same retryable error.
+  let body: unknown;
+  try {
+    body = await resp.json();
+  } catch {
+    throw new ScorerUnavailableError(`decide: scorer at ${deps.config.baseUrl} returned a non-JSON body`);
+  }
+
+  const noul = readNoul(body, question.id);
   return { verdict: verdictFor(noul, deps.config.thresholds), probability: noul };
 }

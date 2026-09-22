@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import { decide, ScorerUnavailableError } from "../src/services/decide.js";
+import { decide, ScorerResponseError, ScorerUnavailableError } from "../src/services/decide.js";
 import type { DecideDeps, DecisionQuestion } from "../src/services/decide.js";
 
 const question: DecisionQuestion = {
@@ -92,11 +92,30 @@ describe("decide", () => {
     ["missing the question id", { answers: {} }],
     ["a non-numeric noul", { answers: { resolved: { noul: "yes" } } }],
     ["a noul outside 0..1", { answers: { resolved: { noul: 1.4 } } }],
+    // typeof [] is "object", so an array walks into every property read below
+    // unless the guard excludes it.
+    ["an array body", []],
+    ["array answers", { answers: [] }],
+    ["an array answer", { answers: { resolved: [] } }],
   ])("throws on %s", async (_label: string, body: unknown) => {
     const deps = depsReturning(0.9);
     deps.fetchImpl = (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
 
-    await expect(decide(question, "state", deps)).rejects.toThrow();
+    await expect(decide(question, "state", deps)).rejects.toBeInstanceOf(ScorerResponseError);
+  });
+
+  // A 200 whose body is not JSON (a proxy's HTML error page) used to surface as
+  // a bare SyntaxError, which /api/decide answered 500 while every other scorer
+  // failure answered 503.
+  it("treats a non-JSON 200 body as the scorer being unavailable", async () => {
+    const deps = depsReturning(0.9);
+    deps.fetchImpl = (async () =>
+      new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      })) as unknown as typeof fetch;
+
+    await expect(decide(question, "state", deps)).rejects.toBeInstanceOf(ScorerUnavailableError);
   });
 
   it("omits the Authorization header when no key is configured", async () => {

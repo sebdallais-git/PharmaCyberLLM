@@ -11,7 +11,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { decide, ScorerUnavailableError } from "../services/decide.js";
+import { decide, ScorerResponseError, ScorerUnavailableError } from "../services/decide.js";
 import type { Decision, DecisionQuestion } from "../services/decide.js";
 import { loadDecideConfig } from "../services/decide-config.js";
 
@@ -48,6 +48,32 @@ export interface DecideRouterDeps {
   decide(question: DecisionQuestion, state: string): Promise<Decision>;
 }
 
+// One fixed string per failure class. They are constants, not templates: no
+// value from the scorer, from undici, or from an exception message reaches a
+// response body, so no leak is possible by construction rather than by
+// inspecting what third-party text happens to contain today.
+export const DECIDE_ERROR_MESSAGES = {
+  unavailable: "The decision service is unavailable",
+  invalidResponse: "The decision service returned an unusable response",
+  internal: "The decision could not be made",
+} as const;
+
+interface DecideFailure {
+  status: number;
+  message: string;
+  logLabel: string;
+}
+
+export function classifyDecideFailure(err: unknown): DecideFailure {
+  if (err instanceof ScorerUnavailableError) {
+    return { status: 503, message: DECIDE_ERROR_MESSAGES.unavailable, logLabel: "scorer unavailable" };
+  }
+  if (err instanceof ScorerResponseError) {
+    return { status: 500, message: DECIDE_ERROR_MESSAGES.invalidResponse, logLabel: "unusable scorer response" };
+  }
+  return { status: 500, message: DECIDE_ERROR_MESSAGES.internal, logLabel: "decision failed" };
+}
+
 export function createDecideRouter(deps: DecideRouterDeps): Router {
   const router = Router();
 
@@ -61,12 +87,18 @@ export function createDecideRouter(deps: DecideRouterDeps): Router {
       const decision = await deps.decide(parsed.question, parsed.state);
       res.json(decision);
     } catch (err) {
-      // 503 for an outage so n8n retries; the message names the address, never
-      // the key (see decide.ts).
-      const unavailable = err instanceof ScorerUnavailableError;
-      res.status(unavailable ? 503 : 500).json({
-        error: err instanceof Error ? err.message : "Decision failed",
-      });
+      // Fixed message per failure class, detail to the server log only.
+      //
+      // Forwarding err.message was a guarantee about text nobody here wrote:
+      // decide.ts interpolates JSON.stringify(noul) out of a SCORER-CONTROLLED
+      // body and undici's own err.message into its errors, so "decide.ts never
+      // builds a message containing the key" says nothing about what those
+      // strings contain. 503 for an outage, so n8n retries; 500 otherwise.
+      const failure = classifyDecideFailure(err);
+      console.error(
+        `[decide] ${failure.logLabel}: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`,
+      );
+      res.status(failure.status).json({ error: failure.message });
     }
   });
 
