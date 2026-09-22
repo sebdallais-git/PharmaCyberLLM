@@ -22,6 +22,10 @@ export interface DecideConfig {
   baseUrl: string;
   model: string;
   timeoutMs: number;
+  // Run the scorer alongside the 27B at gap-detection time and record both,
+  // without letting it decide anything. Defaults to false: shadow scoring adds
+  // a call to every chat turn, so it is opt-in even once a scorer is installed.
+  shadowDetection: boolean;
   thresholds: DecideThresholds;
 }
 
@@ -74,6 +78,9 @@ export function parseDecideConfig(raw: unknown): DecideConfig {
     baseUrl: requireString(raw, "base_url"),
     model: requireString(raw, "model"),
     timeoutMs: timeout,
+    // Absent means off. A boolean that must be spelled out to take effect is
+    // the right default for something that touches every chat turn.
+    shadowDetection: raw.shadow_detection === true,
     thresholds: { resolved, unresolved },
   };
 }

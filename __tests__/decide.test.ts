@@ -15,6 +15,7 @@ function depsReturning(noul: number, seen?: { body?: unknown; url?: string; auth
       baseUrl: "http://127.0.0.1:8000",
       model: "jev-latest",
       timeoutMs: 15000,
+      shadowDetection: false,
       thresholds: { resolved: 0.85, unresolved: 0.5 },
     },
     apiKey: "secret-key",
