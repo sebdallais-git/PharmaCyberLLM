@@ -250,6 +250,13 @@ export function markUnresolved(gapId: number): void {
   ).run(gapId);
 }
 
+// Parks a gap the scorer was not confident about. Unlike markUnresolved this
+// does NOT touch retry_count: a gap nobody is sure about should not consume an
+// ingest cycle.
+export function markForReview(gapId: number): void {
+  db.prepare("UPDATE gap_log SET status = 'review' WHERE id = ?").run(gapId);
+}
+
 // Get a single gap by ID
 export function getGapById(gapId: number): GapLogEntry | undefined {
   const row = db.prepare("SELECT * FROM gap_log WHERE id = ?").get(gapId) as {
