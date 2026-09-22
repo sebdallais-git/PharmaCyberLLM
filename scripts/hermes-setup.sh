@@ -225,15 +225,25 @@ install_services() {
   fi
 }
 
-# The scorer's own launchd job, installed as part of install_services. It
-# aborts (like the mcp-token guard above) when open-jev isn't checked out or
-# the Hugging Face token isn't in place yet, since Gemma 3 4B is gated and
-# will silently hang without it (see scripts/run-jev.sh).
+# The scorer's own launchd job, installed as part of install_services. Unlike the
+# mcp-token guard above, the scorer is OPTIONAL (src/services/health.ts keeps it out of
+# CRITICAL_CHECKS, src/api/dashboard.ts:94 says so explicitly, and scripts/check-services.sh's
+# own hint text says its absence means "chat is unaffected"), so a missing prerequisite here
+# must SKIP the scorer and return 0 — never abort install_services — so every other service,
+# the Hermes gateway especially, still installs. This is an INSTALL-time distinction only:
+# scripts/run-jev.sh keeps its own hard guards at RUN time, since a scorer that cannot load a
+# gated model must fail loudly rather than start and hang. Do not soften that script.
 install_jev_service() {
   local plist domain jev_dir
   jev_dir="${JEV_DIR:-$PROJECT_DIR/../open-jev}"
-  [ -x "$jev_dir/.venv/bin/openjev" ] || { log "No open-jev venv at $jev_dir (run: cd $jev_dir && make setup)"; exit 1; }
-  [ -s "$RUN_DIR/hf-token" ] || { log "No $RUN_DIR/hf-token — Gemma 3 4B is gated and will not download"; exit 1; }
+  if [ ! -x "$jev_dir/.venv/bin/openjev" ]; then
+    log "Skipping the jev scorer: no open-jev venv at $jev_dir (run: cd $jev_dir && make setup). The scorer is optional — chat is unaffected."
+    return 0
+  fi
+  if [ ! -s "$RUN_DIR/hf-token" ]; then
+    log "Skipping the jev scorer: no $RUN_DIR/hf-token — Gemma 3 4B is gated and will not download. The scorer is optional — chat is unaffected."
+    return 0
+  fi
   mkdir -p "$LAUNCH_AGENTS_DIR" "$PROJECT_DIR/data/logs"
   plist="$LAUNCH_AGENTS_DIR/$JEV_LABEL.plist"
   sed -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
