@@ -133,6 +133,30 @@ stop_pidfile_process() {
   rm -f "$pidfile"
 }
 
+# Neo4j and SearXNG are containers. Their restart policy is unless-stopped, so
+# they return once Docker Desktop is up -- but Docker Desktop starting at login
+# is registered through SMAppService, in a SIP-protected system database, and
+# nothing here can set it. So: start them if Docker is available, and say so
+# plainly if it is not, rather than letting the graph and web search fail later
+# with something that looks unrelated.
+ensure_containers() {
+  if ! docker info >/dev/null 2>&1; then
+    log "Docker is not running: Neo4j (graph) and SearXNG (web search) are unavailable."
+    log "  Start Docker Desktop, and tick Settings > General > Start Docker Desktop when you sign in."
+    return 0
+  fi
+  local name
+  for name in neo4j searxng; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = "true" ]; then
+      log "$name already running"
+    elif docker start "$name" >/dev/null 2>&1; then
+      log "Started $name"
+    else
+      log "Could not start $name (no such container?)"
+    fi
+  done
+}
+
 ensure_chromadb() {
   if curl -sf "${CHROMA_URL}/api/v2/heartbeat" >/dev/null 2>&1; then
     log "ChromaDB already running on port ${CHROMA_PORT}"
