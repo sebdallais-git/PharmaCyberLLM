@@ -73,7 +73,7 @@ Utiliser `webhook-test` (pas `webhook`) pour tester sans activer le workflow en 
 | 10 | Store in Knowledge Base        | HTTP Request | POST vers PharmaLLM /api/knowledge/ingest-text |
 | 11 | Summary & Log                  | Code         | Agrège les stats et log le résultat            |
 | 12 | Check Gap Resolution           | HTTP Request | POST vers PharmaLLM pour vérifier la résolution |
-| 13 | Resolution Result Log          | Code         | Log le verdict en trois états                   |
+| 13 | Resolution Result Log          | Code         | Log le verdict, ou l'échec de la décision       |
 
 ## Résolution de lacune (trois états)
 
@@ -90,6 +90,10 @@ Thresholds live in `config/decide.yaml`.
 - **Fetch page** : skip les pages en erreur, continue avec les autres
 - **Ollama (extraction)** : les erreurs passent au filtre qui les élimine
 - **Store** : les erreurs n'empêchent pas le résumé final
+- **Check Gap Resolution** : ses deux sorties (succès et erreur) arrivent au log.
+  Une panne du scorer, un 500, un 404 ou un timeout est journalisé
+  `gap_decision_failed` avec son détail, jamais comme un verdict : un appel qui
+  échoue n'a rien décidé, et la ligne de base de données reste intacte.
 
 ## Timeouts
 
