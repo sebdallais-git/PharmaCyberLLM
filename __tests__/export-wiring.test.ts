@@ -1,7 +1,8 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { Driver } from "neo4j-driver";
-import { buildGatherDeps, liveReader } from "../src/services/export-wiring.js";
+import { buildGatherDeps, buildNarrationChat, liveReader } from "../src/services/export-wiring.js";
 import { openWatchlistStore } from "../src/services/watchlist-store.js";
+import type { LlmClient, StatsCollector } from "../src/services/llm-client.js";
 
 describe("buildGatherDeps", () => {
   it("maps cypher rows into incumbency entries", async () => {
@@ -162,5 +163,53 @@ describe("liveReader", () => {
 
     store.close();
     anotherStore.close();
+  });
+});
+
+// buildNarrationChat adapts the shared LlmClient into narrateArtifact's
+// `chat: (prompt: string) => Promise<string>` seam. It never opens a real
+// connection: these fakes implement only streamChat, as an async generator,
+// exactly like llm-client.test.ts's own fakes -- no fetch, no network, no
+// real model.
+function fakeLlm(
+  tokens: string[],
+  finishReason: "stop" | "length",
+): Pick<LlmClient, "streamChat"> {
+  return {
+    async *streamChat(_messages, _options, stats?: StatsCollector) {
+      for (const token of tokens) yield token;
+      if (stats) {
+        stats.result = {
+          promptTokens: 1,
+          completionTokens: tokens.length,
+          tokensPerSecond: 1,
+          ttftMs: 1,
+          tokenCountSource: "chunks",
+          truncated: finishReason === "length",
+        };
+      }
+    },
+  };
+}
+
+describe("buildNarrationChat", () => {
+  it("resolves with the concatenated text when the model finished cleanly", async () => {
+    const chat = buildNarrationChat(fakeLlm(["Roche ", "is scaling."], "stop"));
+
+    await expect(chat("prompt")).resolves.toBe("Roche is scaling.");
+  });
+
+  // Point 1 of the task brief: a turn that hit the token ceiling must not
+  // ship as a half sentence. TokenStats.truncated (llm-client.ts) is only
+  // populated on the streaming path, so this adapter uses streamChat with a
+  // StatsCollector rather than the plain chat() method, and REJECTS instead
+  // of resolving when truncated is true. export-pipeline.ts's runExport
+  // already attributes an unhandled rejection during deps.narrate(...) to
+  // the "narrating" stage, so this turns a silent half-sentence into a
+  // visible, attributable job failure.
+  it("rejects instead of resolving when the model was truncated", async () => {
+    const chat = buildNarrationChat(fakeLlm(["Roche is scal"], "length"));
+
+    await expect(chat("prompt")).rejects.toThrow(/truncat/i);
   });
 });

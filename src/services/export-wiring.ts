@@ -12,8 +12,11 @@ import type { GatherDeps } from "./export-artifacts.js";
 import { gather } from "./export-artifacts.js";
 import { deliver } from "./export-delivery.js";
 import { openExportJobs } from "./export-jobs.js";
+import { narrateArtifact } from "./export-narrative.js";
 import type { PipelineDeps } from "./export-pipeline.js";
 import { getDriver } from "./graph-store.js";
+import { getLlmClient } from "./llm-client.js";
+import type { LlmClient, StatsCollector } from "./llm-client.js";
 import { renderPdf } from "./render-pdf.js";
 import { renderPptx } from "./render-pptx.js";
 import { renderXlsx } from "./render-xlsx.js";
@@ -197,6 +200,47 @@ function buildLiveReader(getDriverFn: () => Driver, openStore: () => WatchlistSt
   };
 }
 
+// R5: narrateArtifact's `chat` seam is `(prompt: string) => Promise<string>`
+// (Task 11 brief) -- a signature that has no room to say "the model was cut
+// off". llm-client.ts's TokenStats.truncated exists for exactly this
+// problem on the chat UI's streaming path (comment at its declaration: "a
+// turn that spent its whole budget was previously indistinguishable from one
+// that had nothing to say"); narration has the same failure mode but a worse
+// consequence -- prose written into a document nobody watches get produced,
+// so a half sentence would ship as finished work instead of rendering as an
+// obviously-broken reply.
+//
+// Two ways to surface it were on the table:
+//   (a) change narrateArtifact's `chat` type to return more than a string
+//       (e.g. {text, truncated}), or
+//   (b) keep the signature exactly as specified and have the concrete `chat`
+//       implementation REJECT instead of resolve when truncated.
+// (b) wins: it needs no change to narrateArtifact or its already-approved
+// signature, and it reuses a mechanism this codebase already relies on --
+// export-pipeline.ts's runExport wraps deps.narrate(...) in a try/catch that
+// records whatever stage was active (here, "narrating") plus the thrown
+// message on the job. A truncated narration becomes a normal, attributable
+// job failure through the exact same path a gatherer or renderer error
+// already takes, rather than a second, bespoke failure channel.
+//
+// This is also why streamChat (not the plain chat()) is used below: chat()
+// (line ~253) reads only `choices[0].message.content` and drops
+// finish_reason entirely, so truncation is invisible to it. Only the
+// streaming path threads a StatsCollector through to `truncated`.
+export function buildNarrationChat(llm: Pick<LlmClient, "streamChat">): (prompt: string) => Promise<string> {
+  return async (prompt) => {
+    const stats: StatsCollector = {};
+    let body = "";
+    for await (const token of llm.streamChat([{ role: "user", content: prompt }], {}, stats)) {
+      body += token;
+    }
+    if (stats.result?.truncated) {
+      throw new Error("narration truncated: model hit its token limit before finishing");
+    }
+    return body;
+  };
+}
+
 export async function buildPipelineDeps(): Promise<PipelineDeps> {
   return {
     // Note: openExportJobs() above is opened fresh on every call to
@@ -213,10 +257,12 @@ export async function buildPipelineDeps(): Promise<PipelineDeps> {
     jobs: openExportJobs(),
     gather,
     gatherDeps: buildGatherDeps(liveReader()),
-    // Narration is added in Task 11; until then the artifact passes through
-    // unchanged, so the pipeline is end-to-end testable without the model.
+    // narrateArtifact (Task 11) writes the "Summary" prose section from the
+    // artifact's own facts, using the shared LlmClient through
+    // buildNarrationChat above so a truncated turn fails the job instead of
+    // shipping a half sentence.
     async narrate(artifact) {
-      return artifact;
+      return narrateArtifact(artifact, buildNarrationChat(getLlmClient()));
     },
     render: { xlsx: renderXlsx, pdf: renderPdf, pptx: renderPptx },
     deliver,
