@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
-import { applyGapVerdict } from "../src/services/gap-outcome.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { applyGapVerdict, GAP_RESOLVED_QUESTION } from "../src/services/gap-outcome.js";
 import type { GapOutcomeDeps } from "../src/services/gap-outcome.js";
 
 function spyDeps(): GapOutcomeDeps & { calls: string[] } {
@@ -37,5 +39,27 @@ describe("applyGapVerdict", () => {
     applyGapVerdict("review", 7, "the answer", deps);
 
     expect(deps.calls).toEqual(["review:7"]);
+  });
+});
+
+// The harness exists to tell whether the 4B can stand in for the 27B on ONE
+// question. If production and the harness each keep their own copy of that
+// question, they can drift apart without failing anything, and the experiment
+// silently stops being about production's question.
+describe("GAP_RESOLVED_QUESTION", () => {
+  it("is asked with the id the verdict is read back under", () => {
+    expect(GAP_RESOLVED_QUESTION.id).toBe("resolved");
+    expect(GAP_RESOLVED_QUESTION.instructions).toContain("hedging");
+  });
+
+  it.each([
+    ["production", join("src", "api", "knowledge.ts")],
+    ["the replay harness", join("scripts", "replay-gap-decisions.ts")],
+  ])("is imported by %s rather than repeated there", (_label: string, path: string) => {
+    const source = readFileSync(join(process.cwd(), path), "utf8");
+
+    expect(source).toContain("GAP_RESOLVED_QUESTION");
+    expect(source).not.toContain(GAP_RESOLVED_QUESTION.instructions);
+    expect(source).not.toContain(GAP_RESOLVED_QUESTION.whenTrue);
   });
 });

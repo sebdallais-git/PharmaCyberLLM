@@ -37,7 +37,7 @@ import { getRunningJobs, isBenchmarkActive, trackJob } from "../services/bench-m
 import type { GraphEntity, GraphRelationship } from "../services/graph-store.js";
 import { decide } from "../services/decide.js";
 import { loadDecideConfig } from "../services/decide-config.js";
-import { applyGapVerdict } from "../services/gap-outcome.js";
+import { applyGapVerdict, GAP_RESOLVED_QUESTION } from "../services/gap-outcome.js";
 import { readScorerKey } from "./decide.js";
 
 const router = Router();
@@ -349,13 +349,7 @@ router.post("/gaps/check-resolution", async (req: Request, res: Response): Promi
     // outage leaves the gap untouched instead of silently closing it -- the
     // failure mode of the checkConfidence() call this replaces.
     const decision = await decide(
-      {
-        id: "resolved",
-        instructions:
-          "Did the assistant answer the question with specific, confident information, rather than hedging, saying it does not know, or giving only vague generic information?",
-        whenTrue: "The answer is specific and addresses the question.",
-        whenFalse: "The answer hedges, is vague, or does not address the question.",
-      },
+      GAP_RESOLVED_QUESTION,
       `Question: ${original_query}\nAnswer: ${newResponse}`,
       { config: loadDecideConfig(), apiKey: readScorerKey(), fetchImpl: fetch },
     );

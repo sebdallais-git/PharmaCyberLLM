@@ -22,6 +22,10 @@ export interface ReplayReport {
   falseResolved: number; // baseline unresolved, scorer resolved -- closes an open gap
   falseUnresolved: number; // baseline resolved, scorer unresolved -- burns a retry
   review: number;
+  // Gaps the replay could not score at all -- a non-ok /api/decide, a response
+  // it could not read. Reported because an agreement rate computed over a
+  // handful of surviving rows reads exactly like a pass over all of them.
+  dropped: number;
   histogram: Record<string, number>; // 10 buckets of 0.1
 }
 
@@ -30,7 +34,7 @@ function bucketOf(p: number): string {
   return `${lower.toFixed(1)}-${(lower + 0.1).toFixed(1)}`;
 }
 
-export function buildReplayReport(rows: ReplayRow[]): ReplayReport {
+export function buildReplayReport(rows: ReplayRow[], dropped: number = 0): ReplayReport {
   const histogram: Record<string, number> = {};
   for (let i = 0; i < 10; i += 1) {
     histogram[`${(i / 10).toFixed(1)}-${((i + 1) / 10).toFixed(1)}`] = 0;
@@ -64,6 +68,7 @@ export function buildReplayReport(rows: ReplayRow[]): ReplayReport {
     falseResolved,
     falseUnresolved,
     review,
+    dropped,
     histogram,
   };
 }

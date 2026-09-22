@@ -45,5 +45,16 @@ describe("buildReplayReport", () => {
 
     expect(report.total).toBe(0);
     expect(report.agreementRate).toBe(0);
+    expect(report.dropped).toBe(0);
+  });
+
+  // A run where /api/decide failed on most gaps computes its rate over the few
+  // that survived and prints like a clean pass. The count of what never got
+  // scored has to travel with the rate.
+  it("carries the gaps that were never scored", () => {
+    const report = buildReplayReport(rows.slice(0, 2), 61);
+
+    expect(report.total).toBe(2);
+    expect(report.dropped).toBe(61);
   });
 });

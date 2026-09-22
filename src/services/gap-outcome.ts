@@ -1,9 +1,25 @@
-// What a verdict does to a gap row.
+// The gap-resolution decision: the question production asks about a gap's new
+// answer, and what the verdict does to the gap row.
 //
 // Extracted from the route handler so the branch logic is testable without an
 // HTTP server or a database: the three store functions arrive as dependencies.
 
 import type { Verdict } from "./decide-config.js";
+import type { DecisionQuestion } from "./decide.js";
+
+/**
+ * The one question asked about a re-answered gap. The replay harness imports
+ * this instead of repeating it: two copies that drift mean the harness
+ * measures a different question than production asks, which invalidates the
+ * experiment without failing anything.
+ */
+export const GAP_RESOLVED_QUESTION: DecisionQuestion = {
+  id: "resolved",
+  instructions:
+    "Did the assistant answer the question with specific, confident information, rather than hedging, saying it does not know, or giving only vague generic information?",
+  whenTrue: "The answer is specific and addresses the question.",
+  whenFalse: "The answer hedges, is vague, or does not address the question.",
+};
 
 export interface GapOutcomeDeps {
   resolveGap(id: number, response: string): void;
