@@ -4,6 +4,7 @@
 // real job database, writes real files, and (once Task 12 lands) sends a
 // real Telegram document.
 import neo4j from "neo4j-driver";
+import type { Driver } from "neo4j-driver";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,6 +18,7 @@ import { renderPdf } from "./render-pdf.js";
 import { renderPptx } from "./render-pptx.js";
 import { renderXlsx } from "./render-xlsx.js";
 import { openWatchlistStore } from "./watchlist-store.js";
+import type { WatchlistStore } from "./watchlist-store.js";
 
 // The minimal shape buildGatherDeps needs: a way to run a read-only Cypher
 // query and a way to fetch an entity's recent watchlist items. Kept
@@ -39,23 +41,73 @@ const POSITIONS_CYPHER = `
   ORDER BY segment
 `;
 
+// R3 (fix round 1, finding 2): a Neo4j row is Record<string, unknown> --
+// nothing about the graph schema stops a property from being absent or
+// null. String(undefined) === "undefined" and String(null) === "null", so
+// the bare String(r.field) this replaced did not fail on a malformed row --
+// it printed the literal word "undefined"/"null" straight into an artifact
+// that may be handed to a customer. Every required field is now checked
+// with a real type guard (no `any`) before being trusted.
+//
+// Chosen remedy: THROW on a malformed row, not skip it. export-artifacts.ts
+// already set this project's rule for a required value via requireOption():
+// "fail loudly... rather than falling back to ... quietly produc[ing] a thin
+// or wrong artifact." A row with a missing/null required field is at least
+// as serious as a missing CLI option -- it means the graph itself holds an
+// inconsistent node or relationship -- and silently skipping it would hand a
+// customer an incumbency or competitive-position table with fewer rows than
+// the graph actually has, with no signal anywhere that a row was dropped.
+// export-pipeline.ts's runExport already wraps gather() in a try/catch that
+// records a clear failure message on the job, so throwing here turns a bad
+// row into a visible, retryable export failure instead of an invisible gap
+// in a deliverable -- consistent with finding 2's own framing ("this
+// subsystem must not produce quietly").
+// Describes a rejected value for the error message without ever printing
+// the bare words "undefined"/"null" that this fix exists to keep out of an
+// artifact -- a diagnostic message naming what went wrong is not the same
+// thing as those words leaking into the row data itself, but there is no
+// reason to risk the confusion when a clearer label is just as easy.
+function describeValue(value: unknown): string {
+  if (value === undefined) return "<missing>";
+  if (value === null) return "<null>";
+  return JSON.stringify(value);
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`export-wiring: row is missing required field "${field}" (got ${describeValue(value)})`);
+  }
+  return value;
+}
+
+function requiredStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`export-wiring: row is missing required field "${field}" (got ${describeValue(value)})`);
+  }
+  return value.map((entry, i) => requiredString(entry, `${field}[${i}]`));
+}
+
 export function buildGatherDeps(reader: GraphReader): GatherDeps {
   return {
     async incumbency() {
       const rows = await reader.runCypher(INCUMBENCY_CYPHER);
       return rows.map((r) => ({
-        account: String(r.account),
-        segment: String(r.segment),
-        vendors: Array.isArray(r.vendors) ? r.vendors.map(String) : [],
+        account: requiredString(r.account, "account"),
+        segment: requiredString(r.segment, "segment"),
+        vendors: requiredStringArray(r.vendors, "vendors"),
       }));
     },
     async positions(vendor) {
       const rows = await reader.runCypher(POSITIONS_CYPHER, { vendor });
       return rows.map((r) => ({
-        segment: String(r.segment),
-        position: String(r.position),
-        confidence: String(r.confidence),
-        rationale: String(r.rationale ?? ""),
+        segment: requiredString(r.segment, "segment"),
+        position: requiredString(r.position, "position"),
+        confidence: requiredString(r.confidence, "confidence"),
+        // rationale is the one genuinely optional field here -- an
+        // un-rationalised position is still a valid position -- so any
+        // non-string value (missing, null, or otherwise) falls back to ""
+        // instead of taking the rejection path above.
+        rationale: typeof r.rationale === "string" ? r.rationale : "",
       }));
     },
     async news(entity, limit) {
@@ -88,9 +140,38 @@ export interface LiveGraphReader extends GraphReader {
   close(): void;
 }
 
-function liveReader(): LiveGraphReader {
-  const driver = getDriver();
-  const store = openWatchlistStore();
+// R4 (fix round 1, finding 1): liveReader() used to call getDriver() and
+// openWatchlistStore() on every invocation. buildPipelineDeps() runs once
+// per POST /api/export (src/api/export.ts's runPipeline), so every export
+// opened a fresh WAL-mode sqlite handle -- three file descriptors (.db,
+// .db-wal, .db-shm) -- and nothing ever closed it, for the life of the
+// server process. getDriver() already avoids the equivalent problem on the
+// Neo4j side with a lazy module-scope memo (`if (!driver) driver = ...`);
+// cachedReader mirrors that shape for the reader as a whole, so the
+// watchlist store (and the driver-session-bearing reader wrapping it) is
+// opened at most once per process.
+//
+// The memo is populated on FIRST USE only, via `??=` inside liveReader()
+// itself -- never `const cachedReader = buildLiveReader(...)` at module
+// scope. Task 9 removed exactly that kind of import-time side effect from
+// this file (importing it used to open a real database as a side effect,
+// and the green test suite did not notice -- it was caught by `git
+// status`). A module-scope initializer would reintroduce it: merely
+// importing export-wiring.ts would open a real sqlite file again.
+let cachedReader: LiveGraphReader | null = null;
+
+// getDriver/openStore are injectable (defaulting to the real
+// implementations) so a test can observe -- or fully fake -- how the reader
+// is built without ever touching a live Neo4j server or a real watchlist
+// database. Production code (buildPipelineDeps below) always calls
+// liveReader() with no argument.
+export function liveReader(deps: { getDriver?: () => Driver; openStore?: () => WatchlistStore } = {}): LiveGraphReader {
+  return (cachedReader ??= buildLiveReader(deps.getDriver ?? getDriver, deps.openStore ?? openWatchlistStore));
+}
+
+function buildLiveReader(getDriverFn: () => Driver, openStore: () => WatchlistStore): LiveGraphReader {
+  const driver = getDriverFn();
+  const store = openStore();
   return {
     async runCypher(query, params = {}) {
       // READ access mode: this reader is only ever used to gather data for
@@ -118,14 +199,17 @@ function liveReader(): LiveGraphReader {
 
 export async function buildPipelineDeps(): Promise<PipelineDeps> {
   return {
-    // Note: openExportJobs() above and liveReader()'s watchlist store below
-    // are both opened fresh on every call to buildPipelineDeps() (one per
-    // export job -- see src/api/export.ts's runPipeline) and neither is
-    // closed here: PipelineDeps has no teardown hook, so there is no place
-    // in this function to call it once the job finishes. This matches the
-    // existing jobs store's lifecycle rather than diverging from it.
-    // liveReader()'s close() exists for callers (tests, or a future
-    // lifecycle hook) that do manage that scope explicitly.
+    // Note: openExportJobs() above is opened fresh on every call to
+    // buildPipelineDeps() (one per export job -- see src/api/export.ts's
+    // runPipeline) and is not closed here: PipelineDeps has no teardown
+    // hook, so there is no place in this function to call it once the job
+    // finishes. liveReader() below is different: it is memoised at module
+    // scope (see cachedReader above), so repeated calls here return the same
+    // reader and open the watchlist store at most once per process, the
+    // same lifecycle openExportJobs() itself gets from src/api/export.ts's
+    // own module-scope memo. liveReader()'s close() exists for callers
+    // (tests, or a future lifecycle hook) that do manage that scope
+    // explicitly.
     jobs: openExportJobs(),
     gather,
     gatherDeps: buildGatherDeps(liveReader()),
