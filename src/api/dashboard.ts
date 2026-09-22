@@ -11,6 +11,7 @@ import { getIndexStatus } from "../services/index-guard.js";
 import { isBenchmarkActive } from "../services/bench-mode.js";
 import { aggregateHealth, probeGeneration, probeUrl, stackProbeUrls } from "../services/health.js";
 import type { HealthCheck } from "../services/health.js";
+import { loadDecideConfig } from "../services/decide-config.js";
 
 const router = Router();
 
@@ -88,6 +89,21 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
     };
   } catch {
     checks.chromadb = { status: "unreachable" };
+  }
+
+  // The scorer (open-jev). Deliberately NOT in CRITICAL_CHECKS: only the
+  // gap-resolution loop uses it, and that loop degrades to "no decision"
+  // rather than to a wrong one.
+  //
+  // A GET /health is enough here, unlike llm_chat above. A wedged chat server
+  // serves /v1/models while generating nothing, so its probe has to ask for a
+  // token; a wedged scorer simply fails the decision, and the gap stays open --
+  // it cannot quietly produce a bad answer, so liveness is the right question.
+  try {
+    checks.jev = await probeUrl(`${loadDecideConfig().baseUrl}/health`);
+  } catch {
+    // A missing or invalid config/decide.yaml must not take down /api/health.
+    checks.jev = { status: "error", detail: "decide config unreadable" };
   }
 
   // SearXNG

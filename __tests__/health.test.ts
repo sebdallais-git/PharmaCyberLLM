@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import { buildStacks } from "../src/config/llm-stacks.js";
-import { aggregateHealth, probeGeneration, probeUrl, stackProbeUrls } from "../src/services/health.js";
+import { aggregateHealth, CRITICAL_CHECKS, probeGeneration, probeUrl, stackProbeUrls } from "../src/services/health.js";
 import { sendJson, startFakeServer } from "./helpers/fake-openai-server.js";
 import type { FakeServer } from "./helpers/fake-openai-server.js";
 
@@ -81,5 +81,37 @@ describe("generation probe", () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+describe("the scorer is a non-critical dependency", () => {
+  // Chat must keep working with the scorer down: only the gap-resolution loop
+  // depends on it, and that loop degrades to "no decision" rather than to a
+  // wrong one.
+  it("is not in CRITICAL_CHECKS", () => {
+    expect(CRITICAL_CHECKS).toEqual(["llm_chat", "llm_embed", "search_index"]);
+    expect(CRITICAL_CHECKS).not.toContain("jev");
+  });
+
+  it("degrades rather than fails the app when the scorer is unreachable", () => {
+    const status = aggregateHealth({
+      llm_chat: { status: "ok" },
+      llm_embed: { status: "ok" },
+      search_index: { status: "ok" },
+      jev: { status: "unreachable" },
+    });
+
+    expect(status).toBe("degraded");
+  });
+
+  it("still reports unhealthy when a critical check is down, scorer or not", () => {
+    expect(
+      aggregateHealth({
+        llm_chat: { status: "unreachable" },
+        llm_embed: { status: "ok" },
+        search_index: { status: "ok" },
+        jev: { status: "ok" },
+      }),
+    ).toBe("unhealthy");
   });
 });
