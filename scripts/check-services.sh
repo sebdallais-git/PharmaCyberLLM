@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Read-only status of every moving part, and which of them come back by
+# themselves. Written for the question "did everything survive the reboot?".
+#
+# Only three things are supervised: the MCP service, n8n and the Hermes gateway
+# are launchd jobs with KeepAlive. The app, the MLX servers and ChromaDB are
+# started by scripts/start-services.sh and nothing restarts them -- after a
+# reboot they stay down until someone runs it.
+#
+# Usage: scripts/check-services.sh
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DOMAIN="gui/$(id -u)"
+rc=0
+
+green() { printf "  \033[32m%-12s\033[0m %s\n" "$1" "$2"; }
+red()   { printf "  \033[31m%-12s\033[0m %s\n" "$1" "$2"; rc=1; }
+
+check_port() {
+  if lsof -ti :"$1" >/dev/null 2>&1; then green "up" "$2 (:$1)"; else red "DOWN" "$2 (:$1)$3"; fi
+}
+
+check_job() {
+  local state
+  state="$(launchctl print "$DOMAIN/$1" 2>/dev/null | awk '/state = /{print $3; exit}')"
+  if [ -n "$state" ]; then green "$state" "$1"; else red "NOT LOADED" "$1"; fi
+}
+
+echo "launchd services (these restart themselves)"
+check_job com.pharmaitchat.mcp
+check_job com.pharmaitchat.n8n
+check_job ai.hermes.gateway
+
+echo
+echo "started by scripts/start-services.sh (nothing restarts these)"
+check_port 3000 "app"        "  -> run scripts/start-services.sh"
+check_port 8080 "MLX chat"   "  -> run scripts/start-services.sh"
+check_port 8081 "MLX embed"  "  -> run scripts/start-services.sh"
+check_port 8100 "ChromaDB"   "  -> run scripts/start-services.sh"
+
+echo
+echo "docker containers (return only if Docker Desktop starts at login)"
+check_port 7687 "Neo4j"   "  -> docker start neo4j"
+check_port 8888 "SearXNG" "  -> docker start searxng"
+
+echo
+echo "end to end"
+health="$(curl -sf -m 8 http://localhost:3000/api/health 2>/dev/null)"
+if [ -n "$health" ]; then
+  status="$(printf '%s' "$health" | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])' 2>/dev/null)"
+  [ "$status" = "healthy" ] && green "$status" "app health" || red "$status" "app health"
+  printf '%s' "$health" | python3 -c '
+import sys, json
+for name, c in json.load(sys.stdin).get("checks", {}).items():
+    print(f"    {c.get(\"status\",\"?\"):5} {name}")
+' 2>/dev/null
+else
+  red "DOWN" "app health endpoint"
+fi
+
+tg="$(python3 -c "
+import json
+try:
+    d = json.load(open('$HOME/.hermes/gateway_state.json'))
+    print(d.get('platforms', {}).get('telegram', {}).get('state', 'unknown'))
+except Exception:
+    print('unknown')
+" 2>/dev/null)"
+[ "$tg" = "connected" ] && green "connected" "Telegram" || red "$tg" "Telegram"
+
+code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST -H 'Content-Type: application/json' \
+  -d '{"question":"probe","gap_id":"probe","confidence":0.1}' http://localhost:5678/webhook/knowledge-gap 2>/dev/null)"
+[ "$code" = "200" ] && green "200" "gap-fill webhook" || red "$code" "gap-fill webhook"
+
+# Through the app rather than a direct bolt connection: no extra dependency, and
+# it proves the app can reach Neo4j, which is what actually matters.
+graph="$(curl -sf -m 8 -H "Authorization: Bearer $(cat "$PROJECT_DIR/data/run/api-token" 2>/dev/null)" \
+  http://localhost:3000/api/graph/stats 2>/dev/null)"
+if [ -n "$graph" ]; then
+  green "ok" "vendor graph: $(printf '%s' "$graph" | tr -d '\n' | cut -c1-90)"
+else
+  red "unreadable" "vendor graph (/api/graph/stats)"
+fi
+
+echo
+[ "$rc" -eq 0 ] && echo "all good" || echo "something is down — see the arrows above"
+exit "$rc"
