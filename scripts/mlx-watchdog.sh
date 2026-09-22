@@ -38,6 +38,15 @@ case "$stack" in
   *) exit 0 ;;
 esac
 
+# The watchlist tagger saturates this same single MLX server for ~20s an item,
+# so a probe issued mid-ingest queues behind the backlog and can exceed even a
+# 90s timeout. Two of those would have this watchdog restart MLX underneath the
+# ingest and destroy the run it was meant to protect. A saturated server is
+# busy, not wedged.
+if pgrep -f "watchlist.ts ingest" >/dev/null 2>&1; then
+  exit 0
+fi
+
 code="$(curl -s -o /dev/null -w '%{http_code}' -m "$PROBE_TIMEOUT" \
   -X POST "$MLX_URL/v1/chat/completions" \
   -H 'Content-Type: application/json' \
