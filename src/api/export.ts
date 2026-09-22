@@ -28,6 +28,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { createReadStream, existsSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isAudience } from "../services/artifact.js";
 import { hasExternalForm, internalOnlyKindMessage, isArtifactKind } from "../services/export-artifacts.js";
@@ -36,6 +37,7 @@ import { isExportFormat, openExportJobs } from "../services/export-jobs.js";
 import type { ExportFormat, ExportJob, ExportJobStore, ExportRequest } from "../services/export-jobs.js";
 import { downloadFilename, runExport } from "../services/export-pipeline.js";
 import type { PipelineDeps } from "../services/export-pipeline.js";
+import { sweepExpiredExports } from "../services/export-retention.js";
 import { buildPipelineDeps } from "../services/export-wiring.js";
 
 export type ValidationResult = { ok: true; value: ExportRequest } | { ok: false; error: string };
@@ -196,6 +198,8 @@ export interface PipelineRunnerDeps {
   jobs: ExportJobStore;
   buildPipelineDeps: () => Promise<PipelineDeps>;
   runExport: (id: string, deps: PipelineDeps) => Promise<void>;
+  // Optional so a test can leave housekeeping out of what it is asserting.
+  sweep?: () => Promise<unknown>;
 }
 
 // Wraps buildPipelineDeps() -> runExport() so a rejection that happens
@@ -236,6 +240,21 @@ export function createPipelineRunner(deps: PipelineRunnerDeps): (jobId: string) 
         );
       }
     }
+
+    // Retention runs here rather than on a schedule: a machine that never
+    // exports accumulates nothing, so sweeping after each export is
+    // self-limiting and needs no timer.
+    //
+    // Deliberately OUTSIDE the try above, in its own guard. Inside it, a
+    // sweep that could not delete a file would be caught by that catch and
+    // recorded as the export failing -- marking a job that succeeded as
+    // failed. Retention is housekeeping; it must never change the outcome
+    // the caller is polling for.
+    try {
+      await deps.sweep?.();
+    } catch (sweepErr: unknown) {
+      console.error(`export retention sweep failed:`, sweepErr instanceof Error ? sweepErr.message : sweepErr);
+    }
   };
 }
 
@@ -256,6 +275,8 @@ function lazyJobStore(): ExportJobStore {
     setStage: (id, stage) => ensure().setStage(id, stage),
     complete: (id, location) => ensure().complete(id, location),
     fail: (id, stage, message) => ensure().fail(id, stage, message),
+    listExpirable: (beforeIso) => ensure().listExpirable(beforeIso),
+    expire: (id) => ensure().expire(id),
     close: () => real?.close(),
   };
 }
@@ -267,6 +288,13 @@ const runPipeline = createPipelineRunner({
   jobs: exportJobs,
   buildPipelineDeps: () => buildPipelineDeps(exportJobs),
   runExport,
+  sweep: () =>
+    sweepExpiredExports({
+      jobs: exportJobs,
+      downloadDir: join(process.cwd(), "data", "exports"),
+      now: new Date(),
+      unlink,
+    }),
 });
 
 export default createExportRouter({

@@ -10,6 +10,7 @@ import type { ExportRouterDeps } from "../src/api/export.js";
 import { openExportJobs } from "../src/services/export-jobs.js";
 import type { ExportJobStore, ExportRequest } from "../src/services/export-jobs.js";
 import { downloadFilename } from "../src/services/export-pipeline.js";
+import type { PipelineDeps } from "../src/services/export-pipeline.js";
 import { ARTIFACT_KINDS, gather } from "../src/services/export-artifacts.js";
 import type { GatherDeps } from "../src/services/export-artifacts.js";
 
@@ -492,6 +493,56 @@ describe("createPipelineRunner", () => {
     expect(failedJob.stage).toBe("failed");
   });
 
+  // Retention is housekeeping that runs after each export. It must never
+  // change the outcome the caller is polling for: an earlier draft ran the
+  // sweep inside the runner's try, so a sweep that could not delete a file
+  // would have been caught by the same catch and recorded the SUCCESSFUL
+  // export as failed.
+  it("does not let a failing retention sweep fail an export that succeeded", async () => {
+    const jobs = openExportJobs(":memory:");
+    const id = jobs.create({
+      kind: "account-brief",
+      format: "pdf",
+      audience: "internal",
+      destination: "download",
+      account: "roche",
+    });
+    const runner = createPipelineRunner({
+      jobs,
+      buildPipelineDeps: async () => ({}) as unknown as PipelineDeps,
+      runExport: async () => {
+        jobs.complete(id, `/api/export/file/${id}`);
+      },
+      sweep: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+    });
+
+    await expect(runner(id)).resolves.toBeUndefined();
+
+    expect(jobs.get(id)?.stage).toBe("done");
+    expect(jobs.get(id)?.error).toBeNull();
+    jobs.close();
+  });
+
+  it("sweeps expired exports after a successful run", async () => {
+    const jobs = openExportJobs(":memory:");
+    let swept = 0;
+    const runner = createPipelineRunner({
+      jobs,
+      buildPipelineDeps: async () => ({}) as unknown as PipelineDeps,
+      runExport: async () => {},
+      sweep: async () => {
+        swept += 1;
+      },
+    });
+
+    await runner("job-1");
+
+    expect(swept).toBe(1);
+    jobs.close();
+  });
+
   it("does not let a failure inside the fail() call become an unhandled rejection", async () => {
     // jobs.fail() throws when the id does not exist (export-jobs.ts). This
     // fake reproduces that throw unconditionally, standing in for any
@@ -506,6 +557,8 @@ describe("createPipelineRunner", () => {
       fail: () => {
         throw new Error('no export job with id "job-1"');
       },
+      listExpirable: () => [],
+      expire: () => {},
       close: () => {},
     };
     const runner = createPipelineRunner({

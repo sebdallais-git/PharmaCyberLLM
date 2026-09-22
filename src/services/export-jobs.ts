@@ -39,7 +39,22 @@ export function isExportFormat(value: unknown): value is ExportFormat {
   return typeof value === "string" && (EXPORT_FORMATS as readonly string[]).includes(value);
 }
 
-export const STAGES = ["queued", "gathering", "narrating", "rendering", "delivering", "done", "failed"] as const;
+// "expired" is the one stage the pipeline never sets. It is a terminal
+// post-state written by the retention sweep (export-retention.ts) once a
+// finished download's bytes have been deleted: the row survives so a caller
+// polling the job learns the export expired instead of receiving the 404 of
+// an id that never existed. Because it is not "done", the download route's
+// existing check already refuses to serve it — no extra branch needed.
+export const STAGES = [
+  "queued",
+  "gathering",
+  "narrating",
+  "rendering",
+  "delivering",
+  "done",
+  "failed",
+  "expired",
+] as const;
 export type Stage = (typeof STAGES)[number];
 
 export function isStage(value: unknown): value is Stage {
@@ -69,6 +84,11 @@ export interface ExportJobStore {
   setStage(id: string, stage: Stage): void;
   complete(id: string, location: string): void;
   fail(id: string, stage: Stage, message: string): void;
+  // Finished `download` exports created before `beforeIso`, oldest first.
+  // Only those: a job still running has no file yet, a failed one never
+  // produced bytes, and icloud/telegram deliveries are not ours to sweep.
+  listExpirable(beforeIso: string): ExportJob[];
+  expire(id: string): void;
   close(): void;
 }
 
@@ -87,7 +107,13 @@ interface JobRow {
   created_at: string;
 }
 
-export function openExportJobs(path: string = join(process.cwd(), "data", "export-jobs.db")): ExportJobStore {
+// `now` is injected only so a test can create a job that is genuinely old.
+// Age is the input retention acts on, and the alternative — reaching into the
+// store to rewrite created_at — would test a row this code can never produce.
+export function openExportJobs(
+  path: string = join(process.cwd(), "data", "export-jobs.db"),
+  now: () => Date = () => new Date(),
+): ExportJobStore {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
   }
@@ -133,6 +159,16 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
   const setStageStmt = db.prepare(`UPDATE export_jobs SET stage = ? WHERE id = ?`);
   const completeStmt = db.prepare(`UPDATE export_jobs SET stage = 'done', location = ? WHERE id = ?`);
   const failStmt = db.prepare(`UPDATE export_jobs SET stage = 'failed', error = ? WHERE id = ?`);
+  // Only 'done' and only 'download': an unfinished job has no file yet, a
+  // failed one never produced bytes, and icloud/telegram files are not ours.
+  // Selecting on stage = 'done' is also what makes the sweep idempotent —
+  // once expired, a row can never be picked up again.
+  const expirableStmt = db.prepare(`
+    SELECT * FROM export_jobs
+    WHERE stage = 'done' AND destination = 'download' AND created_at < ?
+    ORDER BY created_at
+  `);
+  const expireStmt = db.prepare(`UPDATE export_jobs SET stage = 'expired' WHERE id = ?`);
 
   // ---- validation -----------------------------------------------------------
   // Mirrors watchlist-store.ts's assertKnownDomains/assertKnownSignal: throw
@@ -190,7 +226,7 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
         destination: request.destination,
         account: request.account ?? null,
         vendor: request.vendor ?? null,
-        createdAt: new Date().toISOString(),
+        createdAt: now().toISOString(),
       });
       return id;
     },
@@ -221,6 +257,18 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
       if (result.changes === 0) {
         throw new Error(`no export job with id "${id}"`);
       }
+    },
+
+    listExpirable(beforeIso: string): ExportJob[] {
+      return (expirableStmt.all(beforeIso) as JobRow[]).map(hydrateJob);
+    },
+
+    // Unlike its siblings this does NOT throw on an unknown id. The sweep
+    // reads a list of rows and then expires each one, so a row that has gone
+    // between the two means another sweep or a delete got there first --
+    // which is the outcome we wanted, not a wiring bug to surface.
+    expire(id: string): void {
+      expireStmt.run(id);
     },
 
     fail(id: string, stage: Stage, message: string): void {
