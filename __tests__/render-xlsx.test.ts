@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
-import ExcelJS from "exceljs";
+import { loadWorkbook } from "./helpers/load-workbook.js";
 import { renderXlsx } from "../src/services/render-xlsx.js";
 import type { Artifact } from "../src/services/artifact.js";
 
@@ -17,15 +17,13 @@ const artifact: Artifact = {
 
 describe("renderXlsx", () => {
   it("gives every section its own worksheet, named after the heading", async () => {
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(artifact));
+    const book = await loadWorkbook(await renderXlsx(artifact));
 
     expect(book.worksheets.map((w) => w.name)).toEqual(["By segment", "Summary", "Notes", "Sources"]);
   });
 
   it("writes a table's columns as the header row and its rows beneath", async () => {
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(artifact));
+    const book = await loadWorkbook(await renderXlsx(artifact));
     const sheet = book.getWorksheet("By segment");
 
     expect(sheet?.getRow(1).values).toEqual([undefined, "segment", "roche"]);
@@ -33,8 +31,7 @@ describe("renderXlsx", () => {
   });
 
   it("always writes a Sources sheet so a claim can be traced", async () => {
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(artifact));
+    const book = await loadWorkbook(await renderXlsx(artifact));
     const sheet = book.getWorksheet("Sources");
 
     expect(sheet?.getRow(2).values).toEqual([undefined, "c1", "Blocks & Files", "https://example.test/a"]);
@@ -51,8 +48,7 @@ describe("renderXlsx", () => {
       citations: [],
     };
 
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(forbidden));
+    const book = await loadWorkbook(await renderXlsx(forbidden));
 
     for (const name of book.worksheets.map((w) => w.name)) {
       expect(name).not.toMatch(/[:/]/);
@@ -69,8 +65,7 @@ describe("renderXlsx", () => {
       citations: [],
     };
 
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(long));
+    const book = await loadWorkbook(await renderXlsx(long));
 
     for (const name of book.worksheets.map((w) => w.name)) {
       expect(name.length).toBeLessThanOrEqual(31);
@@ -89,8 +84,7 @@ describe("renderXlsx", () => {
       citations: [],
     };
 
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(duplicate));
+    const book = await loadWorkbook(await renderXlsx(duplicate));
 
     const names = book.worksheets.map((w) => w.name).filter((name) => name.startsWith("Summary"));
     expect(names.length).toBe(2);
@@ -106,8 +100,7 @@ describe("renderXlsx", () => {
       citations: [{ id: "c1", title: "Blocks & Files", url: "https://example.test/a" }],
     };
 
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.load(await renderXlsx(clashing));
+    const book = await loadWorkbook(await renderXlsx(clashing));
 
     const sourcesSheets = book.worksheets.filter((w) => w.name.startsWith("Sources"));
     expect(sourcesSheets.length).toBe(2);

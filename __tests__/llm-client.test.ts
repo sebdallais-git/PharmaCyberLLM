@@ -322,7 +322,7 @@ describe("token budget and truncation", () => {
       sendSse(res, [{ choices: [{ delta: { reasoning: "thinking..." }, finish_reason: "length" }] }, "[DONE]"]),
     );
     const client = createLlmClient(stackFor(server.baseUrl));
-    const stats: { result?: { truncated?: boolean } } = {};
+    const stats: StatsCollector = {};
 
     for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on" }, stats)) void _;
 
@@ -334,7 +334,7 @@ describe("token budget and truncation", () => {
       sendSse(res, [{ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] }, "[DONE]"]),
     );
     const client = createLlmClient(stackFor(server.baseUrl));
-    const stats: { result?: { truncated?: boolean } } = {};
+    const stats: StatsCollector = {};
 
     for await (const _ of client.streamChat([{ role: "user", content: "q" }], {}, stats)) void _;
 
