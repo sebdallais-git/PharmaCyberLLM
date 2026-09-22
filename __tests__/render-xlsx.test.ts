@@ -39,4 +39,81 @@ describe("renderXlsx", () => {
 
     expect(sheet?.getRow(2).values).toEqual([undefined, "c1", "Blocks & Files", "https://example.test/a"]);
   });
+
+  it("replaces characters Excel forbids in a sheet name", async () => {
+    const forbidden: Artifact = {
+      title: "Forbidden characters",
+      audience: "internal",
+      generatedAt: "2026-09-22T10:00:00.000Z",
+      sections: [
+        { kind: "facts", heading: "Q3: storage/backup", items: [{ label: "accounts", value: "3" }] },
+      ],
+      citations: [],
+    };
+
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await renderXlsx(forbidden));
+
+    for (const name of book.worksheets.map((w) => w.name)) {
+      expect(name).not.toMatch(/[:/]/);
+    }
+  });
+
+  it("truncates a heading longer than Excel's 31-character limit", async () => {
+    const longHeading = "A".repeat(60);
+    const long: Artifact = {
+      title: "Long heading",
+      audience: "internal",
+      generatedAt: "2026-09-22T10:00:00.000Z",
+      sections: [{ kind: "facts", heading: longHeading, items: [{ label: "accounts", value: "3" }] }],
+      citations: [],
+    };
+
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await renderXlsx(long));
+
+    for (const name of book.worksheets.map((w) => w.name)) {
+      expect(name.length).toBeLessThanOrEqual(31);
+    }
+  });
+
+  it("de-duplicates two sections that share a heading", async () => {
+    const duplicate: Artifact = {
+      title: "Duplicate headings",
+      audience: "internal",
+      generatedAt: "2026-09-22T10:00:00.000Z",
+      sections: [
+        { kind: "facts", heading: "Summary", items: [{ label: "accounts", value: "3" }] },
+        { kind: "facts", heading: "Summary", items: [{ label: "accounts", value: "5" }] },
+      ],
+      citations: [],
+    };
+
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await renderXlsx(duplicate));
+
+    const names = book.worksheets.map((w) => w.name).filter((name) => name.startsWith("Summary"));
+    expect(names.length).toBe(2);
+    expect(new Set(names).size).toBe(2);
+  });
+
+  it("does not collide with the Sources sheet", async () => {
+    const clashing: Artifact = {
+      title: "Sources clash",
+      audience: "internal",
+      generatedAt: "2026-09-22T10:00:00.000Z",
+      sections: [{ kind: "facts", heading: "Sources", items: [{ label: "accounts", value: "3" }] }],
+      citations: [{ id: "c1", title: "Blocks & Files", url: "https://example.test/a" }],
+    };
+
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await renderXlsx(clashing));
+
+    const sourcesSheets = book.worksheets.filter((w) => w.name.startsWith("Sources"));
+    expect(sourcesSheets.length).toBe(2);
+
+    const citationsSheet = sourcesSheets.find((w) => w.getRow(2).values && (w.getRow(2).values as unknown[])[1] === "c1");
+    expect(citationsSheet).toBeDefined();
+    expect(citationsSheet?.getRow(2).values).toEqual([undefined, "c1", "Blocks & Files", "https://example.test/a"]);
+  });
 });
