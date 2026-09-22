@@ -372,6 +372,21 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     }
 
+    // A turn can end cleanly having produced no answer at all: with thinking
+    // on, reasoning spends the same budget, so the ceiling can be reached
+    // before the answer starts. That used to render as an empty bubble beside
+    // a token count, which looks like a broken app rather than a spent budget.
+    if (statsCollector.result?.truncated && fullResponse.length === 0) {
+      const note =
+        thinking && thinking !== "off"
+          ? "The model used its entire token budget reasoning and never started the answer. " +
+            "Set Thinking to off for this question, or ask something narrower."
+          : "The model hit its token limit before writing anything.";
+      res.write(`data: ${JSON.stringify({ error: note })}\n\n`);
+    } else if (statsCollector.result?.truncated) {
+      res.write(`data: ${JSON.stringify({ truncated: true })}\n\n`);
+    }
+
     // Store response metadata and generate response_id for feedback
     const responseId = createResponseEntry(
       message,

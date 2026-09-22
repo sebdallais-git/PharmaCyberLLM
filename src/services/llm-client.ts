@@ -28,6 +28,10 @@ export interface TokenStats {
   tokensPerSecond: number;
   ttftMs: number;
   tokenCountSource: "usage" | "chunks";
+  // The model hit the token ceiling instead of finishing. Without this a turn
+  // that spent its whole budget reasoning is indistinguishable from one that
+  // simply had nothing to say, and the UI renders an empty answer either way.
+  truncated: boolean;
 }
 
 export interface StatsCollector {
@@ -54,7 +58,7 @@ interface Usage {
 interface ChatCompletionChunk {
   // mlx_lm returns model thinking as a sibling of `content`, never as inline
   // <think> tags. Verified against mlx_lm 0.31.3 on 2026-09-21.
-  choices?: Array<{ delta?: { content?: string | null; reasoning?: string | null } }>;
+  choices?: Array<{ delta?: { content?: string | null; reasoning?: string | null }; finish_reason?: string | null }>;
   usage?: Usage | null;
 }
 
@@ -82,6 +86,11 @@ const DEFAULT_TEMPERATURE = 0.3;
 const PROBE_TIMEOUT_MS = 3000;
 // Stacks have different server defaults (mlx_lm.server stops at 512), so the client always sends an explicit limit.
 const DEFAULT_MAX_TOKENS = 4096;
+// Reasoning is billed against the same ceiling as the answer, and a thinking
+// model routinely spends thousands of tokens before writing a word. 4096 was
+// sized for an answer alone: on a hard question the budget was gone before the
+// answer began, so the turn ended cleanly with no content at all.
+const DEFAULT_MAX_TOKENS_THINKING = 24576;
 
 // Qwen3-Embedding expects an instruction on queries only; documents are embedded as-is
 export const QUERY_INSTRUCTION =
@@ -112,7 +121,7 @@ export function parseSseLines(buffer: string): { events: string[]; rest: string 
   return { events, rest };
 }
 
-export function computeTokenStats(input: TimingInput): TokenStats {
+export function computeTokenStats(input: TimingInput): Omit<TokenStats, "truncated"> {
   const completionTokens = input.usage?.completion_tokens ?? input.contentChunks;
   const promptTokens = input.usage?.prompt_tokens ?? 0;
   const ttftMs = input.firstTokenAt === null ? 0 : input.firstTokenAt - input.start;
@@ -155,7 +164,9 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
       temperature: options.temperature ?? DEFAULT_TEMPERATURE,
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
-      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      max_tokens:
+        options.maxTokens ??
+        (options.thinking && options.thinking !== "off" ? DEFAULT_MAX_TOKENS_THINKING : DEFAULT_MAX_TOKENS),
       ...thinkingBody(stack, options.thinking ?? "off"),
     };
   }
@@ -175,6 +186,7 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
     let firstTokenAt: number | null = null;
     let lastTokenAt = start;
     let contentChunks = 0;
+    let finishReason: string | null = null;
     let usage: Usage | null = null;
     let finished = false;
 
@@ -194,6 +206,8 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
           }
           const chunk = JSON.parse(data) as ChatCompletionChunk;
           if (chunk.usage) usage = chunk.usage;
+          const reason = chunk.choices?.[0]?.finish_reason;
+          if (reason) finishReason = reason;
           const reasoning = chunk.choices?.[0]?.delta?.reasoning;
           if (reasoning) options.onReasoning?.(reasoning);
 
@@ -215,7 +229,10 @@ export function createLlmClient(stack: StackConfig, now: () => number = () => pe
     }
 
     if (stats) {
-      stats.result = computeTokenStats({ start, firstTokenAt, lastTokenAt, contentChunks, usage });
+      stats.result = {
+        ...computeTokenStats({ start, firstTokenAt, lastTokenAt, contentChunks, usage }),
+        truncated: finishReason === "length",
+      };
     }
   }
 

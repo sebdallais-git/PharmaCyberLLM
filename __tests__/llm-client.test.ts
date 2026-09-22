@@ -118,6 +118,7 @@ describe("createLlmClient", () => {
       tokensPerSecond: 10,
       ttftMs: 250,
       tokenCountSource: "usage",
+      truncated: false,
     });
   });
 
@@ -282,5 +283,58 @@ describe("reasoning from the stream", () => {
 
     expect(reasoning.join("")).toBe("weighing options");
     expect(answer).toBe("the answer");
+  });
+});
+
+describe("token budget and truncation", () => {
+  // Reasoning spends the same budget as the answer. 4096 was sized for an
+  // answer alone, so with thinking on the model could burn the whole budget
+  // reasoning and emit no content at all -- the stream ended cleanly and the UI
+  // rendered an empty bubble beside "4000 out".
+  it("gives thinking turns a bigger budget than answer-only turns", async () => {
+    server = await startFakeServer((_req, res) => sendSse(res, [delta("hi"), "[DONE]"]));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }])) void _;
+    const answerOnly = (server.requests.at(-1)?.body as Record<string, unknown>).max_tokens as number;
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on" })) void _;
+    const thinking = (server.requests.at(-1)?.body as Record<string, unknown>).max_tokens as number;
+
+    expect(thinking).toBeGreaterThan(answerOnly);
+  });
+
+  it("still honours an explicit maxTokens", async () => {
+    server = await startFakeServer((_req, res) => sendSse(res, [delta("hi"), "[DONE]"]));
+    const client = createLlmClient(stackFor(server.baseUrl));
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on", maxTokens: 512 })) void _;
+
+    expect((server.requests.at(-1)?.body as Record<string, unknown>).max_tokens).toBe(512);
+  });
+
+  it("reports that a turn was cut off at the token ceiling", async () => {
+    // Without this the caller cannot tell an empty answer from a truncated one.
+    server = await startFakeServer((_req, res) =>
+      sendSse(res, [{ choices: [{ delta: { reasoning: "thinking..." }, finish_reason: "length" }] }, "[DONE]"]),
+    );
+    const client = createLlmClient(stackFor(server.baseUrl));
+    const stats: { result?: { truncated?: boolean } } = {};
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }], { thinking: "on" }, stats)) void _;
+
+    expect(stats.result?.truncated).toBe(true);
+  });
+
+  it("does not mark a naturally finished turn as truncated", async () => {
+    server = await startFakeServer((_req, res) =>
+      sendSse(res, [{ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] }, "[DONE]"]),
+    );
+    const client = createLlmClient(stackFor(server.baseUrl));
+    const stats: { result?: { truncated?: boolean } } = {};
+
+    for await (const _ of client.streamChat([{ role: "user", content: "q" }], {}, stats)) void _;
+
+    expect(stats.result?.truncated).toBe(false);
   });
 });

@@ -370,6 +370,14 @@ async function sendMessage() {
           streamDone = true;
           break;
         }
+        if (data.truncated) {
+          // The answer exists but stops mid-sentence; say so rather than
+          // letting it look like the model simply finished there.
+          const note = document.createElement("div");
+          note.className = "reasoning-step-text";
+          note.textContent = "Cut off at the token limit — the answer above is incomplete.";
+          wrapperDiv.appendChild(note);
+        }
         if (data.thinking) {
           // Model cognition, kept separate from `data.reasoning`, which is RAG
           // pipeline status ("searching knowledge base"). Different things.
