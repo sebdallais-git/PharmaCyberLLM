@@ -1,10 +1,10 @@
 // Export job store.
 //
-// Persists the async export pipeline's state. `stage` is a RESUME POINT, not
-// a progress label: narration runs at roughly 3.4 tok/s on a single local
-// model server, so an export never completes synchronously, and a job must
-// be resumable from wherever it left off. What the stage sequence buys today
-// is diagnosability, not resumability (R2): a failure records exactly which
+// Persists the async export pipeline's state. Narration runs at roughly
+// 3.4 tok/s on a single local model server, so an export never completes
+// synchronously and the caller polls a job instead of holding a connection.
+// What the stage sequence buys today is diagnosability, not resumability
+// (R2 -- nothing retries or resumes a job): a failure records exactly which
 // stage it happened in, so an export that never arrived is a one-line read
 // of `error` instead of a guess. Task 8's pipeline drives the stage
 // transitions -- this store only has to make sure each transition is

@@ -358,13 +358,18 @@ describe("GET /api/export/file/:id", () => {
     expect(disposition).not.toContain("/");
   });
 
-  // The read-side mirror of export-delivery.ts's write-side containment
-  // check. The filename is no longer caller-supplied, but it is still built
-  // from a stored job id, so the containment check stays: a bare regex-strip
-  // of disallowed characters leaves ".." intact (dots are inside [a-z0-9._-]),
-  // so escape must be refused by path resolution and containment, not by
-  // character stripping alone.
-  it("refuses to serve a file whose stored job id would escape the download directory", async () => {
+  // A stored job id holding a path must never address a file outside the
+  // download directory.
+  //
+  // Be precise about WHICH guard stops this, because an earlier version of
+  // this test claimed the wrong one: `resolveContainedPath` calls basename()
+  // first, so the id collapses to its last segment and the resolved path is
+  // already inside downloadDir -- the 404 then comes from the file not being
+  // there, and the strict-prefix containment check never fires. Containment
+  // is the backstop behind basename(), not the guard doing the work here.
+  // What this test pins is the OUTCOME the route owes a caller: bytes from
+  // outside the directory are never served, whatever a row contains.
+  it("never serves a file outside the download directory for a job id holding a path", async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "export-route-outside-"));
     writeFileSync(join(outsideDir, "secret.pdf"), "top secret");
     const hostileId = `${outsideDir}/secret`;
