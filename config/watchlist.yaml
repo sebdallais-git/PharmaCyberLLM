@@ -30,7 +30,23 @@ customers:
       - Roche Diagnostics
       - Chugai
     feeds:
-      rss: ["https://www.roche.com/med_news_xml.xml"]
+      # med_news_xml.xml is Roche's MEDICAL feed: of 10 entries it carried on
+      # 2026-09-21, 6 were drug approvals and trial results (Ocrevus, Susvimo,
+      # Vabysmo, Enspryng...). Useful to a pharma analyst, useless to an IT
+      # account team -- you cannot open a CIO conversation with an Ocrevus
+      # approval. Kept, because the occasional corporate item does come through
+      # it (the Boston Innovation Center opening did).
+      #
+      # The second feed is the IT-scoped one. Roche publishes no corporate RSS
+      # (probed rss, news_xml, corp_news_xml, media/releases.xml and the media
+      # pages' autodiscovery on 2026-09-22 -- all 404 or JS-rendered), so this
+      # uses the Google News search feed that web-search.ts already relies on.
+      # Attached to the entity rather than to topics.*, because entity feeds run
+      # in the customers pass before the ingest cap bites, and all 188 topic
+      # queries currently yield nothing for exactly that reason.
+      rss:
+        - "https://www.roche.com/med_news_xml.xml"
+        - "https://news.google.com/rss/search?q=Roche+(AI+OR+cloud+OR+datacenter+OR+%22digital+transformation%22+OR+IT)&hl=en-US&gl=US&ceid=US:en"
       ir_page: "https://www.roche.com/investors/reports"
     # no edgar: Roche does not file with the SEC (absent from SEC company_tickers.json)
     verifiedAt: "2026-09-20"
