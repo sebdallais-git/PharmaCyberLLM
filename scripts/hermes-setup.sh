@@ -21,6 +21,7 @@ LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
 MCP_HEALTH_URL="${MCP_HEALTH_URL:-http://127.0.0.1:3200/healthz}"
 MCP_LABEL="com.pharmaitchat.mcp"
 N8N_LABEL="com.pharmaitchat.n8n"
+JEV_LABEL="com.pharmaitchat.jev"
 GATEWAY_LABEL="ai.hermes.gateway"
 PLUGIN_NAME="pharmaitchat-switch"
 # Only the plugin's own files: the tests next to it in the repo stay out of ~/.hermes
@@ -198,6 +199,8 @@ install_services() {
   done
   log "Installed and started $N8N_LABEL"
 
+  install_jev_service
+
   "$HERMES_BIN" gateway install --force --start-now --start-on-login
   log "Installed the Hermes gateway service"
 
@@ -220,6 +223,34 @@ install_services() {
       sleep 2
     done
   fi
+}
+
+# The scorer's own launchd job, installed as part of install_services. It
+# aborts (like the mcp-token guard above) when open-jev isn't checked out or
+# the Hugging Face token isn't in place yet, since Gemma 3 4B is gated and
+# will silently hang without it (see scripts/run-jev.sh).
+install_jev_service() {
+  local plist domain jev_dir
+  jev_dir="${JEV_DIR:-$PROJECT_DIR/../open-jev}"
+  [ -x "$jev_dir/.venv/bin/openjev" ] || { log "No open-jev venv at $jev_dir (run: cd $jev_dir && make setup)"; exit 1; }
+  [ -s "$RUN_DIR/hf-token" ] || { log "No $RUN_DIR/hf-token — Gemma 3 4B is gated and will not download"; exit 1; }
+  mkdir -p "$LAUNCH_AGENTS_DIR" "$PROJECT_DIR/data/logs"
+  plist="$LAUNCH_AGENTS_DIR/$JEV_LABEL.plist"
+  sed -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+      -e "s|__JEV_DIR__|$jev_dir|g" \
+      -e "s|__JEV_HOST__|${JEV_HOST:-127.0.0.1}|g" \
+      -e "s|__PATH__|/usr/bin:/bin:/usr/sbin:/sbin|g" \
+      "$TEMPLATE_DIR/$JEV_LABEL.plist.template" >"$plist"
+  domain="gui/$(id -u)"
+  "$LAUNCHCTL_BIN" bootout "$domain/$JEV_LABEL" >/dev/null 2>&1 || true
+  # launchd can still be tearing the old job down and answers "Input/output error"; give it a few tries
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$LAUNCHCTL_BIN" bootstrap "$domain" "$plist"; then break; fi
+    if [ "$attempt" -eq 5 ]; then log "launchctl bootstrap failed 5 times for $JEV_LABEL"; exit 1; fi
+    sleep 1
+  done
+  log "Installed and started $JEV_LABEL"
 }
 
 install_plugin() {

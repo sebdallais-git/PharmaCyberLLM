@@ -29,6 +29,7 @@ interface Sandbox {
   runDir: string;
   agentsDir: string;
   calls: string;
+  jevDir: string;
 }
 
 // Temp HERMES_HOME, run dir with both token files, and stub hermes/launchctl that log their arguments
@@ -39,13 +40,20 @@ function sandbox(): Sandbox {
   const runDir = join(root, "run");
   const agentsDir = join(root, "LaunchAgents");
   const calls = join(root, "calls.log");
+  const jevDir = join(root, "open-jev");
   mkdirSync(runDir);
   writeFileSync(join(runDir, "api-token"), `${API_TOKEN}\n`);
   writeFileSync(join(runDir, "mcp-token"), `${MCP_TOKEN}\n`);
+  // install_jev_service (called from install-services) guards on both of
+  // these: a fake venv stands in for a real open-jev checkout.
+  writeFileSync(join(runDir, "hf-token"), "hf-token-value\n");
+  mkdirSync(join(jevDir, ".venv", "bin"), { recursive: true });
+  writeFileSync(join(jevDir, ".venv", "bin", "openjev"), "#!/bin/bash\nexit 0\n");
+  chmodSync(join(jevDir, ".venv", "bin", "openjev"), 0o755);
   for (const name of ["hermes", "launchctl"]) {
     writeStub(join(root, name), name);
   }
-  return { root, home, runDir, agentsDir, calls };
+  return { root, home, runDir, agentsDir, calls, jevDir };
 }
 
 // Logs its arguments to $STUB_CALLS; extra lines let a test decide the exit status
@@ -77,6 +85,7 @@ function setup(box: Sandbox, args: string[], extraEnv: Record<string, string> = 
       LAUNCHCTL_BIN: join(box.root, "launchctl"),
       MCP_HEALTH_URL: "http://127.0.0.1:9/healthz",
       STUB_CALLS: box.calls,
+      JEV_DIR: box.jevDir,
       ...extraEnv,
     },
   });
@@ -390,9 +399,25 @@ describe("hermes-setup.sh install-services", () => {
     expect(plist).toContain(`<string>${projectDir}/scripts/run-mcp.sh</string>`);
     expect(plist).not.toContain("__");
     expect(plist).not.toContain(MCP_TOKEN);
+    const jevPlist = readFileSync(join(box.agentsDir, "com.pharmaitchat.jev.plist"), "utf-8");
+    expect(jevPlist).toContain(`<string>${projectDir}/scripts/run-jev.sh</string>`);
+    expect(jevPlist).toContain(`<key>JEV_DIR</key><string>${box.jevDir}</string>`);
+    expect(jevPlist).not.toContain("__");
     const calls = readFileSync(box.calls, "utf-8");
     expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmaitchat\.mcp\.plist\]/);
+    expect(calls).toMatch(/launchctl \[bootstrap\] \[gui\/\d+\] \[.*com\.pharmaitchat\.jev\.plist\]/);
     expect(calls).toContain("hermes [gateway] [install] [--force] [--start-now] [--start-on-login]");
+  });
+
+  it("aborts before starting the jev service when the Hugging Face token is missing", () => {
+    const box = sandbox();
+    rmSync(join(box.runDir, "hf-token"));
+
+    const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("hf-token");
+    expect(existsSync(join(box.agentsDir, "com.pharmaitchat.jev.plist"))).toBe(false);
   });
 
   it("bakes MCP_HOST into the plist so a LAN move survives a reboot", () => {
