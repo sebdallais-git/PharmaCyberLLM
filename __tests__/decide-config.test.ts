@@ -48,4 +48,39 @@ describe("parseDecideConfig", () => {
     expect(() => parseDecideConfig(null)).toThrow();
     expect(() => parseDecideConfig("thresholds")).toThrow();
   });
+
+  it("rejects an array as the top-level document", () => {
+    expect(() => parseDecideConfig([1, 2, 3])).toThrow(/expected a YAML mapping/i);
+  });
+
+  it("rejects thresholds that is an array instead of an object", () => {
+    expect(() => parseDecideConfig({ ...good, thresholds: [0.85, 0.5] })).toThrow(/thresholds must be a mapping/i);
+  });
+
+  it("rejects a missing model field", () => {
+    const { model: _drop, ...noModel } = good;
+    expect(() => parseDecideConfig(noModel)).toThrow(/model/i);
+  });
+
+  it("rejects a non-string model field", () => {
+    expect(() => parseDecideConfig({ ...good, model: 123 })).toThrow(/model/i);
+  });
+
+  it("rejects a missing timeout_ms field", () => {
+    const { timeout_ms: _drop, ...noTimeout } = good;
+    expect(() => parseDecideConfig(noTimeout)).toThrow(/timeout_ms/i);
+  });
+
+  it("rejects a non-numeric timeout_ms field", () => {
+    expect(() => parseDecideConfig({ ...good, timeout_ms: "15000" })).toThrow(/timeout_ms/i);
+  });
+
+  it("rejects a non-finite timeout_ms field", () => {
+    expect(() => parseDecideConfig({ ...good, timeout_ms: Infinity })).toThrow(/timeout_ms/i);
+  });
+
+  it("rejects a non-positive timeout_ms field", () => {
+    expect(() => parseDecideConfig({ ...good, timeout_ms: 0 })).toThrow(/timeout_ms/i);
+    expect(() => parseDecideConfig({ ...good, timeout_ms: -100 })).toThrow(/timeout_ms/i);
+  });
 });

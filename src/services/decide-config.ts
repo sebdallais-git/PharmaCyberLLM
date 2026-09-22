@@ -29,6 +29,11 @@ export interface DecideConfig {
   thresholds: DecideThresholds;
 }
 
+// Type guard that distinguishes objects from arrays: typeof handles both as "object"
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function requireString(raw: Record<string, unknown>, key: string): string {
   const value = raw[key];
   if (typeof value !== "string" || value.trim() === "") {
@@ -46,17 +51,15 @@ function requireProbability(raw: Record<string, unknown>, key: string): number {
 }
 
 export function parseDecideConfig(raw: unknown): DecideConfig {
-  if (typeof raw !== "object" || raw === null) {
+  if (!isRecord(raw)) {
     throw new Error("decide config: expected a YAML mapping");
   }
-  const doc = raw as Record<string, unknown>;
-  const thresholdsRaw = doc.thresholds;
-  if (typeof thresholdsRaw !== "object" || thresholdsRaw === null) {
+  const thresholdsRaw = raw.thresholds;
+  if (!isRecord(thresholdsRaw)) {
     throw new Error("decide config: thresholds must be a mapping");
   }
-  const t = thresholdsRaw as Record<string, unknown>;
-  const resolved = requireProbability(t, "resolved");
-  const unresolved = requireProbability(t, "unresolved");
+  const resolved = requireProbability(thresholdsRaw, "resolved");
+  const unresolved = requireProbability(thresholdsRaw, "unresolved");
   // Strictly greater: equal thresholds collapse the review band to nothing,
   // and inverted ones invert every verdict.
   if (!(resolved > unresolved)) {
@@ -65,14 +68,14 @@ export function parseDecideConfig(raw: unknown): DecideConfig {
     );
   }
 
-  const timeout = doc.timeout_ms;
+  const timeout = raw.timeout_ms;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new Error(`decide config: "timeout_ms" must be a positive number`);
   }
 
   return {
-    baseUrl: requireString(doc, "base_url"),
-    model: requireString(doc, "model"),
+    baseUrl: requireString(raw, "base_url"),
+    model: requireString(raw, "model"),
     timeoutMs: timeout,
     thresholds: { resolved, unresolved },
   };
