@@ -50,4 +50,32 @@ describe("assertExternalSafe", () => {
     });
     expect(() => assertExternalSafe(artifact)).not.toThrow();
   });
+
+  it("rejects an external artifact whose prose leaks competitive framing", () => {
+    const artifact = base({
+      sections: [
+        {
+          kind: "prose",
+          heading: "Summary",
+          body: "We are well positioned to displace the incumbent.",
+          cites: [],
+        },
+      ],
+    });
+    expect(() => assertExternalSafe(artifact)).toThrow(/displace/i);
+  });
+
+  it("rejects an external artifact whose chart spec carries an internal field", () => {
+    const artifact = base({
+      sections: [{ kind: "chart", heading: "Position", spec: { field: "confidence" } }],
+    });
+    expect(() => assertExternalSafe(artifact)).toThrow(/confidence/i);
+  });
+
+  it("allows external prose that says nothing internal", () => {
+    const artifact = base({
+      sections: [{ kind: "prose", heading: "Summary", body: "Roche is scaling its AI estate.", cites: [] }],
+    });
+    expect(() => assertExternalSafe(artifact)).not.toThrow();
+  });
 });

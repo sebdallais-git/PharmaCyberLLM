@@ -32,7 +32,8 @@ export interface Artifact {
 
 // Words that must never appear in an external artifact's structure. The
 // gatherer omits these sections rather than redacting them, so this is a
-// backstop against a gatherer bug, not the primary control.
+// backstop against a gatherer bug, not the primary control. Every section
+// kind is scanned, including model-written prose and chart specs.
 const INTERNAL_ONLY = ["incumben", "confidence", "displace", "defend", "greenfield"];
 
 export function assertExternalSafe(artifact: Artifact): void {
@@ -43,6 +44,8 @@ export function assertExternalSafe(artifact: Artifact): void {
     haystack.push(section.heading);
     if (section.kind === "table") haystack.push(...section.columns, ...section.rows.flat());
     if (section.kind === "facts") haystack.push(...section.items.map((i) => `${i.label} ${i.value}`));
+    if (section.kind === "prose") haystack.push(section.body);
+    if (section.kind === "chart") haystack.push(JSON.stringify(section.spec));
   }
 
   for (const term of INTERNAL_ONLY) {
