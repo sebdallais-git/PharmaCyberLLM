@@ -94,4 +94,67 @@ describe("deliver", () => {
       expect(deps.written[0].path).toBe("/tmp/exports/evil.pdf");
     });
   });
+
+  // A filename that sanitises down to nothing (or to "." or "..") must never
+  // reach writeFile as the destination directory itself. path.resolve()
+  // silently discards empty and "." segments, so resolve(dir, "") and
+  // resolve(dir, ".") both equal `dir` — a guard that only checks
+  // resolvedPath !== resolvedDir gets fooled by exactly these inputs.
+  describe("degenerate filenames", () => {
+    const destinations: Array<{ destination: "download" | "icloud"; dir: string }> = [
+      { destination: "download", dir: "/tmp/exports" },
+      { destination: "icloud", dir: "/tmp/icloud/PharmaITChat_Artifacts" },
+    ];
+
+    for (const { destination, dir } of destinations) {
+      it(`rejects an empty filename for ${destination} instead of writing to the directory itself`, async () => {
+        const deps = fakeDeps();
+        const degenerate = { filename: "", bytes: Buffer.from("x") };
+
+        await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
+
+        expect(deps.written.some((w) => w.path === dir)).toBe(false);
+      });
+
+      it(`rejects a "." filename for ${destination} instead of writing to the directory itself`, async () => {
+        const deps = fakeDeps();
+        const degenerate = { filename: ".", bytes: Buffer.from("x") };
+
+        await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
+
+        expect(deps.written.some((w) => w.path === dir)).toBe(false);
+      });
+
+      it(`rejects a ".." filename for ${destination} instead of writing to the directory itself`, async () => {
+        const deps = fakeDeps();
+        const degenerate = { filename: "..", bytes: Buffer.from("x") };
+
+        await expect(deliver(degenerate, destination, deps)).rejects.toThrow();
+
+        expect(deps.written.some((w) => w.path === dir)).toBe(false);
+      });
+
+      it(`writes a "..." filename for ${destination} to a real child path, not the directory itself`, async () => {
+        // Three dots have no special meaning to the filesystem (unlike "."
+        // or ".."), so this is a legitimate — if odd — filename and must be
+        // accepted, landing strictly inside the destination directory.
+        const deps = fakeDeps();
+        const dotsOnly = { filename: "...", bytes: Buffer.from("x") };
+
+        await deliver(dotsOnly, destination, deps);
+
+        expect(deps.written[0].path).toBe(`${dir}/...`);
+        expect(deps.written[0].path).not.toBe(dir);
+      });
+
+      it(`rejects a filename made only of characters the sanitiser strips, for ${destination}, instead of writing to the directory itself`, async () => {
+        const deps = fakeDeps();
+        const strippedAway = { filename: "///", bytes: Buffer.from("x") };
+
+        await expect(deliver(strippedAway, destination, deps)).rejects.toThrow();
+
+        expect(deps.written.some((w) => w.path === dir)).toBe(false);
+      });
+    }
+  });
 });
