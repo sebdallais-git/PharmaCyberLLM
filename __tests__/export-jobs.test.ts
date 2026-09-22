@@ -109,4 +109,21 @@ describe("export jobs", () => {
     expect(jobs.get(id)?.stage).toBe("queued");
     jobs.close();
   });
+
+  // complete() and fail() must not silently no-op on an unknown id: get()
+  // already returns null for one, and a silent no-op would turn a wiring bug
+  // (a stale or mistyped id) into a job that looks like a slow export forever.
+  it("throws when completing an unknown job id", () => {
+    const jobs = openExportJobs(":memory:");
+
+    expect(() => jobs.complete("nope", "/api/export/file/x.pdf")).toThrow(/nope/);
+    jobs.close();
+  });
+
+  it("throws when failing an unknown job id", () => {
+    const jobs = openExportJobs(":memory:");
+
+    expect(() => jobs.fail("nope", "narrating", "boom")).toThrow(/nope/);
+    jobs.close();
+  });
 });

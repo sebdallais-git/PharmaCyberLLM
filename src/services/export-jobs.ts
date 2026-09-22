@@ -3,12 +3,12 @@
 // Persists the async export pipeline's state. `stage` is a RESUME POINT, not
 // a progress label: narration runs at roughly 3.4 tok/s on a single local
 // model server, so an export never completes synchronously, and a job must
-// be resumable from wherever it left off. Gathered facts are checkpointed
-// before narration so a retry re-narrates without re-gathering; a rendered
-// file is checkpointed before delivery so a delivery failure re-delivers
-// without re-rendering. Task 8's pipeline drives the stage transitions --
-// this store only has to make sure each transition is durable and that no
-// unknown value ever reaches a row.
+// be resumable from wherever it left off. What the stage sequence buys today
+// is diagnosability, not resumability (R2): a failure records exactly which
+// stage it happened in, so an export that never arrived is a one-line read
+// of `error` instead of a guess. Task 8's pipeline drives the stage
+// transitions -- this store only has to make sure each transition is
+// durable and that no unknown value ever reaches a row.
 //
 // Follows the same better-sqlite3 pattern as watchlist-store.ts: WAL journal
 // mode, CREATE TABLE IF NOT EXISTS, prepared statements, a store object
@@ -95,6 +95,18 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
 
+  // R2: this schema has no column for a checkpointed gathered-fact set or an
+  // interim rendered-file path, though an earlier draft of the module
+  // comment above claimed both. Nothing in this plan ever READS a
+  // checkpoint: there is no retry path, no resume path, and no re-run
+  // endpoint anywhere across the twelve tasks. A failed export is
+  // re-requested as a brand new job with a new id, which re-runs every
+  // stage regardless of what a prior attempt stored. A column whose only
+  // consumer does not exist is data nothing reads, which is the speculative
+  // generality this project's review rubric treats as a defect -- so these
+  // columns are deliberately absent. When a retry path is actually built,
+  // this store gains them then, the same way watchlist-store.ts went to
+  // schema v3 with a guarded ALTER TABLE.
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_jobs (
       id TEXT PRIMARY KEY,
@@ -194,12 +206,18 @@ export function openExportJobs(path: string = join(process.cwd(), "data", "expor
     },
 
     complete(id: string, location: string): void {
-      completeStmt.run(location, id);
+      const result = completeStmt.run(location, id);
+      if (result.changes === 0) {
+        throw new Error(`no export job with id "${id}"`);
+      }
     },
 
     fail(id: string, stage: Stage, message: string): void {
       assertKnownStage(stage);
-      failStmt.run(`${stage}: ${message}`, id);
+      const result = failStmt.run(`${stage}: ${message}`, id);
+      if (result.changes === 0) {
+        throw new Error(`no export job with id "${id}"`);
+      }
     },
 
     close(): void {
