@@ -819,11 +819,11 @@ PharmaITChat/
 ├── src/
 │   ├── server.ts                 # Express + HTTPS, auth middleware, index checks, news agent schedule
 │   ├── config/
-│   │   ├── llm-stacks.ts         # Ollama, MLX and oMLX stack definitions
+│   │   ├── llm-stacks.ts         # Ollama, MLX, oMLX and Splash stack definitions
 │   │   └── env-names.ts          # PHARMAITCHAT_* with a PHARMALLM_* fallback
 │   ├── api/                      # auth, chat, knowledge, agent, feedback, dashboard, graph, bench, llm, v1, stack
 │   ├── services/
-│   │   ├── llm-client.ts         # One OpenAI-compatible client for all three stacks
+│   │   ├── llm-client.ts         # One OpenAI-compatible client for all four stacks
 │   │   ├── model-gateway.ts      # /v1 body building and forwarding
 │   │   ├── index-guard.ts        # Refuses search on mismatched indexes
 │   │   ├── reindex.ts            # Rebuilds the active stack's indexes
