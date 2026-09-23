@@ -28,6 +28,14 @@ describe("thinking capability per stack", () => {
     expect(thinkingBody(stacks.ollama, "high")).toEqual({ reasoning_effort: "high" });
   });
 
+  // Splash's server takes a graded reasoning_effort (none|minimal|low|medium|high|xhigh|max), like
+  // Ollama. Sending it mlx's chat_template_kwargs was a real bug, fixed on main in a35c172.
+  it("maps Splash levels onto reasoning_effort, not the MLX chat-template flag", () => {
+    expect(thinkingLevels(stacks.splash)).toEqual(["off", "low", "medium", "high"]);
+    expect(thinkingBody(stacks.splash, "off")).toEqual({ reasoning_effort: "none" });
+    expect(thinkingBody(stacks.splash, "high")).toEqual({ reasoning_effort: "high" });
+  });
+
   it("rejects a level the active stack does not declare", () => {
     // A silent downgrade is what makes a graded UI a lie on a binary stack.
     expect(() => thinkingBody(stacks.mlx, "high")).toThrow(/high.*mlx/i);

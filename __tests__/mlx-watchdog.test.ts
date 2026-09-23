@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildStacks } from "../src/config/llm-stacks.js";
 
 const scriptsDir = join(process.cwd(), "scripts");
 const switchStack = readFileSync(join(scriptsDir, "switch-stack.sh"), "utf-8");
@@ -41,6 +42,8 @@ describe("switch-stack.sh chat-endpoint", () => {
     expect(chatEndpoint("omlx").stdout.trim()).toBe(
       `http://localhost:${shellVar("OMLX_PORT")} ${shellVar("OMLX_CHAT_MODEL")}`,
     );
+    const { splash } = buildStacks({});
+    expect(chatEndpoint("splash").stdout.trim()).toBe(`${splash.chatBaseUrl} ${splash.chatModel}`);
     expect(chatEndpoint("ollama").stdout.trim()).toBe(
       `http://localhost:${shellVar("OLLAMA_PORT")} ${shellVar("OLLAMA_CHAT_MODEL")}`,
     );

@@ -37,7 +37,9 @@ export function createStackRouter(deps: StackRouterDeps): Router {
   router.post("/switch", async (req: Request, res: Response): Promise<void> => {
     const target = (req.body as { stack?: unknown } | undefined)?.stack;
     if (!isStackName(target)) {
-      res.status(400).json({ error: "Unknown stack (expected ollama, mlx or omlx)" });
+      // Derived from STACK_NAMES rather than spelled out, so this message cannot drift from
+      // isStackName again the way it did when splash was added but this string was not updated.
+      res.status(400).json({ error: `Unknown stack (expected one of: ${STACK_NAMES.join(", ")})` });
       return;
     }
     if (!deps.telegramConfigured()) {

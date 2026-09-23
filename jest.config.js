@@ -4,9 +4,10 @@ export default {
   testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
   testMatch: ["**/__tests__/**/*.test.ts"],
-  // The MCP service is a separate package with its own Jest setup; data/ holds scratch installs
-  // .worktrees holds stale checkouts of this repo; jest would otherwise collect
-  // their copies of every suite and report failures that no longer exist here.
+  // The MCP service is a separate package with its own Jest setup; data/ holds scratch installs.
+  // .worktrees/ holds sibling checkouts of other branches; their own tests read the script at
+  // process.cwd(), which is always THIS tree, so without this they silently assert against our
+  // script instead of their own and break whenever it changes.
   testPathIgnorePatterns: ["/node_modules/", "<rootDir>/mcp/", "<rootDir>/data/", "<rootDir>/.worktrees/"],
   moduleNameMapper: {
     // Source files import siblings as "./x.js"; point Jest at the .ts file
