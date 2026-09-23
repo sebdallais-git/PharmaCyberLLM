@@ -168,7 +168,9 @@ describe("POST /api/stack/switch", () => {
     const { status, body } = await post(fixture.url, "vllm");
 
     expect(status).toBe(400);
-    expect(String(body.error)).toMatch(/ollama, mlx or omlx/);
+    // Derived from STACK_NAMES: this must name every known stack, including splash -- the old
+    // hardcoded "ollama, mlx or omlx" string silently fell out of sync when splash was added.
+    expect(String(body.error)).toMatch(/ollama, mlx, omlx, splash/);
     expect(fixture.messages).toEqual([]);
   });
 
