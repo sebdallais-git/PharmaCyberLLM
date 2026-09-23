@@ -74,11 +74,14 @@ export function stackPatterns(stack: string): string[] {
     case "omlx":
       return ["omlx-server", "omlx serve"];
     case "splash":
-      // Splash serves from a single process. Both spellings are accepted for
-      // the same reason the omlx arm accepts two: the process title is not
-      // guaranteed stable across versions, and an unmatched pattern samples
-      // nothing rather than erroring.
-      return ["splash-server", "splash serve"];
+      // Splash serves chat from a single process ("splash-server"/"splash serve" -- both spellings
+      // are accepted for the same reason the omlx arm accepts two: the process title is not
+      // guaranteed stable across versions, and an unmatched pattern samples nothing rather than
+      // erroring). Splash serves NO embeddings of its own: it borrows the MLX embedding server
+      // (mlx-embed-server.py) on :8081, the same process mlx's own arm above already charges to
+      // mlx. Without this pattern here, that process's RSS was silently left out of splash's peak
+      // memory row, biasing the comparison this benchmark exists to produce in splash's favour.
+      return ["splash-server", "splash serve", "mlx-embed-server.py"];
     default:
       return ["ollama serve", "lib/ollama/llama-server", "ollama runner"];
   }
