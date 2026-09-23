@@ -162,8 +162,8 @@ describe("switch-stack.sh omlx stack", () => {
   });
 
   it("accepts omlx everywhere a stack name is taken", () => {
-    expect(script).toContain("ollama|mlx|omlx) ;;");
-    expect(script).toContain("ollama|mlx|omlx) switch_to");
+    expect(script).toContain("ollama|mlx|omlx|splash) ;;");
+    expect(script).toContain("ollama|mlx|omlx|splash) switch_to");
   });
 
   it("prepares by stopping every other stack, not just MLX", () => {
@@ -175,7 +175,7 @@ describe("switch-stack.sh omlx stack", () => {
 
   it("shows the omlx log when a switch to omlx fails", () => {
     expect(script).toContain(
-      'for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do'
+      'for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/splash.log" "$LOG_DIR/app.log"; do'
     );
   });
 });
@@ -878,5 +878,46 @@ describe("services.sh is_project_pid", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("switch-stack.sh knows every stack", () => {
+  // The shell keeps its own STACK_NAMES array; nothing but this test connects
+  // the two lists. A stack present in TypeScript and absent here is switchable
+  // from the UI and unstartable from the shell.
+  it("declares the same stack list as llm-stacks.ts", () => {
+    const match = script.match(/^STACK_NAMES=\(([^)]*)\)/m);
+
+    expect(match).not.toBeNull();
+    expect(match?.[1].trim().split(/\s+/)).toEqual([...STACK_NAMES]);
+  });
+
+  it.each([...STACK_NAMES])("dispatches, validates and can start/stop %s", (stack: string) => {
+    // validate_stack's case arm
+    expect(script).toMatch(new RegExp(`\\b${stack}\\b[^)]*\\)\\s*;;`));
+    // a models_ready arm
+    expect(script).toMatch(new RegExp(`^\\s*${stack}\\)`, "m"));
+  });
+
+  it("starts splash on the port the stack definition expects", () => {
+    const { splash } = buildStacks({});
+    const port = new URL(splash.chatBaseUrl).port;
+
+    expect(script).toMatch(new RegExp(`SPLASH_PORT="?\\$\\{SPLASH_PORT:-${port}\\}"?`));
+  });
+
+  it("fixes the context window at 65536 by default, overridably", () => {
+    expect(script).toMatch(/SPLASH_MAX_CONTEXT="\$\{SPLASH_MAX_CONTEXT:-65536\}"/);
+    expect(script).toMatch(/--max-context "\$SPLASH_MAX_CONTEXT"/);
+  });
+
+  it("passes the reasoning-effort flag the spec fixes", () => {
+    expect(script).toContain("--default-reasoning-effort none");
+  });
+
+  // splash has no embeddings of its own, so its start must bring up the MLX
+  // embedding server AND run parity against it -- not against :8000.
+  it("runs the parity guard for splash against the embedding server", () => {
+    expect(script).toMatch(/splash\)\s*start_splash && check_embedding_parity/);
   });
 });
