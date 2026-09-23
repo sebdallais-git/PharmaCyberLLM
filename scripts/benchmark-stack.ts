@@ -73,6 +73,12 @@ export function stackPatterns(stack: string): string[] {
       return ["mlx_lm.server", "mlx-embed-server.py"];
     case "omlx":
       return ["omlx-server", "omlx serve"];
+    case "splash":
+      // Splash serves from a single process. Both spellings are accepted for
+      // the same reason the omlx arm accepts two: the process title is not
+      // guaranteed stable across versions, and an unmatched pattern samples
+      // nothing rather than erroring.
+      return ["splash-server", "splash serve"];
     default:
       return ["ollama serve", "lib/ollama/llama-server", "ollama runner"];
   }
@@ -210,7 +216,9 @@ async function main(): Promise<void> {
           ])
         : stack === "omlx"
           ? run(join(process.cwd(), "python", "omlx-venv", "bin", "omlx"), ["--version"])
-          : run("ollama", ["--version"]),
+          : stack === "splash"
+            ? run(join(process.cwd(), "python", "splash-src", "splash"), ["--version"])
+            : run("ollama", ["--version"]),
     chatModel: models.chatModel,
     embeddingModel: models.embeddingModel,
   };
