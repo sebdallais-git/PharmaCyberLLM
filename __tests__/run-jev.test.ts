@@ -39,11 +39,11 @@ describe("run-jev.sh", () => {
     expect(stdout).toContain("HF_TOKEN=h1");
   });
 
-  it("defaults to loopback on port 8000", () => {
+  it("defaults to loopback on port 8010, leaving 8000 to the Splash stack", () => {
     const { stdout } = run({ tokens: JSON.stringify({ "jev-token": "k1", "hf-token": "h1" }) });
 
     expect(stdout).toContain("JEV_HOST=127.0.0.1");
-    expect(stdout).toContain("JEV_PORT=8000");
+    expect(stdout).toContain("JEV_PORT=8010");
   });
 
   // Mirrors run-mcp.sh: a service that holds a gated model and answers
