@@ -522,18 +522,26 @@ git commit -m "feat: sample the right process when benchmarking splash"
 
 ---
 
-### Task 4: UI label and the scorer port move
+### Task 4: UI label for splash
 
 **Files:**
 - Modify: `public/app.js` (`STACK_LABELS` ~:788, and the fallback array ~:838)
-- Modify: `config/decide.yaml` (the scorer's base_url)
 - Test: `__tests__/switch-labels.test.ts`
 
 **Interfaces:**
 - Consumes: `STACK_NAMES` from Task 1
 - Produces: nothing later tasks depend on
 
-Two unrelated one-liners, batched because each is too small for its own review.
+One-liner, but it has a visible consequence: without the label the selector
+shows a lowercase `splash` beside `Ollama`, `MLX` and `oMLX`.
+
+**The port move is NOT part of this branch.** The spec pairs splash's `:8000`
+with moving the open-jev scorer off it, but `config/decide.yaml`,
+`scripts/run-jev.sh` and the scorer's own spec exist only on
+`feature/system-one-decisions` — this branch is cut from `main` and has none of
+them. The move was therefore made on that branch instead (commits `246af28`
+and `489249f`), and the two branches only collide if one is merged without the
+other. Do not attempt it here; the files are absent.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -578,29 +586,16 @@ const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX", splash: "Spla
   const options = (status.stacks || ["ollama", "mlx", "omlx", "splash"])
 ```
 
-- [ ] **Step 4: Move the scorer off port 8000**
+- [ ] **Step 4: Run tests**
 
-Splash binds `127.0.0.1:8000` by default and `config/decide.yaml` assigns that to the open-jev scorer. Nothing is bound there yet, so the scorer moves. In `config/decide.yaml`:
-
-```yaml
-# 8010, not 8000: Splash (the fourth LLM stack) binds 127.0.0.1:8000 by default
-# and running both is the common case. Splash keeps its default so no
-# --port flag has to be remembered; the scorer has no default to preserve.
-base_url: http://127.0.0.1:8010
-```
-
-Then update the two places that document the old port — `docs/superpowers/specs/2026-09-22-system-one-decision-design.md` (the Decisions table row and the architecture diagram) — so the spec does not contradict the config. Do NOT change `scripts/run-jev.sh`; it reads `JEV_PORT` with its own default, which you should also move to `8010` for consistency. Read it first and change only the default.
-
-- [ ] **Step 5: Run tests**
-
-Run: `npm test -- "switch-labels|decide-config"` — Expected: PASS
+Run: `npm test -- switch-labels` — Expected: PASS
 Run: `npm test` — Expected: all suites pass
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add public/app.js config/decide.yaml scripts/run-jev.sh __tests__/switch-labels.test.ts docs/superpowers/specs/2026-09-22-system-one-decision-design.md
-git commit -m "feat: label splash in the UI and move the scorer off port 8000"
+git add public/app.js __tests__/switch-labels.test.ts
+git commit -m "feat: label splash in the stack selector"
 ```
 
 ---
