@@ -64,6 +64,22 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
     expect(JSON.stringify(ollama.chatExtraBody)).toBe('{"reasoning_effort":"none"}');
     expect(JSON.stringify(mlx.chatExtraBody)).toBe('{"chat_template_kwargs":{"enable_thinking":false}}');
   });
+
+  // THE CRITICAL FINDING: warm_up's `extra` body for splash and llm-stacks.ts's chatExtraBody for
+  // splash live in different files, and nothing else compares them -- so a copy-paste of mlx's
+  // chat_template_kwargs into chatExtraBody would pass warm_up (which builds its own literal body)
+  // and only break real chat requests, which read chatExtraBody. This extracts the actual `extra=`
+  // assignment from the script's splash branch and checks it against buildStacks()'s splash entry,
+  // so the two can never drift silently again.
+  it("splash's chatExtraBody matches its own warm-up body, not mlx's chat_template_kwargs convention", () => {
+    const { splash } = buildStacks({});
+    const splashBranch = script.split('elif [ "$1" = "splash" ]')[1]?.split(/\belse\b/)[0] ?? "";
+    const match = splashBranch.match(/extra='([^']+)'/);
+
+    expect(match).not.toBeNull();
+    expect(JSON.parse(`{${match![1]}}`)).toEqual(splash.chatExtraBody);
+    expect(splash.chatExtraBody).not.toHaveProperty("chat_template_kwargs");
+  });
 });
 
 describe("switch-stack.sh long-context settings", () => {

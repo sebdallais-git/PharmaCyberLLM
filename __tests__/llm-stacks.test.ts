@@ -157,6 +157,20 @@ describe("the splash stack", () => {
     expect(Object.values(splash).every((v) => v !== undefined && v !== "")).toBe(true);
   });
 
+  // THE CRITICAL FINDING this test exists to pin: chatExtraBody was copied from mlx/omlx's
+  // chat_template_kwargs convention, but Splash's own server, its warm-up in switch-stack.sh, the
+  // spec and the README all disable thinking via reasoning_effort. With the wrong field, warm_up
+  // warms up successfully with one body while every real chat request through llm-client.ts /
+  // model-gateway.ts sends a different, undocumented one -- and nothing else in the codebase
+  // compares the two halves (this file and scripts/switch-stack.sh), so the mismatch is invisible
+  // to every test that only looks at one side.
+  it("disables thinking via reasoning_effort, matching the warm-up, not mlx's chat_template_kwargs", () => {
+    const { splash } = buildStacks({});
+
+    expect(splash.chatExtraBody).toEqual({ reasoning_effort: "none" });
+    expect(splash.chatExtraBody).not.toHaveProperty("chat_template_kwargs");
+  });
+
   it("honours SPLASH_URL and MLX_EMBED_URL overrides", () => {
     const { splash } = buildStacks({ SPLASH_URL: "http://127.0.0.1:9000", MLX_EMBED_URL: "http://127.0.0.1:9001" });
 

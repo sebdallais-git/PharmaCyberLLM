@@ -97,7 +97,12 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.mlx.json",
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
+      // NOT chat_template_kwargs (that's an mlx_lm.server convention, copied here by mistake from
+      // the mlx/omlx entries above). Splash's own server, its warm-up in switch-stack.sh, the spec
+      // and the README all disable thinking with reasoning_effort — matching the ollama entry.
+      // A mismatch here would warm up successfully with one body while every real request through
+      // llm-client.ts / model-gateway.ts sends a different, undocumented field.
+      chatExtraBody: { reasoning_effort: "none" },
     },
   };
 }
