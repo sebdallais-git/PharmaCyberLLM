@@ -43,7 +43,12 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
   it("uses the same model names for omlx (warm_up must not hardcode ids that can drift)", () => {
     expect(shellVar("OMLX_CHAT_MODEL")).toBe(omlx.chatModel);
     expect(shellVar("OMLX_EMBED_MODEL")).toBe(omlx.embeddingModel);
-    expect(script).toContain('chat_model="$OMLX_CHAT_MODEL"');
+    // warm_up and mlx-watchdog.sh both take the chat model from chat-endpoint
+    const endpoint = spawnSync("bash", [join(process.cwd(), "scripts", "switch-stack.sh"), "chat-endpoint", "omlx"], {
+      encoding: "utf-8",
+      env: { ...process.env, PHARMALLM_RUN_DIR: mkdtempSync(join(tmpdir(), "chat-endpoint-")) },
+    });
+    expect(endpoint.stdout.trim()).toBe(`${omlx.chatBaseUrl} ${omlx.chatModel}`);
     expect(script).toContain('embed_model="$OMLX_EMBED_MODEL"');
   });
 
