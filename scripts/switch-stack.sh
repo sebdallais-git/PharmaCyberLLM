@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Switch PharmaITChat between the Ollama and MLX stacks. Only one stack runs at a time.
+# Switch PharmaITChat between the Ollama, MLX, oMLX and Splash stacks. Only one stack runs at a time.
 # Usage:
-#   scripts/switch-stack.sh ollama|mlx|omlx          stop the other stacks, start this one, restart the app
-#   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
+#   scripts/switch-stack.sh ollama|mlx|omlx|splash          stop the other stacks, start this one, restart the app
+#   scripts/switch-stack.sh ensure-stack ollama|mlx|omlx|splash  start a stack and its indexes without starting the app
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
@@ -70,6 +70,11 @@ SPLASH_CHAT_MODEL="${SPLASH_CHAT_MODEL:-incoai/Qwen3.8-27B-Splash}"
 SPLASH_DIR="${SPLASH_DIR:-$PROJECT_DIR/python/splash-src}"
 SPLASH_BIN="${SPLASH_BIN:-$SPLASH_DIR/splash}"
 SPLASH_REPO="https://github.com/incoai/splash"
+# Defaults to main because no commit has been verified on this machine yet, unlike OMLX_VERSION
+# above. It MUST be pinned to a tested commit (the same way OMLX_VERSION is) before any benchmark
+# row produced with Splash is treated as reproducible -- an unpinned engine makes those rows
+# non-comparable over time.
+SPLASH_VERSION="${SPLASH_VERSION:-main}"
 # Matches the other stacks so benchmark rows compare like with like
 SPLASH_MAX_CONTEXT="${SPLASH_MAX_CONTEXT:-65536}"
 
@@ -171,8 +176,14 @@ stop_mlx() {
 }
 
 # Shared by mlx and splash: splash serves no embeddings of its own and borrows
-# this server. Idempotent -- a running server owned by this project is reused
-# rather than restarted, so switching mlx -> splash does not bounce it.
+# this server. The function itself is idempotent -- called directly, a running
+# server owned by this project is reused rather than restarted -- but that is
+# NOT what happens on an mlx<->splash switch: switch_to stops every other
+# stack first (stop_other_stacks -> stop_mlx -> stop_pidfile mlx-embed), which
+# kills :8081 before the target stack starts. So the embedding server IS
+# bounced and its model reloaded on every mlx<->splash switch. That is safe --
+# strictly sequential, splash never runs while :8081 is down -- and the cost
+# is accepted because stacks must not run concurrently on this machine.
 start_mlx_embed() {
   if port_open "$MLX_EMBED_PORT"; then
     project_listener_open "$MLX_EMBED_PORT" \
@@ -233,7 +244,9 @@ start_splash() {
       >"$LOG_DIR/splash.log" 2>&1 &
     echo $! >"$RUN_DIR/splash.pid"
   fi
-  wait_http "http://localhost:$SPLASH_PORT/v1/models" 300 || { log "Splash did not become ready"; return 1; }
+  # 600s, not 300: even after `prepare` has run the binary once, a 17.4 GB model's first mmap is not
+  # fast, and a timeout here would roll back a switch that was actually working.
+  wait_http "http://localhost:$SPLASH_PORT/v1/models" 600 || { log "Splash did not become ready"; return 1; }
   # Chat only: the embeddings for this stack come from the MLX server.
   start_mlx_embed
 }
@@ -627,7 +640,7 @@ ensure_stack() {
 prepare() {
   local previous
   previous="$(active_stack)"
-  log "Preparing both stacks (about 33 GB of downloads on the first run)"
+  log "Preparing all four stacks (about 50 GB of downloads on the first run)"
   stop_app
 
   # Ollama models: pulling needs the Ollama service, so every other stack must be down first
@@ -657,15 +670,19 @@ prepare() {
     "$OMLX_VENV/bin/pip" install -q -e "$PROJECT_DIR/python/omlx-src"
   fi
 
-  # Splash: a pinned checkout plus a 17.4 GB model package. The first serve
-  # sets up Python dependencies and verifies the manifest, so prepare runs it
-  # once here rather than letting a switch pay for it.
+  # Splash: a pinned checkout plus a 17.4 GB model package.
   if [ ! -x "$SPLASH_BIN" ]; then
-    log "Installing Splash into $SPLASH_DIR"
+    log "Installing Splash $SPLASH_VERSION into $SPLASH_DIR"
     rm -rf "$SPLASH_DIR"
     git clone "$SPLASH_REPO" "$SPLASH_DIR"
+    (cd "$SPLASH_DIR" && git checkout -q "$SPLASH_VERSION")
   fi
   "$MLX_VENV/bin/python" -c "from huggingface_hub import snapshot_download as d; d('$SPLASH_CHAT_MODEL')"
+  # The first invocation of the binary is what actually sets up Python dependencies and verifies
+  # the manifest (the docs' "first serve" step) -- prepare runs it here, once, with a clear failure
+  # naming the binary, instead of leaving it to happen implicitly inside start_splash under a
+  # wait_http timeout, where it would very likely time out, fail the switch and roll back.
+  "$SPLASH_BIN" --version || { log "Splash binary did not run: $SPLASH_BIN --version failed"; return 1; }
 
   log "Models ready. Restoring the $previous stack..."
   switch_to "$previous"
