@@ -17,7 +17,7 @@ read_token() {
 }
 
 export JEV_HOST="${JEV_HOST:-127.0.0.1}"
-export JEV_PORT="${JEV_PORT:-8000}"
+export JEV_PORT="${JEV_PORT:-8010}"   # 8000 belongs to the Splash stack
 OPENJEV_API_KEY="$(read_token "$RUN_DIR/jev-token")"
 HF_TOKEN="$(read_token "$RUN_DIR/hf-token")"
 export OPENJEV_API_KEY HF_TOKEN

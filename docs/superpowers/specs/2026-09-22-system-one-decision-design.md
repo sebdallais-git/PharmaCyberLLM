@@ -32,13 +32,13 @@ parsed guess into a typed number.
 | Precision | 4-bit, always resident | ~2.5–3 GB beside a 17 GB 27B on 48 GB; no load latency per decision (user, 2026-09-22) |
 | Labels | Backfill with the 27B, then shadow | Only 3 gaps carry a verdict today (user, 2026-09-22) |
 | Verdicts | `resolved` ≥ 0.85, `review` in between, `unresolved` < 0.5 | `review` is where a 4B is not to be trusted |
-| Port | 8000 | Free; 8080/8081/8100 are the MLX servers, 3200 MCP, 5678/5679 n8n |
+| Port | 8010 | 8000 is the Splash stack's default bind; 8080/8081/8100 are the MLX servers, 3200 MCP, 5678/5679 n8n |
 | Health | Non-critical dependency | Chat must work with the scorer down |
 
 ## Architecture
 
 ```
-n8n  ──POST /api/decide──▶  PharmaITChat  ──POST /v1/systemone──▶  open-jev :8000
+n8n  ──POST /api/decide──▶  PharmaITChat  ──POST /v1/systemone──▶  open-jev :8010
                                (holds both tokens)                  Gemma 3 4B / MLX
 ```
 
