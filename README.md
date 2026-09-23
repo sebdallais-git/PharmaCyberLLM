@@ -498,7 +498,7 @@ Each search chunk used to carry a ~30 KB embedding object next to ~440 character
 
 ## Setup
 
-**Prerequisites:** [Homebrew](https://brew.sh), Node.js 22, Python 3, about 33 GB of free disk for the models, and `ffmpeg` if you want voice input. The **MLX and oMLX stacks require Apple Silicon**; **Splash additionally requires an M3 or newer and macOS 26.4+** (36 GB unified memory minimum, 48 GB recommended). The Ollama stack only needs Ollama, so a host without Apple Silicon still gets the whole pipeline — on one stack instead of four. The setup scripts themselves drive Homebrew and `launchctl`, so they assume macOS.
+**Prerequisites:** [Homebrew](https://brew.sh), Node.js 22, Python 3, about 50 GB of free disk for the models, and `ffmpeg` if you want voice input. The **MLX and oMLX stacks require Apple Silicon**; **Splash additionally requires an M3 or newer and macOS 26.4+** (36 GB unified memory minimum, 48 GB recommended). The Ollama stack only needs Ollama, so a host without Apple Silicon still gets the whole pipeline — on one stack instead of four. The setup scripts themselves drive Homebrew and `launchctl`, so they assume macOS.
 
 ```bash
 # 1. Install Ollama and the Node dependencies
@@ -507,11 +507,11 @@ git clone git@github.com:sebdallais-git/PharmaIT_Chat_and_Digest.git
 cd PharmaIT_Chat_and_Digest
 npm install
 
-# 2. One-time setup: download the Ollama and MLX models (~33 GB), create the MLX
-#    and oMLX venvs (oMLX reuses the same Hugging Face snapshots, so it adds no
-#    extra download), then start ChromaDB, build the active stack's indexes and
-#    launch the app
-scripts/switch-stack.sh prepare          # also installs the oMLX venv
+# 2. One-time setup: download the Ollama, MLX and Splash models (~50 GB total),
+#    create the MLX and oMLX venvs (oMLX reuses the same Hugging Face snapshots,
+#    so it adds no extra download), clone and verify Splash, then start ChromaDB,
+#    build the active stack's indexes and launch the app
+scripts/switch-stack.sh prepare          # also installs the oMLX venv and Splash checkout
 ```
 
 When `prepare` finishes, PharmaITChat is running on the Ollama stack (the default):
