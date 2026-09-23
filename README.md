@@ -17,6 +17,7 @@ PharmaITChat watches the IT and security scene around three pharma customers, th
 [![Ollama](https://img.shields.io/badge/Ollama-Qwen3.8_27B-000000?style=for-the-badge&logo=ollama&logoColor=white)](https://ollama.com)
 [![MLX](https://img.shields.io/badge/MLX-Qwen3.8_27B-6E56CF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ml-explore/mlx-lm)
 [![oMLX](https://img.shields.io/badge/oMLX-chat_%2B_embeddings-F59E0B?style=for-the-badge)](https://github.com/jundot/omlx)
+[![Splash](https://img.shields.io/badge/Splash-chat_only-EC4899?style=for-the-badge)](#four-interchangeable-stacks)
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M4_Pro_tested-555555?style=for-the-badge&logo=apple&logoColor=white)](#benchmarks)
 <br/>
 [![Watchlist](https://img.shields.io/badge/watchlist-71_entities-0f766e?style=for-the-badge)](#the-watchlist)
@@ -28,13 +29,13 @@ PharmaITChat watches the IT and security scene around three pharma customers, th
 [![MCP](https://img.shields.io/badge/MCP-16_tools-D97757?style=for-the-badge)](#the-mcp-server-and-the-model-gateway)
 
 [![Tests](https://img.shields.io/badge/Jest-606_tests_%C2%B7_48_suites-C21325?style=flat-square&logo=jest&logoColor=white)](#testing)
-[![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%C2%B7_MLX_%C2%B7_oMLX-6E56CF?style=flat-square)](#three-interchangeable-stacks)
+[![Stack switch](https://img.shields.io/badge/stack_switch-Ollama_%C2%B7_MLX_%C2%B7_oMLX_%C2%B7_Splash-6E56CF?style=flat-square)](#four-interchangeable-stacks)
 [![UI switch](https://img.shields.io/badge/UI_switch-Telegram_confirmed-26A5E4?style=flat-square)](#switching-from-the-web-ui)
-[![Context](https://img.shields.io/badge/context-64K_all_stacks-064e3b?style=flat-square)](#three-interchangeable-stacks)
+[![Context](https://img.shields.io/badge/context-64K_all_stacks-064e3b?style=flat-square)](#four-interchangeable-stacks)
 [![Cloud calls](https://img.shields.io/badge/cloud_LLM_calls-0-064e3b?style=flat-square)](#everything-local-on-one-machine)
 [![Nightly run](https://img.shields.io/badge/last_nightly_run-1%2C165_items_%C2%B7_42_min_%C2%B7_0_anomalies-0f766e?style=flat-square)](#the-first-unattended-run)
 
-[Stacks](#three-interchangeable-stacks) · [Benchmarks](#benchmarks) · [Watchlist](#the-watchlist) · [Chat & knowledge base](#chat-retrieval-and-the-knowledge-base) · [Telegram](#hermes-agent-on-telegram) · [Setup](#setup) · [API](#api-reference)
+[Stacks](#four-interchangeable-stacks) · [Benchmarks](#benchmarks) · [Watchlist](#the-watchlist) · [Chat & knowledge base](#chat-retrieval-and-the-knowledge-base) · [Telegram](#hermes-agent-on-telegram) · [Setup](#setup) · [API](#api-reference)
 
 </div>
 
@@ -46,7 +47,7 @@ The whole system runs on one local box with 48 GB of unified memory — no cloud
 
 | What | Where it runs |
 |---|---|
-| Chat and reasoning | Local 27B model, on Ollama, MLX or oMLX |
+| Chat and reasoning | Local 27B model, on Ollama, MLX, oMLX or Splash |
 | Embeddings | Local Qwen3-Embedding 0.6B, on the same stack |
 | Nightly entity/domain tagging | The same local chat model, one item at a time |
 | Vector store, item store, graph | ChromaDB, SQLite and Neo4j on localhost |
@@ -61,7 +62,7 @@ Outbound traffic is limited to what the system goes out to *get* and the one cha
 | | Feature | What it does |
 |---|---|---|
 | 🏠 | **Local 27B LLM** | Qwen3.8 27B (4-bit) for chat and tagging, Qwen3-Embedding 0.6B (8-bit), 64K context, zero cloud calls |
-| 🔀 | **Three interchangeable stacks** | Ollama ⇄ MLX ⇄ oMLX by one script or from the web UI, Telegram-confirmed, with per-stack indexes and automatic rollback |
+| 🔀 | **Four interchangeable stacks** | Ollama ⇄ MLX ⇄ oMLX ⇄ Splash by one script or from the web UI, Telegram-confirmed, with per-stack indexes and automatic rollback |
 | 👁️ | **Entity watchlist** | 71 watched entities — 3 customers, 28 peers, 40 IT vendors — across 37 RSS feeds, 46 EDGAR CIKs and 188 entity-less topic queries |
 | 🌙 | **Unattended nightly run** | 02:30: fetch, dedupe *before* the model, tag by entity and IT domain, store in SQLite and ChromaDB, alert only on failure |
 | 🔎 | **Hybrid retrieval** | ChromaDB, an in-memory vector + keyword index, Neo4j Graph RAG and live news, queried in parallel |
@@ -71,33 +72,40 @@ Outbound traffic is limited to what the system goes out to *get* and the one cha
 | 🔌 | **Model gateway** | OpenAI-compatible `/v1` on whichever stack is active, so any agent can borrow the local model |
 | 🩹 | **Self-healing knowledge** | Low-confidence answers trigger an n8n workflow that researches, ingests and re-checks the gap |
 | 🎙️ | **Voice input** | Local speech-to-text with whisper.cpp; HTTPS mode for iPad and phone microphones |
-| ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX vs oMLX comparison with retrieval overlap and a blind A/B review page |
+| ⏱️ | **Built-in benchmark** | Reproducible Ollama vs MLX vs oMLX vs Splash comparison with retrieval overlap and a blind A/B review page |
 | ✅ | **606 tests** | 48 Jest suites across the app and the MCP server, plus 27 Python tests for the Telegram plugin — every one of them against fakes, none touching a real model server, ChromaDB, Docker, launchd or Telegram |
 
 ---
 
-## Three interchangeable stacks
+## Four interchangeable stacks
 
-Every local model call — chat and embeddings alike — runs on **exactly one** stack. All three run the same models at matching quantization (4-bit chat, 8-bit embeddings), so they can be compared fairly. There is no silent fallback: if the active stack is down, requests fail with a clear error.
+Every local model call — chat and embeddings alike — runs on **exactly one** stack. Ollama, MLX and oMLX run the same chat model at matching 4-bit quantization; Splash serves its own build of the same Qwen3.8 27B model. There is no silent fallback: if the active stack is down, requests fail with a clear error.
 
-| | 🦙 Ollama stack | 🍎 MLX stack | 🧬 oMLX stack |
-|---|---|---|---|
-| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 64K context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` | `mlx-community--Qwen3.8-27B-4bit` (oMLX's discovery ids use double dashes) |
-| **Embedding model** | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` | `mlx-community--Qwen3-Embedding-0.6B-8bit` |
-| **Ports** | `:11434` | `:8080` chat, `:8081` embeddings | `:8090` — one server for chat and embeddings |
-| **ChromaDB collection** | `knowledge_base_ollama` | `knowledge_base_mlx` | `knowledge_base_mlx` (shared with the MLX stack) |
-| **In-memory index** | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` | `knowledge/.index.mlx.json` (shared with the MLX stack) |
-| **Prompt cache** | one shared cache, evicted by the next caller | several caches, capped by `--prompt-cache-bytes` (8 GB) | one paged SSD cache, capped by `--paged-ssd-cache-max-size` (20 GB default); survives an app restart |
-| **Graph rebuild** | ✅ supported | ❌ switch to Ollama first (`409`) | ❌ switch to Ollama first (`409`) — `python/graph_builder.py` calls Ollama directly |
+**Splash serves no embeddings of its own.** It exposes `/v1/chat/completions` but there is no `/v1/embeddings` endpoint at all — the single most surprising fact about this stack, and the reason for everything else about it below: it borrows the MLX embedding server on `:8081` and shares the MLX stack's ChromaDB collection and on-disk index, the same arrangement oMLX uses.
+
+| | 🦙 Ollama stack | 🍎 MLX stack | 🧬 oMLX stack | 💦 Splash stack |
+|---|---|---|---|---|
+| **Chat model** | `qwen3.8-pharma` (Qwen3.8 27B Q4_K_M, 64K context) | `mlx-community/Qwen3.8-27B-4bit` via `mlx_lm.server` | `mlx-community--Qwen3.8-27B-4bit` (oMLX's discovery ids use double dashes) | `incoai/Qwen3.8-27B-Splash`, 65536-token context |
+| **Embedding model** | `qwen3-embedding:0.6b-q8_0` | `mlx-community/Qwen3-Embedding-0.6B-8bit` via `python/mlx-embed-server.py` | `mlx-community--Qwen3-Embedding-0.6B-8bit` | **none** — borrows the MLX embedding server |
+| **Ports** | `:11434` | `:8080` chat, `:8081` embeddings | `:8090` — one server for chat and embeddings | `:8000` chat; `:8081` embeddings (the MLX server) |
+| **ChromaDB collection** | `knowledge_base_ollama` | `knowledge_base_mlx` | `knowledge_base_mlx` (shared with the MLX stack) | `knowledge_base_mlx` (shared with the MLX stack) |
+| **In-memory index** | `knowledge/.index.ollama.json` | `knowledge/.index.mlx.json` | `knowledge/.index.mlx.json` (shared with the MLX stack) | `knowledge/.index.mlx.json` (shared with the MLX stack) |
+| **Prompt cache** | one shared cache, evicted by the next caller | several caches, capped by `--prompt-cache-bytes` (8 GB) | one paged SSD cache, capped by `--paged-ssd-cache-max-size` (20 GB default); survives an app restart | managed by the Splash server itself |
+| **Thinking** | off, via the request field `reasoning_effort: "none"` | off, via `chat_template_kwargs.enable_thinking: false` | off, via `chat_template_kwargs.enable_thinking: false` | off, via the request field `reasoning_effort: "none"` (also set server-side with `--default-reasoning-effort none`) |
+| **Graph rebuild** | ✅ supported | ❌ switch to Ollama first (`409`) | ❌ switch to Ollama first (`409`) — `python/graph_builder.py` calls Ollama directly | ❌ switch to Ollama first (`409`) — same reason |
+
+Splash has the steepest hardware bar of the four: **Apple M3 or newer, macOS 26.4 or later, 36 GB unified memory minimum (48 GB recommended)**. Its model, `incoai/Qwen3.8-27B-Splash`, is a 17.4 GB download under Apache-2.0 and **not gated** — unlike some Hugging Face models, no access token is needed to pull it.
 
 ```bash
 scripts/switch-stack.sh mlx          # stop the other stacks, start MLX, restart the app (rolls back on failure)
 scripts/switch-stack.sh omlx         # third stack, port 8090 — one server for chat and embeddings,
                                      # shares the MLX index, restores long prompts from SSD after a restart
+scripts/switch-stack.sh splash       # fourth stack, port 8000 — chat only, borrows the MLX embedding
+                                     # server on :8081 and shares its index, like omlx does
 scripts/switch-stack.sh ollama       # and back
 scripts/switch-stack.sh status       # active stack, ports, OLLAMA_NUM_PARALLEL and index counts
 scripts/switch-stack.sh ensure-stack ollama   # start a stack and its indexes without starting the app
-scripts/switch-stack.sh prepare      # one-time model downloads; also installs the oMLX venv
+scripts/switch-stack.sh prepare      # one-time model downloads; also installs the oMLX venv and Splash checkout
 scripts/switch-stack.sh telegram     # store the Telegram credentials used to confirm UI-driven switches
 scripts/switch-stack.sh ollama-ctx   # recreate qwen3.8-pharma if its context differs from the Modelfile
 ```
@@ -130,7 +138,7 @@ flowchart LR
     B -- no --> X["Exit: run prepare"]
     B -- yes --> C["Stop app and<br/>other stacks"]
     C --> D["Start target stack"]
-    D -- "oMLX only" --> P["Check embedding<br/>parity (cosine ≥ 0.9999)"]
+    D -- "oMLX or Splash<br/>(share MLX index)" --> P["Check embedding<br/>parity (cosine ≥ 0.9999)"]
     D --> W["Warm up"]
     P --> W
     W --> E{"Indexes match stack<br/>and complete?"}
@@ -148,7 +156,7 @@ flowchart LR
     style X fill:#7f1d1d,stroke:#f43f5e,color:#e5e7eb
 ```
 
-**One client, three stacks.** `src/services/llm-client.ts` talks to all three through the OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` APIs; `src/config/llm-stacks.ts` only swaps base URLs and model names. Thinking mode is disabled on all three. Indexes are rebuilt from `knowledge/` and `data/raw_documents/`, where uploads, ingested text and collected articles are saved first — so a rebuild never depends on a source still being online. Everything follows the active stack: n8n calls `POST /api/llm/complete`, agents call `/v1/chat/completions`, the nightly ingest tags with whatever `data/run/active-stack` says.
+**One client, four stacks.** `src/services/llm-client.ts` talks to all four through the OpenAI-compatible `/v1/chat/completions` API (and `/v1/embeddings` on the three that serve it); `src/config/llm-stacks.ts` only swaps base URLs and model names. Thinking mode is disabled on all four. Indexes are rebuilt from `knowledge/` and `data/raw_documents/`, where uploads, ingested text and collected articles are saved first — so a rebuild never depends on a source still being online. Everything follows the active stack: n8n calls `POST /api/llm/complete`, agents call `/v1/chat/completions`, the nightly ingest tags with whatever `data/run/active-stack` says.
 
 ---
 
@@ -158,36 +166,40 @@ flowchart LR
 
 All three stacks measured on the same day, **2026-09-19**, on the **same workstation-class machine** — one local box, 48 GB unified memory. Full pipeline through `POST /api/chat`: 23 questions from `bench/questions.json`, one cold run each after a warm-up question outside the set, temperature 0, no web search, `max_tokens` 1024, background LLM jobs paused. The stacks were switched between runs on that one machine (macOS 26.4); only the stack changed, and nothing else ran while a run was in flight.
 
-| Metric (median) | 🦙 Ollama | 🍎 MLX | ⚡ oMLX |
-|---|---:|---:|---:|
-| Time to first token | 19.1 s | 18.4 s | **17.5 s** |
-| Decode speed | 12.4 tok/s | 13.2 tok/s | **15.2 tok/s** |
-| Total time per answer | 99.6 s | 92.3 s | **82.5 s** |
-| Query embedding | 31 ms | **19 ms** | 21 ms |
-| Retrieval | 76 ms | **44 ms** | 68 ms |
-| Peak system memory used | 42,845 MB | **37,409 MB** | 41,009 MB |
-| Model process memory | 28,459 MB | **16,184 MB** | 17,119 MB |
-| Answers hitting the 1024-token cap | 15 / 23 | 11 / 23 | 10 / 23 |
-| Failed runs | 0 / 23 | 0 / 23 | 0 / 23 |
-| Version | Ollama 0.34.0 | mlx 0.32.2, mlx-lm 0.31.3 | oMLX 0.7.0.dev3 |
+| Metric (median) | 🦙 Ollama | 🍎 MLX | ⚡ oMLX | 💦 Splash |
+|---|---:|---:|---:|---:|
+| Time to first token | 19.1 s | 18.4 s | **17.5 s** | *not yet measured* |
+| Decode speed | 12.4 tok/s | 13.2 tok/s | **15.2 tok/s** | *not yet measured* |
+| Total time per answer | 99.6 s | 92.3 s | **82.5 s** | *not yet measured* |
+| Query embedding | 31 ms | **19 ms** | 21 ms | *not yet measured* |
+| Retrieval | 76 ms | **44 ms** | 68 ms | *not yet measured* |
+| Peak system memory used | 42,845 MB | **37,409 MB** | 41,009 MB | *not yet measured* |
+| Model process memory | 28,459 MB | **16,184 MB** | 17,119 MB | *not yet measured* |
+| Answers hitting the 1024-token cap | 15 / 23 | 11 / 23 | 10 / 23 | *not yet measured* |
+| Failed runs | 0 / 23 | 0 / 23 | 0 / 23 | *not yet measured* |
+| Version | Ollama 0.34.0 | mlx 0.32.2, mlx-lm 0.31.3 | oMLX 0.7.0.dev3 | *not yet measured* |
 
 **oMLX generates fastest** — 23% quicker decode than Ollama and 15% quicker than MLX, which compounds into a 17% shorter answer than Ollama end to end. **MLX stays leanest**: lowest peak memory and the fastest retrieval, because its embedding server is a separate process rather than sharing one with chat as oMLX does. Ollama's memory figure is honest now that the sampler follows its `llama-server` children — it genuinely holds the most.
 
 The oMLX and MLX rows come from the *same* ChromaDB collection and the same on-disk index: the two stacks share them, so these numbers compare generation, not two different corpora.
 
+**Splash has no numbers here yet.** Nobody has run it on this machine: it needs `scripts/switch-stack.sh prepare` to fetch the model and `scripts/switch-stack.sh splash` to start it before `npx tsx scripts/benchmark-stack.ts` can produce a comparable row. The columns above are placeholders, not zeros.
+
 ### Long prompts (the agent workload)
 
 Measured 2026-09-17 on the same machine, through `/v1` with a 16.7K-token prompt, streamed, sent cold and then again with the same prefix.
 
-| Metric | 🦙 Ollama | 🍎 MLX | ⚡ oMLX |
-|---|---:|---:|---:|
-| Cold time to first token | 156.3 s | 141.2 s | 149.6 s |
-| Warm time to first token, same prefix | 5.8 s | **0.8 s** | 7.1 s |
-| Same prompt after restarting the model server | ≈156 s | ≈141 s | **12.6 s** |
-| Decode | 11.3–11.6 tok/s | 11.5–12.4 tok/s | 11.4–12.1 tok/s |
-| Memory pressure | normal, 41% free | normal, 40% free | normal, 39% free |
+| Metric | 🦙 Ollama | 🍎 MLX | ⚡ oMLX | 💦 Splash |
+|---|---:|---:|---:|---:|
+| Cold time to first token | 156.3 s | 141.2 s | 149.6 s | *not yet measured* |
+| Warm time to first token, same prefix | 5.8 s | **0.8 s** | 7.1 s | *not yet measured* |
+| Same prompt after restarting the model server | ≈156 s | ≈141 s | **12.6 s** | *not yet measured* |
+| Decode | 11.3–11.6 tok/s | 11.5–12.4 tok/s | 11.4–12.1 tok/s | *not yet measured* |
+| Memory pressure | normal, 41% free | normal, 40% free | normal, 39% free | *not yet measured* |
 
 The oMLX column was measured on 2026-09-18 during its trial, on the same machine and the same 16.7K-token prompt. **Restart recovery is the one axis where it is in a different class**: its SSD prefix cache restored 16,384 tokens and recomputed only 368, turning a 149.6 s cold prefill into 12.6 s (`Prefix cache restore … source=paged cached=16384 suffix=368`). The cache costs about 4.3 GB under `~/.omlx`, capped by `OMLX_CACHE_MAX_GB` (default 20).
+
+The Splash column is pending too — this table is filled by the manual `curl` walkthrough described above, run once against each stack, and nobody has run it against Splash yet.
 
 Prefill is the cost, at roughly 104–118 tok/s. Caching works on all three: appending a tool result to a conversation keeps the cached prefix, and a 14.6K-token prompt that cost 140.6 s cold came back in 10.9 s once about 1K tokens were appended. On Ollama the cache is shared, so a web chat between two agent steps evicts it.
 
@@ -486,7 +498,7 @@ Each search chunk used to carry a ~30 KB embedding object next to ~440 character
 
 ## Setup
 
-**Prerequisites:** [Homebrew](https://brew.sh), Node.js 22, Python 3, about 33 GB of free disk for the models, and `ffmpeg` if you want voice input. The **MLX and oMLX stacks require Apple Silicon**; the Ollama stack only needs Ollama, so a host without Apple Silicon still gets the whole pipeline — on one stack instead of three. The setup scripts themselves drive Homebrew and `launchctl`, so they assume macOS.
+**Prerequisites:** [Homebrew](https://brew.sh), Node.js 22, Python 3, about 50 GB of free disk for the models, and `ffmpeg` if you want voice input. The **MLX and oMLX stacks require Apple Silicon**; **Splash additionally requires an M3 or newer and macOS 26.4+** (36 GB unified memory minimum, 48 GB recommended). The Ollama stack only needs Ollama, so a host without Apple Silicon still gets the whole pipeline — on one stack instead of four. The setup scripts themselves drive Homebrew and `launchctl`, so they assume macOS.
 
 ```bash
 # 1. Install Ollama and the Node dependencies
@@ -495,11 +507,11 @@ git clone git@github.com:sebdallais-git/PharmaIT_Chat_and_Digest.git
 cd PharmaIT_Chat_and_Digest
 npm install
 
-# 2. One-time setup: download the Ollama and MLX models (~33 GB), create the MLX
-#    and oMLX venvs (oMLX reuses the same Hugging Face snapshots, so it adds no
-#    extra download), then start ChromaDB, build the active stack's indexes and
-#    launch the app
-scripts/switch-stack.sh prepare          # also installs the oMLX venv
+# 2. One-time setup: download the Ollama, MLX and Splash models (~50 GB total),
+#    create the MLX and oMLX venvs (oMLX reuses the same Hugging Face snapshots,
+#    so it adds no extra download), clone and verify Splash, then start ChromaDB,
+#    build the active stack's indexes and launch the app
+scripts/switch-stack.sh prepare          # also installs the oMLX venv and Splash checkout
 ```
 
 When `prepare` finishes, PharmaITChat is running on the Ollama stack (the default):
@@ -808,11 +820,11 @@ PharmaITChat/
 ├── src/
 │   ├── server.ts                 # Express + HTTPS, auth middleware, index checks, news agent schedule
 │   ├── config/
-│   │   ├── llm-stacks.ts         # Ollama, MLX and oMLX stack definitions
+│   │   ├── llm-stacks.ts         # Ollama, MLX, oMLX and Splash stack definitions
 │   │   └── env-names.ts          # PHARMAITCHAT_* with a PHARMALLM_* fallback
 │   ├── api/                      # auth, chat, knowledge, agent, feedback, dashboard, graph, bench, llm, v1, stack
 │   ├── services/
-│   │   ├── llm-client.ts         # One OpenAI-compatible client for all three stacks
+│   │   ├── llm-client.ts         # One OpenAI-compatible client for all four stacks
 │   │   ├── model-gateway.ts      # /v1 body building and forwarding
 │   │   ├── index-guard.ts        # Refuses search on mismatched indexes
 │   │   ├── reindex.ts            # Rebuilds the active stack's indexes
@@ -907,15 +919,18 @@ npm --prefix mcp run typecheck
 |---|---|
 | Nothing answers after a reboot | The app and the model stack have no launch agent. Run `scripts/start-services.sh` or `scripts/switch-stack.sh ollama` |
 | `Models for mlx are missing` | Run `scripts/switch-stack.sh prepare` once |
+| `Models for splash are missing` | Run `scripts/switch-stack.sh prepare` once — clones Splash and downloads the 17.4 GB model |
+| Splash won't start, or fails with an unsupported-hardware error | Splash needs an Apple M3 or newer and **macOS 26.4 or later**, with 36 GB unified memory minimum (48 GB recommended); check `sw_vers` and the Mac model before filing it as a bug |
 | Search refused / `search_index` error in `/api/health` | The index belongs to another stack, is incomplete or is rebuilding. Wait for the rebuild, or `POST /api/knowledge/reindex` and poll `/api/knowledge/reindex/status` |
 | `Port 8080 is used by another program` | Free the MLX ports (`:8080`, `:8081`); the switch leaves foreign processes alone and rolls back |
+| `Port 8000 is used by another program` | Free the Splash port before switching; look for a stray `splash-server` (or `splash serve`) process holding it and stop it, since the switch leaves foreign processes alone and rolls back |
 | `/api/graph/rebuild` returns `409` | Graph rebuild only works on the Ollama stack: `scripts/switch-stack.sh ollama` |
 | Reindex, `/v1` or `/api/llm/complete` rejected during a benchmark | Wait for it to finish, or `POST /api/bench/stop` |
 | Health is `degraded` | A supporting service (ChromaDB, SearXNG or Neo4j) is down; chat still works |
 | `401 Unauthorized` on `/api/*` or `/v1/*` | Send `Authorization: Bearer <token>`, or reach the app as `localhost` from the same machine |
 | Mic button missing or blocked on iPad | Use HTTPS on port 3443 with certificates in `certs/` that the device trusts |
-| `npm run dev` fails on port 3000 | `prepare` and `switch-stack.sh ollama\|mlx\|omlx` already start the app in the background (log in `data/logs/app.log`) |
-| Switch or rebuild failed | Check `data/logs/` (`mlx-chat.log`, `mlx-embed.log`, `reindex-<stack>.log`, `app.log`) |
+| `npm run dev` fails on port 3000 | `prepare` and `switch-stack.sh ollama\|mlx\|omlx\|splash` already start the app in the background (log in `data/logs/app.log`) |
+| Switch or rebuild failed | Check `data/logs/` (`mlx-chat.log`, `mlx-embed.log`, `omlx.log`, `splash.log`, `reindex-<stack>.log`, `app.log`) |
 
 </details>
 

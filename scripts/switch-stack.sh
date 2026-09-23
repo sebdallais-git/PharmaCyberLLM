@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Switch PharmaITChat between the Ollama and MLX stacks. Only one stack runs at a time.
+# Switch PharmaITChat between the Ollama, MLX, oMLX and Splash stacks. Only one stack runs at a time.
 # Usage:
-#   scripts/switch-stack.sh ollama|mlx|omlx          stop the other stacks, start this one, restart the app
-#   scripts/switch-stack.sh ensure-stack ollama|mlx  start a stack and its indexes without starting the app
+#   scripts/switch-stack.sh ollama|mlx|omlx|splash          stop the other stacks, start this one, restart the app
+#   scripts/switch-stack.sh ensure-stack ollama|mlx|omlx|splash  start a stack and its indexes without starting the app
 #   scripts/switch-stack.sh prepare                  download models and create the MLX venv (one-time)
 #   scripts/switch-stack.sh status                   show the active stack, ports and index counts
 #   scripts/switch-stack.sh token                    create the API token for agents and other machines
@@ -62,11 +62,27 @@ OMLX_REPO="https://github.com/jundot/omlx"
 # Caps the oMLX paged SSD prefix cache (unbounded, it reached 4.3 GB in two short sessions)
 OMLX_CACHE_MAX_GB="${OMLX_CACHE_MAX_GB:-20}"
 
+# --- Splash ---------------------------------------------------------------
+# Chat only: Splash serves no /v1/embeddings, so this stack borrows the MLX
+# embedding server on $MLX_EMBED_PORT and shares the MLX index.
+SPLASH_PORT="${SPLASH_PORT:-8000}"
+SPLASH_CHAT_MODEL="${SPLASH_CHAT_MODEL:-incoai/Qwen3.8-27B-Splash}"
+SPLASH_DIR="${SPLASH_DIR:-$PROJECT_DIR/python/splash-src}"
+SPLASH_BIN="${SPLASH_BIN:-$SPLASH_DIR/splash}"
+SPLASH_REPO="https://github.com/incoai/splash"
+# Defaults to main because no commit has been verified on this machine yet, unlike OMLX_VERSION
+# above. It MUST be pinned to a tested commit (the same way OMLX_VERSION is) before any benchmark
+# row produced with Splash is treated as reproducible -- an unpinned engine makes those rows
+# non-comparable over time.
+SPLASH_VERSION="${SPLASH_VERSION:-main}"
+# Matches the other stacks so benchmark rows compare like with like
+SPLASH_MAX_CONTEXT="${SPLASH_MAX_CONTEXT:-65536}"
+
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
 # Single source of truth for the stack names, mirroring STACK_NAMES in src/config/llm-stacks.ts
 # (__tests__/switch-stack-config.test.ts fails if the two lists drift apart).
-STACK_NAMES=(ollama mlx omlx)
+STACK_NAMES=(ollama mlx omlx splash)
 
 active_stack() {
   cat "$RUN_DIR/active-stack" 2>/dev/null || echo "ollama"
@@ -74,8 +90,8 @@ active_stack() {
 
 validate_stack() {
   case "$1" in
-    ollama|mlx|omlx) ;;
-    *) log "Unknown stack '$1' (expected ollama, mlx or omlx)"; return 1 ;;
+    ollama|mlx|omlx|splash) ;;
+    *) log "Unknown stack '$1' (expected ollama, mlx, omlx or splash)"; return 1 ;;
   esac
 }
 
@@ -102,6 +118,9 @@ models_ready() {
       ;;
     omlx)
       [ -x "$OMLX_VENV/bin/omlx" ] && hf_snapshot_present "$MLX_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
+      ;;
+    splash)
+      [ -x "$SPLASH_BIN" ] && hf_snapshot_present "$SPLASH_CHAT_MODEL" && hf_snapshot_present "$MLX_EMBED_MODEL"
       ;;
   esac
 }
@@ -156,6 +175,29 @@ stop_mlx() {
   [ "$chat_rc" -eq 0 ] && [ "$embed_rc" -eq 0 ]
 }
 
+# Shared by mlx and splash: splash serves no embeddings of its own and borrows
+# this server. The function itself is idempotent -- called directly, a running
+# server owned by this project is reused rather than restarted -- but that is
+# NOT what happens on an mlx<->splash switch: switch_to stops every other
+# stack first (stop_other_stacks -> stop_mlx -> stop_pidfile mlx-embed), which
+# kills :8081 before the target stack starts. So the embedding server IS
+# bounced and its model reloaded on every mlx<->splash switch. That is safe --
+# strictly sequential, splash never runs while :8081 is down -- and the cost
+# is accepted because stacks must not run concurrently on this machine.
+start_mlx_embed() {
+  if port_open "$MLX_EMBED_PORT"; then
+    project_listener_open "$MLX_EMBED_PORT" \
+      || { log "Port $MLX_EMBED_PORT is used by another program — cannot start the embedding server"; return 1; }
+  else
+    nohup "$MLX_VENV/bin/python" "$PROJECT_DIR/python/mlx-embed-server.py" \
+      --model "$MLX_EMBED_MODEL" --host 127.0.0.1 --port "$MLX_EMBED_PORT" \
+      >"$LOG_DIR/mlx-embed.log" 2>&1 &
+    echo $! >"$RUN_DIR/mlx-embed.pid"
+  fi
+  wait_http "http://localhost:$MLX_EMBED_PORT/v1/models" 180 \
+    || { log "MLX embedding server did not become ready"; return 1; }
+}
+
 start_mlx() {
   if port_open "$MLX_CHAT_PORT"; then
     project_listener_open "$MLX_CHAT_PORT" \
@@ -166,17 +208,8 @@ start_mlx() {
       >"$LOG_DIR/mlx-chat.log" 2>&1 &
     echo $! >"$RUN_DIR/mlx-chat.pid"
   fi
-  if port_open "$MLX_EMBED_PORT"; then
-    project_listener_open "$MLX_EMBED_PORT" \
-      || { log "Port $MLX_EMBED_PORT is used by another program — cannot start MLX"; return 1; }
-  else
-    nohup "$MLX_VENV/bin/python" "$PROJECT_DIR/python/mlx-embed-server.py" \
-      --model "$MLX_EMBED_MODEL" --host 127.0.0.1 --port "$MLX_EMBED_PORT" \
-      >"$LOG_DIR/mlx-embed.log" 2>&1 &
-    echo $! >"$RUN_DIR/mlx-embed.pid"
-  fi
   wait_http "http://localhost:$MLX_CHAT_PORT/v1/models" 180 || { log "mlx_lm.server did not become ready"; return 1; }
-  wait_http "http://localhost:$MLX_EMBED_PORT/v1/models" 180 || { log "MLX embedding server did not become ready"; return 1; }
+  start_mlx_embed
 }
 
 stop_omlx() {
@@ -196,11 +229,36 @@ start_omlx() {
   wait_http "http://localhost:$OMLX_PORT/v1/models" 180 || { log "oMLX did not become ready"; return 1; }
 }
 
-# The omlx stack shares the MLX index: serving it with drifted embeddings would silently poison retrieval
+stop_splash() {
+  stop_pidfile splash "$SPLASH_PORT" ignore-foreign
+}
+
+start_splash() {
+  if port_open "$SPLASH_PORT"; then
+    project_listener_open "$SPLASH_PORT" \
+      || { log "Port $SPLASH_PORT is used by another program — cannot start Splash"; return 1; }
+  else
+    nohup "$SPLASH_BIN" serve --model "$SPLASH_CHAT_MODEL" \
+      --host 127.0.0.1 --port "$SPLASH_PORT" \
+      --max-context "$SPLASH_MAX_CONTEXT" --default-reasoning-effort none \
+      >"$LOG_DIR/splash.log" 2>&1 &
+    echo $! >"$RUN_DIR/splash.pid"
+  fi
+  # 600s, not 300: even after `prepare` has run the binary once, a 17.4 GB model's first mmap is not
+  # fast, and a timeout here would roll back a switch that was actually working.
+  wait_http "http://localhost:$SPLASH_PORT/v1/models" 600 || { log "Splash did not become ready"; return 1; }
+  # Chat only: the embeddings for this stack come from the MLX server.
+  start_mlx_embed
+}
+
+# Stacks that share the MLX index must serve interchangeable embeddings:
+# drifted vectors would silently poison retrieval, and the index guard cannot
+# see the difference. Called with the URL and model of whatever is actually
+# serving embeddings for the stack being started.
 check_embedding_parity() {
-  local out
+  local base_url="$1" model="$2" out
   if out="$("$MLX_PYTHON" "$PROJECT_DIR/scripts/lib/embedding-parity.py" \
-      "http://localhost:$OMLX_PORT" "$OMLX_EMBED_MODEL" \
+      "$base_url" "$model" \
       "$PROJECT_DIR/__tests__/fixtures/embedding-reference.json" 2>&1)"; then
     log "Embedding parity ok (${out})"
     return 0
@@ -212,7 +270,8 @@ check_embedding_parity() {
 start_stack() {
   case "$1" in
     mlx) start_mlx ;;
-    omlx) start_omlx && check_embedding_parity ;;
+    omlx) start_omlx && check_embedding_parity "http://localhost:$OMLX_PORT" "$OMLX_EMBED_MODEL" ;;
+    splash) start_splash && check_embedding_parity "http://localhost:$MLX_EMBED_PORT" "$MLX_EMBED_MODEL" ;;
     *) start_ollama && ensure_ollama_ctx ;;
   esac
 }
@@ -221,6 +280,7 @@ stop_stack() {
   case "$1" in
     mlx) stop_mlx ;;
     omlx) stop_omlx ;;
+    splash) stop_splash ;;
     *) stop_ollama ;;
   esac
 }
@@ -240,6 +300,12 @@ warm_up() {
     chat_model="$OMLX_CHAT_MODEL"
     embed_model="$OMLX_EMBED_MODEL"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
+  elif [ "$1" = "splash" ]; then
+    chat_url="http://localhost:$SPLASH_PORT"
+    embed_url="http://localhost:$MLX_EMBED_PORT"
+    chat_model="$SPLASH_CHAT_MODEL"
+    embed_model="$MLX_EMBED_MODEL"
+    extra='"reasoning_effort":"none"'
   else
     chat_url="http://localhost:$OLLAMA_PORT"
     embed_url="$chat_url"
@@ -453,7 +519,7 @@ start_app() {
 
 show_logs() {
   local file
-  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do
+  for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/splash.log" "$LOG_DIR/app.log"; do
     [ -f "$file" ] || continue
     log "--- last lines of $(basename "$file") ---"
     tail -n 15 "$file"
@@ -574,7 +640,7 @@ ensure_stack() {
 prepare() {
   local previous
   previous="$(active_stack)"
-  log "Preparing both stacks (about 33 GB of downloads on the first run)"
+  log "Preparing all four stacks (about 50 GB of downloads on the first run)"
   stop_app
 
   # Ollama models: pulling needs the Ollama service, so every other stack must be down first
@@ -604,6 +670,20 @@ prepare() {
     "$OMLX_VENV/bin/pip" install -q -e "$PROJECT_DIR/python/omlx-src"
   fi
 
+  # Splash: a pinned checkout plus a 17.4 GB model package.
+  if [ ! -x "$SPLASH_BIN" ]; then
+    log "Installing Splash $SPLASH_VERSION into $SPLASH_DIR"
+    rm -rf "$SPLASH_DIR"
+    git clone "$SPLASH_REPO" "$SPLASH_DIR"
+    (cd "$SPLASH_DIR" && git checkout -q "$SPLASH_VERSION")
+  fi
+  "$MLX_VENV/bin/python" -c "from huggingface_hub import snapshot_download as d; d('$SPLASH_CHAT_MODEL')"
+  # The first invocation of the binary is what actually sets up Python dependencies and verifies
+  # the manifest (the docs' "first serve" step) -- prepare runs it here, once, with a clear failure
+  # naming the binary, instead of leaving it to happen implicitly inside start_splash under a
+  # wait_http timeout, where it would very likely time out, fail the switch and roll back.
+  "$SPLASH_BIN" --version || { log "Splash binary did not run: $SPLASH_BIN --version failed"; return 1; }
+
   log "Models ready. Restoring the $previous stack..."
   switch_to "$previous"
 }
@@ -611,7 +691,7 @@ prepare() {
 status() {
   log "Active stack: $(active_stack)"
   local entry name port stack
-  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "omlx:$OMLX_PORT" "chromadb:$CHROMA_PORT"; do
+  for entry in "app:$APP_PORT" "ollama:$OLLAMA_PORT" "mlx-chat:$MLX_CHAT_PORT" "mlx-embed:$MLX_EMBED_PORT" "omlx:$OMLX_PORT" "splash:$SPLASH_PORT" "chromadb:$CHROMA_PORT"; do
     name="${entry%%:*}"
     port="${entry#*:}"
     if port_open "$port"; then log "  $name (:$port) up"; else log "  $name (:$port) down"; fi
@@ -629,7 +709,7 @@ status() {
 }
 
 case "${1:-}" in
-  ollama|mlx|omlx) switch_to "$1" ;;
+  ollama|mlx|omlx|splash) switch_to "$1" ;;
   ensure-stack) ensure_stack "${2:-}" ;;
   prepare) prepare ;;
   status) status ;;
