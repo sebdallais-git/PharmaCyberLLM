@@ -333,7 +333,7 @@ describe("GET /api/stack/status", () => {
     const body = (await res.json()) as Record<string, unknown>;
 
     expect(body.active).toBe("ollama");
-    expect(body.stacks).toEqual(["ollama", "mlx", "omlx"]);
+    expect(body.stacks).toEqual(["ollama", "mlx", "omlx", "splash"]);
     expect((body.pending as Record<string, unknown>).target).toBe("omlx");
     expect((body.progress as Record<string, unknown>).phase).toBe("warming");
     expect(JSON.stringify(body)).not.toMatch(/tok-/);
