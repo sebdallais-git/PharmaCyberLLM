@@ -3,10 +3,13 @@ import { batchRangeLabel, indexesReady, reindexActiveStack } from "../src/servic
 import type { IndexState, ReindexDeps, ReindexProgress } from "../src/services/reindex.js";
 import { StackUnavailableError } from "../src/services/llm-client.js";
 import { getIndexStatus, setIndexStatus } from "../src/services/index-guard.js";
-import { getActiveStack } from "../src/config/llm-stacks.js";
+import { buildStacks } from "../src/config/llm-stacks.js";
 import type { RawDocument } from "../src/services/raw-documents.js";
 
 const ok = { ok: true, reason: "" };
+
+// A fixed stack, so no test depends on data/run/active-stack in the working directory
+const testStack = buildStacks({}).ollama;
 
 interface StateOverrides {
   memoryOk: boolean;
@@ -81,6 +84,7 @@ function rawDocs(count: number): RawDocument[] {
 function fakeDeps(overrides: Partial<ReindexDeps> = {}): { deps: ReindexDeps; calls: string[] } {
   const calls: string[] = [];
   const deps: ReindexDeps = {
+    activeStack: () => testStack,
     isChromaDBAvailable: async () => true,
     resetIndex: () => {
       calls.push("resetIndex");
@@ -146,7 +150,7 @@ describe("reindexActiveStack", () => {
 
   it("aborts, rethrows and marks the index unusable when the stack goes down during a batch", async () => {
     setIndexStatus({ ok: true, reason: "" });
-    const stackDown = new StackUnavailableError(getActiveStack(), "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
+    const stackDown = new StackUnavailableError(testStack, "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
     const { deps, calls } = fakeDeps({
       ingestTexts: async (items) => {
         if (items.some((item) => item.source === "doc-0")) throw stackDown;
@@ -165,7 +169,7 @@ describe("reindexActiveStack", () => {
 
   it("aborts when the stack goes down while ingesting a knowledge file", async () => {
     setIndexStatus({ ok: true, reason: "" });
-    const stackDown = new StackUnavailableError(getActiveStack(), "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
+    const stackDown = new StackUnavailableError(testStack, "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
     const { deps } = fakeDeps({
       addToChromaDB: async () => {
         throw stackDown;
