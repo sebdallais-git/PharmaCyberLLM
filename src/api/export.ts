@@ -179,7 +179,18 @@ export function createExportRouter(deps: ExportRouterDeps): Router {
 
     res.setHeader("Content-Type", CONTENT_TYPES[job.format]);
     res.setHeader("Content-Disposition", `attachment; filename="${attachmentName(job)}"`);
-    createReadStream(path).pipe(res);
+    const stream = createReadStream(path);
+    // The file can vanish between existsSync and the open (the retention
+    // sweep). With no listener that error crashed the whole server.
+    stream.on("error", () => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      res.removeHeader("Content-Disposition");
+      res.status(404).json({ error: "no such export" });
+    });
+    stream.pipe(res);
   });
 
   router.get("/:id", (req: Request, res: Response): void => {
