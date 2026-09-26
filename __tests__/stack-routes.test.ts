@@ -168,7 +168,9 @@ describe("POST /api/stack/switch", () => {
     const { status, body } = await post(fixture.url, "vllm");
 
     expect(status).toBe(400);
-    expect(String(body.error)).toMatch(/ollama, mlx or omlx/);
+    // Derived from STACK_NAMES: this must name every known stack, including splash -- the old
+    // hardcoded "ollama, mlx or omlx" string silently fell out of sync when splash was added.
+    expect(String(body.error)).toMatch(/ollama, mlx, omlx, splash/);
     expect(fixture.messages).toEqual([]);
   });
 
@@ -333,7 +335,7 @@ describe("GET /api/stack/status", () => {
     const body = (await res.json()) as Record<string, unknown>;
 
     expect(body.active).toBe("ollama");
-    expect(body.stacks).toEqual(["ollama", "mlx", "omlx"]);
+    expect(body.stacks).toEqual(["ollama", "mlx", "omlx", "splash"]);
     expect((body.pending as Record<string, unknown>).target).toBe("omlx");
     expect((body.progress as Record<string, unknown>).phase).toBe("warming");
     expect(JSON.stringify(body)).not.toMatch(/tok-/);

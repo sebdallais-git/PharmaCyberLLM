@@ -9,7 +9,7 @@
 #   com.pharmaitchat.stack    ChromaDB + the active LLM stack + the app
 #   com.pharmaitchat.mcp      the MCP server the agent tools reach
 #   com.pharmaitchat.n8n      the knowledge-gap auto-fill workflow
-#   com.pharmaitchat.mlx-watchdog  restarts MLX when it stops generating
+#   com.pharmaitchat.mlx-watchdog  restarts the mlx or omlx chat server when it stops generating
 #   ai.hermes.gateway         the Hermes gateway behind Telegram
 #
 # Docker is deliberately not managed here: Neo4j and SearXNG are containers with

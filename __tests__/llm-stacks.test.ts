@@ -30,7 +30,7 @@ describe("getActiveStack", () => {
   });
 
   it("throws on an unknown provider", () => {
-    expect(() => getActiveStack({ LLM_PROVIDER: "lmstudio" })).toThrow('Invalid LLM_PROVIDER "lmstudio"');
+    expect(() => getActiveStack({ LLM_PROVIDER: "lmstudio" })).toThrow(/Unknown stack.*lmstudio/);
   });
 });
 
@@ -102,8 +102,8 @@ describe("omlx stack", () => {
     expect(getActiveStack({ LLM_PROVIDER: "omlx" }).name).toBe("omlx");
   });
 
-  it("rejects an unknown stack name and names all three", () => {
-    expect(() => getActiveStack({ LLM_PROVIDER: "vllm" })).toThrow(/ollama.*mlx.*omlx/);
+  it("rejects an unknown stack name and names all known stacks", () => {
+    expect(() => getActiveStack({ LLM_PROVIDER: "vllm" })).toThrow(/ollama.*mlx.*omlx.*splash/);
   });
 });
 
@@ -130,5 +130,76 @@ describe("isStackName", () => {
 
   it("rejects an unknown name", () => {
     expect(isStackName("vllm")).toBe(false);
+  });
+});
+
+describe("the splash stack", () => {
+  it("is a known stack name", () => {
+    expect(STACK_NAMES).toEqual(["ollama", "mlx", "omlx", "splash"]);
+    expect(isStackName("splash")).toBe(true);
+  });
+
+  it("serves chat from Splash and embeddings from the MLX server", () => {
+    const { splash } = buildStacks({});
+
+    expect(splash.chatBaseUrl).toBe("http://localhost:8000");
+    expect(splash.embedBaseUrl).toBe("http://localhost:8081");
+    expect(splash.chatModel).toBe("incoai/Qwen3.8-27B-Splash");
+    expect(splash.embeddingModel).toBe("mlx-community/Qwen3-Embedding-0.6B-8bit");
+  });
+
+  // THE DESTRUCTIVE MISTAKE THIS TEST EXISTS TO PREVENT:
+  // splash shares .index.mlx.json and knowledge_base_mlx with mlx and omlx.
+  // The index guard compares the stamped identity against the running stack's;
+  // a mismatch takes the rebuild branch, and reindex DELETES the ChromaDB
+  // collection before re-embedding. Stamping "splash" here would destroy the
+  // knowledge base on the first switch back to mlx.
+  it("stamps the MLX index identity, not its own", () => {
+    const { splash, mlx } = buildStacks({});
+
+    expect(splash.indexStack).toBe("mlx");
+    expect(splash.indexEmbeddingModel).toBe(mlx.indexEmbeddingModel);
+    expect(splash.chromaCollection).toBe(mlx.chromaCollection);
+    expect(splash.indexFile).toBe(mlx.indexFile);
+  });
+
+  // The spec requires the /v1 gateway, n8n and the nightly ingest to follow the
+  // active stack with no code change. They all resolve it through
+  // getActiveStack(), so this is inherited -- pinned rather than assumed.
+  it("is a complete StackConfig, so every getActiveStack consumer works unchanged", () => {
+    const { splash, mlx } = buildStacks({});
+
+    expect(Object.keys(splash).sort()).toEqual(Object.keys(mlx).sort());
+    expect(Object.values(splash).every((v) => v !== undefined && v !== "")).toBe(true);
+  });
+
+  // THE CRITICAL FINDING this test exists to pin: splash's thinking body was copied from mlx/omlx's
+  // chat_template_kwargs convention, but Splash's own server, its warm-up in switch-stack.sh, the
+  // spec and the README all disable thinking via reasoning_effort. With the wrong field, warm_up
+  // warms up successfully with one body while every real chat request through llm-client.ts /
+  // model-gateway.ts sends a different, undocumented one -- and nothing else in the codebase
+  // compares the two halves (this file and scripts/switch-stack.sh), so the mismatch is invisible
+  // to every test that only looks at one side.
+  it("disables thinking via reasoning_effort, matching the warm-up, not mlx's chat_template_kwargs", () => {
+    const { splash } = buildStacks({});
+
+    expect(thinkingBody(splash, "off")).toEqual({ reasoning_effort: "none" });
+    expect(thinkingBody(splash, "off")).not.toHaveProperty("chat_template_kwargs");
+  });
+
+  it("honours SPLASH_URL and MLX_EMBED_URL overrides", () => {
+    const { splash } = buildStacks({ SPLASH_URL: "http://127.0.0.1:9000", MLX_EMBED_URL: "http://127.0.0.1:9001" });
+
+    expect(splash.chatBaseUrl).toBe("http://127.0.0.1:9000");
+    expect(splash.embedBaseUrl).toBe("http://127.0.0.1:9001");
+  });
+
+  // getActiveStack narrows the name with a hand-written list that is NOT
+  // generated from STACK_NAMES. It is a second source of truth in the same
+  // file and silently rejects any stack missing from it.
+  it("resolves splash through getActiveStack", async () => {
+    const { getActiveStack } = await import("../src/config/llm-stacks.js");
+
+    expect(getActiveStack({ LLM_PROVIDER: "splash" }).name).toBe("splash");
   });
 });

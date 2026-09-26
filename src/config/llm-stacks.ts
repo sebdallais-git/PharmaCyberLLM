@@ -2,12 +2,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type StackName = "ollama" | "mlx" | "omlx";
+export type StackName = "ollama" | "mlx" | "omlx" | "splash";
 
 // Single source of truth for the set of stack names: everything that needs to enumerate or
 // validate stacks (the router, the state machine, progress parsing) imports this rather than
 // keeping its own copy, so a fourth stack needs one edit instead of several.
-export const STACK_NAMES: readonly StackName[] = ["ollama", "mlx", "omlx"];
+export const STACK_NAMES: readonly StackName[] = ["ollama", "mlx", "omlx", "splash"];
 
 export function isStackName(value: unknown): value is StackName {
   return typeof value === "string" && (STACK_NAMES as readonly string[]).includes(value);
@@ -78,6 +78,23 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
     },
+    // Splash is chat-only -- it exposes no /v1/embeddings at all -- so it
+    // borrows the MLX embedding server and shares the MLX index, the same
+    // arrangement omlx uses. See the indexStack comment on omlx above: the
+    // identity stamped here is deliberately "mlx", because a mismatch sends
+    // the next switch down the rebuild branch, which DELETES the collection.
+    splash: {
+      name: "splash",
+      chatBaseUrl: env.SPLASH_URL ?? "http://localhost:8000",
+      embedBaseUrl: env.MLX_EMBED_URL ?? "http://localhost:8081",
+      chatModel: "incoai/Qwen3.8-27B-Splash",
+      embeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
+      embeddingDim: EMBEDDING_DIM,
+      chromaCollection: "knowledge_base_mlx",
+      indexFile: ".index.mlx.json",
+      indexStack: "mlx",
+      indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
+    },
   };
 }
 
@@ -109,8 +126,8 @@ export function getActiveStack(
       "No LLM_PROVIDER set and data/run/active-stack is unreadable -- refusing to guess which stack to use",
     );
   }
-  if (name !== "ollama" && name !== "mlx" && name !== "omlx") {
-    throw new Error(`Invalid LLM_PROVIDER "${name}" (expected "ollama", "mlx" or "omlx")`);
+  if (!isStackName(name)) {
+    throw new Error(`Unknown stack "${name}" (expected one of: ${STACK_NAMES.join(", ")})`);
   }
   return buildStacks(env)[name];
 }

@@ -1,8 +1,8 @@
 // Thinking levels, per stack, and the splitter that keeps model reasoning out of
 // the answer stream.
 //
-// The stacks are not interchangeable here: MLX drives a Qwen3 chat-template flag
-// that is strictly on/off, while Ollama takes a graded reasoning_effort. Rather
+// The stacks are not interchangeable here: mlx and omlx drive a Qwen3 chat-template
+// flag that is strictly on/off, while Ollama and Splash take a graded reasoning_effort. Rather
 // than inventing a shared vocabulary that lies on one of them, each stack
 // declares what it can actually do and the UI renders that.
 import type { StackConfig } from "../config/llm-stacks.js";
@@ -12,9 +12,15 @@ export type ThinkingLevel = "off" | "on" | "low" | "medium" | "high";
 const BINARY: ThinkingLevel[] = ["off", "on"];
 const GRADED: ThinkingLevel[] = ["off", "low", "medium", "high"];
 
+// Splash's server accepts reasoning_effort like Ollama does; sending it mlx's
+// chat_template_kwargs is a field it does not read.
+function usesReasoningEffort(stack: StackConfig): boolean {
+  return stack.name === "ollama" || stack.name === "splash";
+}
+
 /** The levels this stack can honour. Anything else is refused, never downgraded. */
 export function thinkingLevels(stack: StackConfig): ThinkingLevel[] {
-  return stack.name === "ollama" ? GRADED : BINARY;
+  return usesReasoningEffort(stack) ? GRADED : BINARY;
 }
 
 export function isThinkingLevel(stack: StackConfig, value: unknown): value is ThinkingLevel {
@@ -29,7 +35,7 @@ export function thinkingBody(stack: StackConfig, level: ThinkingLevel): Record<s
         `(supported: ${thinkingLevels(stack).join(", ")})`,
     );
   }
-  if (stack.name === "ollama") {
+  if (usesReasoningEffort(stack)) {
     return { reasoning_effort: level === "off" ? "none" : level };
   }
   return { chat_template_kwargs: { enable_thinking: level !== "off" } };

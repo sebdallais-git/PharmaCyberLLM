@@ -43,7 +43,12 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
   it("uses the same model names for omlx (warm_up must not hardcode ids that can drift)", () => {
     expect(shellVar("OMLX_CHAT_MODEL")).toBe(omlx.chatModel);
     expect(shellVar("OMLX_EMBED_MODEL")).toBe(omlx.embeddingModel);
-    expect(script).toContain('chat_model="$OMLX_CHAT_MODEL"');
+    // warm_up and mlx-watchdog.sh both take the chat model from chat-endpoint
+    const endpoint = spawnSync("bash", [join(process.cwd(), "scripts", "switch-stack.sh"), "chat-endpoint", "omlx"], {
+      encoding: "utf-8",
+      env: { ...process.env, PHARMALLM_RUN_DIR: mkdtempSync(join(tmpdir(), "chat-endpoint-")) },
+    });
+    expect(endpoint.stdout.trim()).toBe(`${omlx.chatBaseUrl} ${omlx.chatModel}`);
     expect(script).toContain('embed_model="$OMLX_EMBED_MODEL"');
   });
 
@@ -64,6 +69,22 @@ describe("switch-stack.sh stays in sync with llm-stacks.ts", () => {
     expect(script).toContain(`'"chat_template_kwargs":{"enable_thinking":false}'`);
     expect(JSON.stringify(thinkingBody(ollama, "off"))).toBe('{"reasoning_effort":"none"}');
     expect(JSON.stringify(thinkingBody(mlx, "off"))).toBe('{"chat_template_kwargs":{"enable_thinking":false}}');
+  });
+
+  // THE CRITICAL FINDING: warm_up's `extra` body for splash and thinkingBody()'s body for splash
+  // live in different files, and nothing else compares them -- so giving splash mlx's
+  // chat_template_kwargs in thinking.ts would pass warm_up (which builds its own literal body)
+  // and only break real chat requests, which read thinkingBody. This extracts the actual `extra=`
+  // assignment from the script's splash branch and checks it against thinkingBody(splash, "off"),
+  // so the two can never drift silently again.
+  it("splash's thinking-off body matches its own warm-up body, not mlx's chat_template_kwargs convention", () => {
+    const { splash } = buildStacks({});
+    const splashBranch = script.split('elif [ "$1" = "splash" ]')[1]?.split(/\belse\b/)[0] ?? "";
+    const match = splashBranch.match(/extra='([^']+)'/);
+
+    expect(match).not.toBeNull();
+    expect(JSON.parse(`{${match![1]}}`)).toEqual(thinkingBody(splash, "off"));
+    expect(thinkingBody(splash, "off")).not.toHaveProperty("chat_template_kwargs");
   });
 });
 
@@ -163,8 +184,8 @@ describe("switch-stack.sh omlx stack", () => {
   });
 
   it("accepts omlx everywhere a stack name is taken", () => {
-    expect(script).toContain("ollama|mlx|omlx) ;;");
-    expect(script).toContain("ollama|mlx|omlx) switch_to");
+    expect(script).toContain("ollama|mlx|omlx|splash) ;;");
+    expect(script).toContain("ollama|mlx|omlx|splash) switch_to");
   });
 
   it("prepares by stopping every other stack, not just MLX", () => {
@@ -176,7 +197,7 @@ describe("switch-stack.sh omlx stack", () => {
 
   it("shows the omlx log when a switch to omlx fails", () => {
     expect(script).toContain(
-      'for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/app.log"; do'
+      'for file in "$LOG_DIR/mlx-chat.log" "$LOG_DIR/mlx-embed.log" "$LOG_DIR/omlx.log" "$LOG_DIR/splash.log" "$LOG_DIR/app.log"; do'
     );
   });
 });
@@ -879,5 +900,46 @@ describe("services.sh is_project_pid", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("switch-stack.sh knows every stack", () => {
+  // The shell keeps its own STACK_NAMES array; nothing but this test connects
+  // the two lists. A stack present in TypeScript and absent here is switchable
+  // from the UI and unstartable from the shell.
+  it("declares the same stack list as llm-stacks.ts", () => {
+    const match = script.match(/^STACK_NAMES=\(([^)]*)\)/m);
+
+    expect(match).not.toBeNull();
+    expect(match?.[1].trim().split(/\s+/)).toEqual([...STACK_NAMES]);
+  });
+
+  it.each([...STACK_NAMES])("dispatches, validates and can start/stop %s", (stack: string) => {
+    // validate_stack's case arm
+    expect(script).toMatch(new RegExp(`\\b${stack}\\b[^)]*\\)\\s*;;`));
+    // a models_ready arm
+    expect(script).toMatch(new RegExp(`^\\s*${stack}\\)`, "m"));
+  });
+
+  it("starts splash on the port the stack definition expects", () => {
+    const { splash } = buildStacks({});
+    const port = new URL(splash.chatBaseUrl).port;
+
+    expect(script).toMatch(new RegExp(`SPLASH_PORT="?\\$\\{SPLASH_PORT:-${port}\\}"?`));
+  });
+
+  it("fixes the context window at 65536 by default, overridably", () => {
+    expect(script).toMatch(/SPLASH_MAX_CONTEXT="\$\{SPLASH_MAX_CONTEXT:-65536\}"/);
+    expect(script).toMatch(/--max-context "\$SPLASH_MAX_CONTEXT"/);
+  });
+
+  it("passes the reasoning-effort flag the spec fixes", () => {
+    expect(script).toContain("--default-reasoning-effort none");
+  });
+
+  // splash has no embeddings of its own, so its start must bring up the MLX
+  // embedding server AND run parity against it -- not against :8000.
+  it("runs the parity guard for splash against the embedding server", () => {
+    expect(script).toMatch(/splash\)\s*start_splash && check_embedding_parity/);
   });
 });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@jest/globals";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describeSwitch, formatCountdown, isStackSelectDisabled } from "../src/services/switch-labels.js";
+import { STACK_NAMES } from "../src/config/llm-stacks.js";
 import type { SwitchStatus } from "../src/services/switch-labels.js";
 
 // F2: one case per branch of describeSwitch — confirmed, stopping, starting, warming, indexing,
@@ -217,3 +219,17 @@ function loadBrowserFunction(name: string): (...args: unknown[]) => unknown {
   const body = source.slice(start, end + 2);
   return new Function(`${body}; return ${name};`)() as (...args: unknown[]) => unknown;
 }
+
+describe("the browser stack selector", () => {
+  const appJs = readFileSync(join(process.cwd(), "public", "app.js"), "utf8");
+
+  // Without an entry the UI falls back to the raw lowercase name, so the
+  // selector reads "splash" beside "Ollama", "MLX" and "oMLX".
+  it("has a display label for every stack", () => {
+    const block = appJs.match(/const STACK_LABELS = \{([^}]*)\}/)?.[1] ?? "";
+
+    for (const stack of STACK_NAMES) {
+      expect(block).toMatch(new RegExp(`\\b${stack}\\s*:`));
+    }
+  });
+});

@@ -785,7 +785,7 @@ if (canRecord) {
 
 // Stack switching: the request needs a Telegram confirmation, so the UI waits and then follows the
 // switch it asked for, counting down the confirmation window and reverting if it is cancelled or expires unused.
-const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX" };
+const STACK_LABELS = { ollama: "Ollama", mlx: "MLX", omlx: "oMLX", splash: "Splash" };
 let stackPollTimer = null;
 let lastKnownActive = null;
 let watching = false; // true while this browser is following the switch it asked for
@@ -835,7 +835,7 @@ function describeStackStatus(status) {
 // Writes the switch status into its own persistent element (#stack-status), not the transient
 // #status toast, which erases itself after 5 seconds and would never show a completed switch.
 function renderStackStatus(status) {
-  const options = (status.stacks || ["ollama", "mlx", "omlx"])
+  const options = (status.stacks || ["ollama", "mlx", "omlx", "splash"])
     .map((name) => {
       const selected = (status.pending ? status.pending.target : status.active) === name ? " selected" : "";
       return `<option value="${name}"${selected}>${STACK_LABELS[name] || name}</option>`;

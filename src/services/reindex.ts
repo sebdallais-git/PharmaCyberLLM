@@ -1,6 +1,7 @@
 // Rebuilds the active stack's in-memory index and ChromaDB collection from knowledge/ and data/raw_documents/
 
 import { getActiveStack } from "../config/llm-stacks.js";
+import type { StackConfig } from "../config/llm-stacks.js";
 import { checkIndexMeta, expectedIndexMeta, setIndexStatus } from "./index-guard.js";
 import type { IndexCheck } from "./index-guard.js";
 import { StackUnavailableError } from "./llm-client.js";
@@ -64,6 +65,9 @@ export interface IndexState {
 
 // Everything a rebuild reads or writes, injectable so failure handling can be tested without services
 export interface ReindexDeps {
+  // The stack being rebuilt. Injected because the default reads data/run/active-stack
+  // from the working directory, which a test must never depend on.
+  activeStack: () => StackConfig;
   isChromaDBAvailable: () => Promise<boolean>;
   resetIndex: () => void;
   recreateChromaCollection: () => Promise<void>;
@@ -81,6 +85,7 @@ export interface ReindexDeps {
 }
 
 const defaultDeps: ReindexDeps = {
+  activeStack: () => getActiveStack(),
   isChromaDBAvailable,
   resetIndex,
   recreateChromaCollection,
@@ -147,7 +152,7 @@ export async function reindexActiveStack(
   }
 
   const startedAt = Date.now();
-  const stack = getActiveStack();
+  const stack = deps.activeStack();
 
   if (!(await deps.isChromaDBAvailable())) {
     throw new Error("ChromaDB is not reachable — start it before reindexing");
