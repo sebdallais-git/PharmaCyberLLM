@@ -60,7 +60,7 @@ describe("mlx-watchdog.sh", () => {
   // Runs a copy of the watchdog in a sandbox whose switch-stack.sh, curl, lsof,
   // kill and pgrep are recorders: no real port is probed, no process is killed
   // and no stack is started, even on the restart path.
-  function runWatchdog(opts: { stack: string; httpCode: string; priorStrikes?: number }) {
+  function runWatchdog(opts: { stack: string; httpCode: string; priorStrikes?: number; cpu?: string; lsof?: (root: string) => string }) {
     const root = tempDir();
     const scripts = join(root, "scripts");
     const bin = join(root, "bin");
@@ -86,16 +86,26 @@ case "$1 $2" in
 esac`,
     );
     stub(join(bin, "curl"), `echo "curl $*" >>"${calls}"; printf '%s' "${opts.httpCode}"`);
-    stub(join(bin, "lsof"), `echo "lsof $*" >>"${calls}"; exit 1`);
-    stub(join(bin, "kill"), `echo "kill $*" >>"${calls}"`);
+    stub(join(bin, "lsof"), opts.lsof ? opts.lsof(root) : `echo "lsof $*" >>"${calls}"; exit 1`);
+    stub(join(bin, "kill"), `echo "kill $*" >>"${calls}"; touch "${root}/killed"`);
     stub(join(bin, "pgrep"), "exit 1");
+    // CPU of the chat server: 0 by default, i.e. idle, which is what wedged looks like
+    stub(join(bin, "ps"), `printf '%s\\n' "${opts.cpu ?? "0.0"}"`);
+    stub(join(bin, "sleep"), "exit 0");
+
+    // kill is a bash builtin, so the stub above would never run and a real
+    // process could be signalled. Disable the builtin before the script starts.
+    const bashEnv = join(root, "bash-env");
+    writeFileSync(bashEnv, "enable -n kill\n");
 
     const result = spawnSync("bash", [join(scripts, "mlx-watchdog.sh")], {
       encoding: "utf-8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root, PHARMALLM_RUN_DIR: run },
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root, PHARMALLM_RUN_DIR: run, BASH_ENV: bashEnv },
     });
     const log = existsSync(calls) ? readFileSync(calls, "utf-8") : "";
-    return { result, calls: log.split("\n").filter(Boolean) };
+    const strikesFile = join(run, "mlx-watchdog.strikes");
+    const strikes = existsSync(strikesFile) ? readFileSync(strikesFile, "utf-8").trim() : "";
+    return { result, calls: log.split("\n").filter(Boolean), strikes, root };
   }
 
   it("probes the omlx server where switch-stack says it serves chat, with its model", () => {
@@ -125,6 +135,34 @@ esac`,
     expect(lsofPorts.length).toBeGreaterThan(0);
     expect(new Set(lsofPorts)).toEqual(new Set(["8090"]));
     expect(calls).toContain("switch-stack ensure-stack omlx");
+  });
+
+  it("kills the process listening on the chat port, not a client connected to it", () => {
+    // A bare `lsof -ti :port` also lists clients such as the app (PID 222), and
+    // lists it first here. Only the listener (PID 111) may be signalled, and it
+    // counts as gone once it has been killed even though the client stays.
+    const lsof = (root: string) => `echo "lsof $*" >>"${root}/calls.log"
+case "$*" in
+  *-sTCP:LISTEN*) [ -e "${root}/killed" ] && exit 1; echo 111 ;;
+  *) printf '222\\n111\\n' ;;
+esac`;
+    const { calls } = runWatchdog({ stack: "mlx", httpCode: "000", priorStrikes: 1, lsof });
+    const kills = calls.filter((c) => c.startsWith("kill "));
+    expect(kills).toEqual(["kill -TERM 111"]);
+  });
+
+  it("does not count a strike while the chat server is busy generating", () => {
+    // A long chat turn or export holds the single-request server; the probe
+    // queues behind it and times out. High CPU means busy, not wedged.
+    const lsof = (root: string) => `echo "lsof $*" >>"${root}/calls.log"; echo 111`;
+    const { calls, strikes } = runWatchdog({ stack: "mlx", httpCode: "000", priorStrikes: 1, cpu: "87.5", lsof });
+    expect(calls.some((c) => c.startsWith("kill ") || c.includes("ensure-stack"))).toBe(false);
+    expect(strikes).toBe("1");
+  });
+
+  it("still restarts a server that fails the probe while idle on CPU", () => {
+    const { calls } = runWatchdog({ stack: "mlx", httpCode: "000", priorStrikes: 1, cpu: "0.0" });
+    expect(calls).toContain("switch-stack ensure-stack mlx");
   });
 
   it("does nothing when switch-stack cannot say where the stack serves chat", () => {

@@ -26,6 +26,10 @@ PROBE_TIMEOUT="${WATCHDOG_PROBE_TIMEOUT:-90}"
 # Two consecutive failures before acting, so one slow moment never restarts a
 # server that is merely busy.
 MAX_STRIKES="${WATCHDOG_MAX_STRIKES:-2}"
+# A failed probe only counts while the server is idle on CPU. The wedge above
+# sat at 0%; a server generating a long chat turn or an export narration is
+# busy, and the probe merely queued behind it.
+BUSY_CPU="${WATCHDOG_BUSY_CPU:-5}"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG")"
 log() { printf "%s %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
@@ -63,6 +67,20 @@ if [ "$code" = "200" ]; then
   exit 0
 fi
 
+# Only the process listening on the port: a bare `lsof -ti :port` also lists
+# clients, the app among them, and would have this script kill PharmaITChat.
+# Same filter as port_listeners in lib/services.sh.
+listener() { lsof -nP -tiTCP:"$chat_port" -sTCP:LISTEN 2>/dev/null | head -1; }
+
+pid="$(listener)"
+if [ -n "$pid" ]; then
+  cpu="$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' ')"
+  if awk -v c="${cpu:-0}" -v t="$BUSY_CPU" 'BEGIN { exit !(c >= t) }'; then
+    log "generation probe failed (HTTP ${code:-000}) but the server is busy (${cpu}% CPU), not counting a strike"
+    exit 0
+  fi
+fi
+
 strikes=$(( $(cat "$STRIKES_FILE" 2>/dev/null || echo 0) + 1 ))
 echo "$strikes" >"$STRIKES_FILE"
 log "generation probe failed (HTTP ${code:-000}), strike $strikes/$MAX_STRIKES"
@@ -72,12 +90,11 @@ if [ "$strikes" -lt "$MAX_STRIKES" ]; then
 fi
 
 log "restarting the $stack stack (port $chat_port)"
-pid="$(lsof -ti :"$chat_port" 2>/dev/null | head -1)"
 if [ -n "$pid" ]; then
   kill -TERM "$pid" 2>/dev/null
-  for _ in $(seq 1 15); do lsof -ti :"$chat_port" >/dev/null 2>&1 || break; sleep 1; done
+  for _ in $(seq 1 15); do [ -n "$(listener)" ] || break; sleep 1; done
   # A wedged process often ignores SIGTERM, which is what wedged means.
-  lsof -ti :"$chat_port" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null
+  [ -n "$(listener)" ] && kill -9 "$pid" 2>/dev/null
 fi
 
 if "$SCRIPT_DIR/switch-stack.sh" ensure-stack "$stack" >>"$LOG" 2>&1; then
