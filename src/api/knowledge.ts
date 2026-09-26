@@ -19,6 +19,7 @@ import {
   isChromaDBAvailable,
 } from "../services/chromadb-store.js";
 import { saveRawDocument } from "../services/raw-documents.js";
+import { ingestTextDocument } from "../services/ingest-text.js";
 import { reindexActiveStack } from "../services/reindex.js";
 import { createReindexJobs } from "../services/reindex-jobs.js";
 import { isSupportedFile, getSupportedExtensions, parseBuffer } from "../services/file-parser.js";
@@ -76,12 +77,10 @@ router.post("/ingest-text", async (req: Request, res: Response): Promise<void> =
   }
 
   let added: number;
+  let chromaAdded: number;
   try {
-    // Raw document first, so the text is included in the next rebuild even if indexing fails now
-    await saveRawDocument(source, text, { type: "text" });
-    assertIndexUsable();
-    added = await ingestText(text, source);
-    await saveIndex();
+    // Raw document, in-memory index and ChromaDB: chat retrieval reads ChromaDB first
+    ({ added, chromaAdded } = await ingestTextDocument(text, source));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Ingestion failed";
     const unavailable = err instanceof StackUnavailableError || message.startsWith("Search refused");
@@ -92,7 +91,7 @@ router.post("/ingest-text", async (req: Request, res: Response): Promise<void> =
   // frontmatter and declared install base only. See
   // docs/superpowers/specs/2026-09-21-vendor-intel-graph-design.md.
 
-  res.json({ message: `${added} chunks added from '${source}'`, added });
+  res.json({ message: `${added} chunks added from '${source}'`, added, chromaAdded });
 });
 
 // POST /api/knowledge/upload - Upload a knowledge file
