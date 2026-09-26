@@ -2,10 +2,10 @@
 # Read-only status of every moving part, and which of them come back by
 # themselves. Written for the question "did everything survive the reboot?".
 #
-# Only three things are supervised: the MCP service, n8n and the Hermes gateway
-# are launchd jobs with KeepAlive. The app, the MLX servers and ChromaDB are
-# started by scripts/start-services.sh and nothing restarts them -- after a
-# reboot they stay down until someone runs it.
+# Only four things are supervised: the MCP service, n8n, the jev scorer and
+# the Hermes gateway are launchd jobs with KeepAlive. The app, the MLX servers
+# and ChromaDB are started by scripts/start-services.sh and nothing restarts
+# them -- after a reboot they stay down until someone runs it.
 #
 # Usage: scripts/check-services.sh
 set -uo pipefail
@@ -31,6 +31,7 @@ check_job() {
 echo "launchd services (these restart themselves)"
 check_job com.pharmaitchat.mcp
 check_job com.pharmaitchat.n8n
+check_job com.pharmaitchat.jev
 check_job ai.hermes.gateway
 
 echo
@@ -39,6 +40,7 @@ check_port 3000 "app"        "  -> run scripts/start-services.sh"
 check_port 8080 "MLX chat"   "  -> run scripts/start-services.sh"
 check_port 8081 "MLX embed"  "  -> run scripts/start-services.sh"
 check_port 8100 "ChromaDB"   "  -> run scripts/start-services.sh"
+check_port 8000 "jev scorer" "  -> gap decisions degrade; chat is unaffected"
 
 echo
 echo "docker containers (return only if Docker Desktop starts at login)"
