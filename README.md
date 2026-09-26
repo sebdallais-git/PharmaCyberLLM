@@ -554,7 +554,7 @@ npm run watchlist -- status              # after the first run: counts and per-e
 
 <br/>
 
-1. Run [SearXNG](https://github.com/searxng/searxng) on `http://localhost:8888` and [n8n](https://n8n.io) on `http://localhost:5678`.
+1. Run [SearXNG](https://github.com/searxng/searxng) on `http://localhost:8888` with `bash scripts/setup-searxng.sh`, which builds its settings from `config/searxng/settings.yml`, and [n8n](https://n8n.io) on `http://localhost:5678`. The public search engines SearXNG scrapes tend to answer a self-hosted instance with CAPTCHAs and rate limits, so put a [Brave Search API](https://brave.com/search/api/) key in `data/run/brave-api-key` (mode 600) before running the script; it is rendered into the container's settings, never into the repo or a command line.
 2. In n8n, import `n8n/knowledge_gap_workflow_v2.json` and `n8n/knowledge_qa_workflow.json` (**Workflows → Import from File**) and activate them.
 3. Nothing else to wire: `start-services.sh` and `switch-stack.sh` point the gap detector at `http://localhost:5678/webhook/knowledge-gap` (override with `N8N_WEBHOOK_URL`), and `scripts/run-n8n.sh` hands n8n the API token from `data/run/api-token`.
 
