@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import express from "express";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -307,6 +307,24 @@ describe("GET /api/export/file/:id", () => {
     const res = await fetch(`${fixture.url}/api/export/file/${external}`);
 
     expect(await res.text()).not.toContain("incumbency");
+  });
+
+  it("answers 404, and keeps the server up, when the file cannot be opened after the existence check", async () => {
+    // Stands in for the retention sweep deleting the file between existsSync
+    // and the open: a directory passes existsSync and then fails to read.
+    // Without an error listener on the stream that crashed the process.
+    const fixture = await startApp();
+    const id = finishedJob(fixture);
+    const path = join(fixture.downloadDir, downloadFilename({ id, format: "pdf" }));
+    rmSync(path);
+    mkdirSync(path);
+
+    const res = await fetch(`${fixture.url}/api/export/file/${id}`);
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "no such export" });
+    expect(res.headers.get("content-disposition")).toBeNull();
+    expect((await fetch(`${fixture.url}/api/export/file/${id}`)).status).toBe(404);
   });
 
   it("returns 404 for a job id that does not exist", async () => {
