@@ -24,3 +24,11 @@ engines:
     disabled: false
   - name: presearch
     disabled: false
+  # Every engine above that scrapes a public search page refused this machine
+  # too (CAPTCHAs, access denied, suspensions). Brave's Search API
+  # authenticates with a key instead of rate-limiting by address. The key never
+  # goes in this file: scripts/setup-searxng.sh renders data/run/brave-api-key
+  # into the container's copy, replacing the two marked lines below.
+  - name: braveapi
+    api_key: ""  # placeholder: brave-api-key
+    inactive: true  # placeholder: brave-api-inactive
