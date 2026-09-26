@@ -47,7 +47,8 @@ check_port 8888 "SearXNG" "  -> docker start searxng"
 
 echo
 echo "end to end"
-health="$(curl -sf -m 8 http://localhost:3000/api/health 2>/dev/null)"
+# Longer than the generation probe inside /api/health (GENERATION_PROBE_TIMEOUT_MS)
+health="$(curl -sf -m 25 http://localhost:3000/api/health 2>/dev/null)"
 if [ -n "$health" ]; then
   status="$(printf '%s' "$health" | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])' 2>/dev/null)"
   [ "$status" = "healthy" ] && green "$status" "app health" || red "$status" "app health"
