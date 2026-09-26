@@ -418,6 +418,34 @@ describe("hermes-setup.sh install-services", () => {
   });
 
   it(
+    "bootstraps the gateway itself when hermes' own installer left it unloaded",
+    () => {
+      const box = sandbox();
+      // hermes gateway install bootstraps once and gives up, leaving an
+      // unsupervised background process that nothing revives. `launchctl print`
+      // failing for the gateway label is how this script detects that.
+      writeStub(join(box.root, "launchctl"), "launchctl", [
+        'case "$1 $2" in',
+        '  "print "*ai.hermes.gateway) exit 1 ;;',
+        "esac",
+        "exit 0",
+      ]);
+      mkdirSync(box.agentsDir, { recursive: true });
+      writeFileSync(join(box.agentsDir, "ai.hermes.gateway.plist"), "<plist/>");
+
+      const result = setup(box, ["install-services"], { NODE_BIN: "/opt/fake/bin/node" });
+
+      expect(result.status).toBe(0);
+      const calls = readFileSync(box.calls, "utf-8");
+      expect(calls).toMatch(/\[bootstrap\].*ai\.hermes\.gateway\.plist/);
+      // The unsupervised process must be stopped first, or two gateways race
+      // for the same Telegram token.
+      expect(calls).toContain("hermes [gateway] [stop]");
+    },
+    30_000
+  );
+
+  it(
     "retries a bootstrap that fails right after bootout",
     () => {
       const box = sandbox();
@@ -433,7 +461,11 @@ describe("hermes-setup.sh install-services", () => {
 
       expect(result.status).toBe(0);
       const calls = readFileSync(box.calls, "utf-8");
-      expect(calls.match(/\[bootstrap\]/g)).toHaveLength(3);
+      // Three bootstraps for the MCP plist -- two rejections then success --
+      // plus one for the n8n plist, which is bootstrapped after it. Counted per
+      // service rather than in total, so the retry still has to be a retry.
+      expect(calls.match(/\[bootstrap\].*com\.pharmaitchat\.mcp\.plist/g)).toHaveLength(3);
+      expect(calls.match(/\[bootstrap\].*com\.pharmaitchat\.n8n\.plist/g)).toHaveLength(1);
       expect(calls).toContain("hermes [gateway] [install]");
     },
     30_000

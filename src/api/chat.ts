@@ -7,6 +7,8 @@ import { execFile } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isThinkingLevel, thinkingLevels, type ThinkingLevel } from "../services/thinking.js";
+import { getActiveStack } from "../config/llm-stacks.js";
 import { getLlmClient } from "../services/llm-client.js";
 import type { ChatMessage, StatsCollector } from "../services/llm-client.js";
 import { getIndexStatus } from "../services/index-guard.js";
@@ -117,15 +119,27 @@ const BENCHMARK_MAX_TOKENS = 1024;
 router.post("/", async (req: Request, res: Response): Promise<void> => {
   // A "model" field in the body is ignored: the active stack's chat model is always used,
   // because mlx_lm.server would otherwise download and load any requested repository
-  const { message, history, webSearch, benchmark } = req.body as {
+  const { message, history, webSearch, benchmark, thinking } = req.body as {
     message: string;
     history?: ChatMessage[];
     webSearch?: boolean;
     benchmark?: boolean;
+    thinking?: string;
   };
 
   if (!message) {
     res.status(400).json({ error: "The 'message' field is required" });
+    return;
+  }
+
+  // Refused rather than downgraded: a level the stack cannot honour would
+  // otherwise look like it worked and change nothing.
+  const activeStack = getActiveStack();
+  if (thinking !== undefined && !isThinkingLevel(activeStack, thinking)) {
+    res.status(400).json({
+      error: `thinking level "${thinking}" is not supported on the ${activeStack.name} stack`,
+      supported: thinkingLevels(activeStack),
+    });
     return;
   }
 
@@ -339,13 +353,38 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     let fullResponse = "";
     const statsCollector: StatsCollector = {};
 
+    // Thinking is emitted as its own event, never as `token`: the MCP client
+    // consumes this same stream for the Telegram path and does
+    // `answer += event.token`.
     for await (const token of llm.streamChat(
       messages,
-      { temperature: benchmark ? 0 : undefined, maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined },
+      {
+        temperature: benchmark ? 0 : undefined,
+        maxTokens: benchmark ? BENCHMARK_MAX_TOKENS : undefined,
+        thinking: thinking as ThinkingLevel | undefined,
+        onReasoning: (text) => {
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify({ thinking: text })}\n\n`);
+        },
+      },
       statsCollector
     )) {
       fullResponse += token;
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
+    }
+
+    // A turn can end cleanly having produced no answer at all: with thinking
+    // on, reasoning spends the same budget, so the ceiling can be reached
+    // before the answer starts. That used to render as an empty bubble beside
+    // a token count, which looks like a broken app rather than a spent budget.
+    if (statsCollector.result?.truncated && fullResponse.length === 0) {
+      const note =
+        thinking && thinking !== "off"
+          ? "The model used its entire token budget reasoning and never started the answer. " +
+            "Set Thinking to off for this question, or ask something narrower."
+          : "The model hit its token limit before writing anything.";
+      res.write(`data: ${JSON.stringify({ error: note })}\n\n`);
+    } else if (statsCollector.result?.truncated) {
+      res.write(`data: ${JSON.stringify({ truncated: true })}\n\n`);
     }
 
     // Store response metadata and generate response_id for feedback
@@ -425,6 +464,9 @@ router.get("/models", async (_req: Request, res: Response): Promise<void> => {
     stack: llm.stack.name,
     chatModel: llm.stack.chatModel,
     embeddingModel: llm.stack.embeddingModel,
+    // The UI renders exactly these and no more, so a level it offers is always
+    // one the active stack can honour.
+    thinkingLevels: thinkingLevels(llm.stack),
   };
   try {
     // Probe the stack so an unreachable stack still reports 503

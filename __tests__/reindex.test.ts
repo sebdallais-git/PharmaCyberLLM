@@ -3,10 +3,13 @@ import { batchRangeLabel, indexesReady, reindexActiveStack } from "../src/servic
 import type { IndexState, ReindexDeps, ReindexProgress } from "../src/services/reindex.js";
 import { StackUnavailableError } from "../src/services/llm-client.js";
 import { getIndexStatus, setIndexStatus } from "../src/services/index-guard.js";
-import { getActiveStack } from "../src/config/llm-stacks.js";
+import { buildStacks } from "../src/config/llm-stacks.js";
 import type { RawDocument } from "../src/services/raw-documents.js";
 
 const ok = { ok: true, reason: "" };
+
+// A fixed stack, so no test depends on data/run/active-stack in the working directory
+const testStack = buildStacks({}).ollama;
 
 interface StateOverrides {
   memoryOk: boolean;
@@ -81,6 +84,7 @@ function rawDocs(count: number): RawDocument[] {
 function fakeDeps(overrides: Partial<ReindexDeps> = {}): { deps: ReindexDeps; calls: string[] } {
   const calls: string[] = [];
   const deps: ReindexDeps = {
+    activeStack: () => testStack,
     isChromaDBAvailable: async () => true,
     resetIndex: () => {
       calls.push("resetIndex");
@@ -96,6 +100,7 @@ function fakeDeps(overrides: Partial<ReindexDeps> = {}): { deps: ReindexDeps; ca
     ingestTexts: async (items) => items.length,
     addToChromaDB: async (texts) => texts.length,
     listRawDocuments: async () => rawDocs(130),
+    listWatchlistItems: async () => [],
     markIndexComplete: () => {
       calls.push("markIndexComplete");
     },
@@ -145,7 +150,7 @@ describe("reindexActiveStack", () => {
 
   it("aborts, rethrows and marks the index unusable when the stack goes down during a batch", async () => {
     setIndexStatus({ ok: true, reason: "" });
-    const stackDown = new StackUnavailableError(getActiveStack(), "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
+    const stackDown = new StackUnavailableError(testStack, "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
     const { deps, calls } = fakeDeps({
       ingestTexts: async (items) => {
         if (items.some((item) => item.source === "doc-0")) throw stackDown;
@@ -164,7 +169,7 @@ describe("reindexActiveStack", () => {
 
   it("aborts when the stack goes down while ingesting a knowledge file", async () => {
     setIndexStatus({ ok: true, reason: "" });
-    const stackDown = new StackUnavailableError(getActiveStack(), "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
+    const stackDown = new StackUnavailableError(testStack, "http://localhost:1/v1/embeddings", new Error("ECONNREFUSED"));
     const { deps } = fakeDeps({
       addToChromaDB: async () => {
         throw stackDown;
@@ -209,5 +214,45 @@ describe("reindexActiveStack", () => {
     await expect(reindexActiveStack(quiet)).rejects.toThrow(
       "reindexActiveStack called without injected deps in a test"
     );
+  });
+});
+
+describe("watchlist items in a rebuild", () => {
+  // reindex.ts recreates the collection -- a DELETE -- and used to rebuild it
+  // from knowledge/ and raw_documents/ only, so every watchlist chunk was lost
+  // and could not be restored without re-fetching feeds that mostly no longer
+  // return anything.
+  it("re-embeds stored watchlist items so a rebuild does not lose vendor intel", async () => {
+    const embedded: Record<string, unknown>[] = [];
+    const { deps } = fakeDeps({
+      listKnowledgeFiles: async () => [],
+      listRawDocuments: async () => [],
+      listWatchlistItems: async () => [
+        {
+          text: "Dell refreshes PowerStore\n\nDell said today...",
+          metadata: { source: "https://dell.com/a", entity: "dell", domain: "storage", watchlist_item_id: 7 },
+        },
+      ],
+      addToChromaDB: async (texts, metadatas) => {
+        embedded.push(...metadatas);
+        return texts.length;
+      },
+    });
+
+    const result = await reindexActiveStack(quiet, deps);
+
+    expect(result.watchlistItems).toBe(1);
+    expect(embedded).toHaveLength(1);
+    expect(embedded[0]).toMatchObject({ watchlist_item_id: 7, entity: "dell", source_tier: "feed" });
+  });
+
+  it("reports zero when there are no stored watchlist items", async () => {
+    const { deps } = fakeDeps({
+      listKnowledgeFiles: async () => [],
+      listRawDocuments: async () => [],
+      listWatchlistItems: async () => [],
+    });
+
+    expect((await reindexActiveStack(quiet, deps)).watchlistItems).toBe(0);
   });
 });

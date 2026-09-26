@@ -8,6 +8,7 @@ const result: ReindexResult = {
   rawDocuments: 7023,
   memoryChunks: 7626,
   chromaChunks: 7289,
+  watchlistItems: 691,
   skippedRawDocuments: 0,
   seconds: 947.1,
 };

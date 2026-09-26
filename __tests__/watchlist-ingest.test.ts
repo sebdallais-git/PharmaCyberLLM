@@ -1295,3 +1295,25 @@ describe("R20: disabled feed kinds", () => {
     harness.store.close();
   });
 });
+
+describe("body persistence", () => {
+  // The body is what a comparison question needs. It used to reach ChromaDB
+  // and nowhere else, so a reindex -- which rebuilds from knowledge/ and
+  // raw_documents/ only -- erased it with nothing on disk to restore it from.
+  it("stores the fetched body alongside the item", async () => {
+    const title = "Dell refreshes PowerStore";
+    const body = "Dell said today that PowerStore Prime doubles mid-range throughput.";
+    const dell = makeEntity({ id: "dell", name: "Dell", feeds: [{ kind: "rss", url: "https://dell.com/feed.xml" }] });
+    const harness = makeHarness({
+      watchlist: makeWatchlist([dell], []),
+      async rss() {
+        return [rawItem({ title, url: "https://dell.com/a", body })];
+      },
+    });
+
+    await harness.run();
+
+    expect(harness.store.findByHash(contentHash(title, body))?.body).toBe(body);
+    harness.store.close();
+  });
+});

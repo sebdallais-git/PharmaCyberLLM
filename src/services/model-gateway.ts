@@ -2,6 +2,7 @@
 
 import type { Response as ExpressResponse } from "express";
 import { Agent, fetch as undiciFetch } from "undici";
+import { thinkingBody } from "./thinking.js";
 import type { StackConfig } from "../config/llm-stacks.js";
 import { StackUnavailableError } from "./llm-client.js";
 
@@ -82,7 +83,7 @@ export function buildUpstreamBody(body: unknown, stack: StackConfig): Record<str
   upstream.max_tokens = Math.min(requested, GATEWAY_MAX_TOKENS);
   upstream.model = stack.chatModel;
 
-  return { ...upstream, ...stack.chatExtraBody };
+  return { ...upstream, ...thinkingBody(stack, "off") };
 }
 
 export function modelList(stack: StackConfig): {

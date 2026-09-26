@@ -1,4 +1,6 @@
 // Stack definitions for the Ollama / MLX switch. Exactly one stack is active per process.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type StackName = "ollama" | "mlx" | "omlx" | "splash";
 
@@ -25,8 +27,6 @@ export interface StackConfig {
   // the index guard would invalidate it — and a rebuild deletes the live ChromaDB collection.
   indexStack: string;
   indexEmbeddingModel: string;
-  // Extra request fields that keep both stacks comparable (thinking disabled)
-  chatExtraBody: Record<string, unknown>;
 }
 
 const EMBEDDING_DIM = 1024;
@@ -46,7 +46,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.ollama.json",
       indexStack: "ollama",
       indexEmbeddingModel: "qwen3-embedding:0.6b-q8_0",
-      chatExtraBody: { reasoning_effort: "none" },
     },
     mlx: {
       name: "mlx",
@@ -59,7 +58,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.mlx.json",
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
     // oMLX serves chat and embeddings from one process; its embeddings are identical to the MLX
     // server's (cosine 1.000000, see the verification doc), so it shares the MLX index
@@ -79,7 +77,6 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       // deletes the collection and re-embeds the whole knowledge base.
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      chatExtraBody: { chat_template_kwargs: { enable_thinking: false } },
     },
     // Splash is chat-only -- it exposes no /v1/embeddings at all -- so it
     // borrows the MLX embedding server and shares the MLX index, the same
@@ -97,18 +94,38 @@ export function buildStacks(env: NodeJS.ProcessEnv = process.env): Record<StackN
       indexFile: ".index.mlx.json",
       indexStack: "mlx",
       indexEmbeddingModel: "mlx-community/Qwen3-Embedding-0.6B-8bit",
-      // NOT chat_template_kwargs (that's an mlx_lm.server convention, copied here by mistake from
-      // the mlx/omlx entries above). Splash's own server, its warm-up in switch-stack.sh, the spec
-      // and the README all disable thinking with reasoning_effort — matching the ollama entry.
-      // A mismatch here would warm up successfully with one body while every real request through
-      // llm-client.ts / model-gateway.ts sends a different, undocumented field.
-      chatExtraBody: { reasoning_effort: "none" },
     },
   };
 }
 
-export function getActiveStack(env: NodeJS.ProcessEnv = process.env): StackConfig {
-  const name = env.LLM_PROVIDER ?? "ollama";
+/**
+ * The stack actually running, as written by switch-stack.sh. Returns null when
+ * the file is missing or unreadable.
+ */
+export function readRunningStack(): string | null {
+  try {
+    const raw = readFileSync(join(process.cwd(), "data", "run", "active-stack"), "utf8").trim();
+    return raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getActiveStack(
+  env: NodeJS.ProcessEnv = process.env,
+  runningStack: () => string | null = readRunningStack,
+): StackConfig {
+  // An explicit LLM_PROVIDER wins -- switch-stack.sh sets it deliberately when
+  // acting on a stack that is not the running one. Otherwise use the stack that
+  // is actually running. Never fall back to a hardcoded default: this used to
+  // resolve to "ollama", so any script run from a bare shell silently operated
+  // on the wrong collection, and reindex.ts DELETEs the collection it rebuilds.
+  const name = env.LLM_PROVIDER ?? runningStack();
+  if (name === null || name === undefined) {
+    throw new Error(
+      "No LLM_PROVIDER set and data/run/active-stack is unreadable -- refusing to guess which stack to use",
+    );
+  }
   if (!isStackName(name)) {
     throw new Error(`Unknown stack "${name}" (expected one of: ${STACK_NAMES.join(", ")})`);
   }

@@ -1,0 +1,65 @@
+# Your accounts, their needs, and who is already installed.
+#
+#   cp config/accounts.example.yaml config/accounts.local.yaml
+#
+# accounts.local.yaml is gitignored: it holds account intelligence, which is a
+# different sensitivity class from the public feed URLs in watchlist.yaml.
+#
+# This file models INSTALL BASE -- what is deployed and since when. It is
+# deliberately not a CRM: no opportunities, stages, amounts, close dates or
+# forecast. That line is in the design spec and is not to be crossed by drift.
+#
+# Incumbency is the primary axis of every answer. "What is Dell doing best for
+# my accounts" resolves per segment into one of three modes:
+#
+#   the vendor is incumbent  -> defend / expand   (roadmap, lifecycle, attach;
+#                                                  function gaps are tolerable)
+#   a rival is incumbent     -> displace          (needs a disqualifying
+#                                                  weakness or a trigger event)
+#   nobody is incumbent      -> greenfield        (function and price decide)
+#
+# A blank incumbent is better than a guessed one: guessing wrong flips the
+# answer from defend to displace while sounding equally confident.
+
+accounts:
+  roche:
+    name: Roche
+    # Names the watchlist may report under; used to attach collected evidence.
+    aliases: [Genentech, Chugai, Roche Diagnostics]
+
+    # From the closed needs vocabulary:
+    #   gxp-compliance   rnd-compute        ai-factory      cyber-resilience
+    #   data-sovereignty manufacturing-ot   cost-optimisation  sustainability
+    needs: [rnd-compute, gxp-compliance, cyber-resilience, data-sovereignty]
+
+    # Who is installed, per segment. Segments are the closed set of ten:
+    #   compute-ai       compute-standard
+    #   storage-block    storage-file      storage-object
+    #   data-protection  hci               networking
+    #   client           services
+    #
+    # Values are LISTS: a mixed estate is normal, and several vendors can hold
+    # the same segment at different sites or business units. Omit a segment you
+    # do not know rather than guessing.
+    incumbents:
+      storage-file: [netapp]
+      storage-block: [dell, hpe]
+      data-protection: [dell]
+      compute-standard: [hpe]
+      # compute-ai: unknown -- omitted rather than guessed
+
+    # Free text. Anything a brief cannot know: site names, live programmes,
+    # political constraints, who the decision makers are.
+    notes: >
+      Basel and Kaiseraugst plus Genentech in South San Francisco. Cryo-EM
+      estate growing. NetApp entrenched in file since the ONTAP consolidation.
+
+  novartis:
+    name: Novartis
+    aliases: [Sandoz]
+    needs: [manufacturing-ot, gxp-compliance, cost-optimisation]
+    incumbents:
+      storage-block: [dell]
+      manufacturing-ot: []
+    notes: >
+      Stein and Basel. Heavier OT/MES footprint than Roche.

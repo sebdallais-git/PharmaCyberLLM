@@ -30,7 +30,29 @@ customers:
       - Roche Diagnostics
       - Chugai
     feeds:
-      rss: ["https://www.roche.com/med_news_xml.xml"]
+      # med_news_xml.xml is Roche's MEDICAL feed: of 10 entries it carried on
+      # 2026-09-21, 6 were drug approvals and trial results (Ocrevus, Susvimo,
+      # Vabysmo, Enspryng...). Useful to a pharma analyst, useless to an IT
+      # account team -- you cannot open a CIO conversation with an Ocrevus
+      # approval. Kept, because the occasional corporate item does come through
+      # it (the Boston Innovation Center opening did).
+      #
+      # `when:30d` is load-bearing: Google News RSS ranks by RELEVANCE, not
+      # date, so without it the feed is a mix spanning years -- the first
+      # tightened Novartis query had its newest item in 2015. A never-seen feed
+      # gets a 30-day backfill (FIRST_RUN_BACKFILL_MS), so every one of those
+      # items fell outside the window and nothing was ingested at all.
+      #
+      # The second feed is the IT-scoped one. Roche publishes no corporate RSS
+      # (probed rss, news_xml, corp_news_xml, media/releases.xml and the media
+      # pages' autodiscovery on 2026-09-22 -- all 404 or JS-rendered), so this
+      # uses the Google News search feed that web-search.ts already relies on.
+      # Attached to the entity rather than to topics.*, because entity feeds run
+      # in the customers pass before the ingest cap bites, and all 188 topic
+      # queries currently yield nothing for exactly that reason.
+      rss:
+        - "https://www.roche.com/med_news_xml.xml"
+        - "https://news.google.com/rss/search?q=Roche+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)+when:30d&hl=en-US&gl=US&ceid=US:en"
       ir_page: "https://www.roche.com/investors/reports"
     # no edgar: Roche does not file with the SEC (absent from SEC company_tickers.json)
     verifiedAt: "2026-09-20"
@@ -53,7 +75,13 @@ customers:
   novartis:
     name: Novartis
     feeds:
-      rss: ["https://www.novartis.com/news-rss.xml"]
+      # news-rss.xml is clinical, exactly like Roche's: of what it carried on
+      # 2026-09-22, every item was a trial result or regulatory opinion
+      # (Cosentyx, pelacarsen, remibrutinib, ESC Congress data). Kept for the
+      # occasional corporate item; the IT signal comes from the second feed.
+      rss:
+        - "https://www.novartis.com/news-rss.xml"
+        - "https://news.google.com/rss/search?q=Novartis+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)+when:30d&hl=en-US&gl=US&ceid=US:en"
       edgar: "0001114448"
       ir_page: "https://www.novartis.com/investors/financial-data/quarterly-results"
     verifiedAt: "2026-09-20"
@@ -76,6 +104,12 @@ customers:
   sandoz:
     name: Sandoz
     feeds:
+      # Sandoz publishes no RSS at all (see the note below), so this is its only
+      # news source and the reason it had 0 stored items. Coverage is genuinely
+      # thin -- Sandoz IT press barely exists, and the feed skews to biosimilars
+      # and finance. That is the market, not a bad query.
+      rss:
+        - "https://news.google.com/rss/search?q=Sandoz+(%22digital+transformation%22+OR+%22artificial+intelligence%22+OR+CIO+OR+%22data+center%22+OR+%22cloud+migration%22+OR+SAP+OR+%22IT+infrastructure%22)+when:30d&hl=en-US&gl=US&ceid=US:en"
       ir_page: "https://www.sandoz.com/investors/financials/"
     # no rss: tried /rss, /rss.xml, /media/rss.xml, /media/news/rss, /media/news/feed,
     # /news/news-archive/rss, /rss/media.xml, /news/rss.xml, /media/press-releases/rss --
@@ -412,8 +446,11 @@ vendors:
   storage:
     # R8: Pure Storage Inc. renamed to Everpure, Inc. in SEC filings as of 2026-01-09
     # (SEC submissions API formerNames; corroborated by the "Everpure SafeMode
-    # ransomware healthcare" topic string below). Id kept as pure-storage.
-    - pure-storage:
+    # ransomware healthcare" topic string below). The id followed the rename on
+    # 2026-09-21 so that it matches the vendor briefs in knowledge/vendors/;
+    # nothing referenced the old id and the entity had no stored items, so no
+    # tagged row was orphaned. "Pure Storage" stays an alias for matching.
+    - everpure:
         name: Everpure
         aliases: ["Pure Storage"]
         feeds:

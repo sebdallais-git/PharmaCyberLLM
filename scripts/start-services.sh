@@ -21,6 +21,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
+ensure_containers
 ensure_chromadb
 "$SCRIPT_DIR/switch-stack.sh" ensure-stack "$STACK"
 

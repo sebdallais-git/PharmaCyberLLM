@@ -9,7 +9,7 @@ const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD ?? "pharma2024";
 
 let driver: Driver | null = null;
 
-function getDriver(): Driver {
+export function getDriver(): Driver {
   if (!driver) {
     driver = neo4j.driver(NEO4J_URI, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD));
   }

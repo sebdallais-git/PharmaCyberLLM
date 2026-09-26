@@ -18,3 +18,9 @@ python/omlx-venv/
 # Local agent workspaces
 .worktrees/
 .superpowers/
+
+# Firecrawl scrape cache from vendor-brief research
+.firecrawl/
+
+# Account intelligence: install base, incumbents, notes. Never committed.
+config/accounts.local.yaml

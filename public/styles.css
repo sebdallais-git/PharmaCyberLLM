@@ -749,3 +749,28 @@ textarea.input-field {
     padding: 12px 16px;
   }
 }
+
+/* Thinking level selector, beside the web-search toggle */
+.thinking-select {
+  background: transparent;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 2px 6px;
+  margin-left: 6px;
+  cursor: pointer;
+}
+
+/* The model's own reasoning: same visual family as the pipeline panel, but a
+   native <details> so it collapses without extra scripting. */
+.thinking-panel > summary {
+  cursor: pointer;
+  user-select: none;
+}
+.thinking-panel .reasoning-steps {
+  white-space: pre-wrap;
+  opacity: 0.75;
+  font-size: 0.9em;
+}

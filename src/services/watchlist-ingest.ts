@@ -572,6 +572,9 @@ export function createIngestRun(deps: IngestDeps): (options?: IngestOptions) => 
               facts: tagging.facts,
               publishedAt: item.publishedAt,
               fetchedAt: startedAt,
+              // Persisted so the index can be rebuilt without re-fetching the
+              // feed -- most of which no longer return anything.
+              body: item.body,
               entities,
               domains: tagging.domains,
               flagged: tagging.flagged,

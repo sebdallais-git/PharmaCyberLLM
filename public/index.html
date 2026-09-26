@@ -32,13 +32,14 @@
       <div class="message assistant">
         <div class="message-wrapper">
           <div class="message-content">
-            Hello! I'm <strong>PharmaITChat</strong> — I track the IT landscape around pharma: three customers, their competitors, and the vendors that shape their tech stack.
+            Hello! I'm <strong>PharmaITChat</strong> — I track the IT landscape around pharma: your accounts, the vendors installed in them, and who is competing for what.
             <ul>
-              <li><strong>Customers &amp; competitors</strong>: Roche, Novartis, Sandoz and their peers — M&amp;A, drug pipelines, manufacturing plants, market moves</li>
-              <li><strong>IT vendor landscape</strong>: 40 vendors across cyber, AI, cloud, infrastructure, R&amp;D IT, manufacturing IT, SAP, data, storage and backup</li>
-              <li><strong>Cyber threats in pharma</strong>: ransomware, data breaches, IP theft, manufacturing shutdowns, supply chain attacks</li>
-              <li><strong>Business impact</strong>: downtime costs, batch losses, stock impact, regulatory consequences, remediation strategies</li>
-              <li><strong>What to do about it</strong>: vendor solutions, incident response, recovery architectures, risk mitigation</li>
+              <li><strong>Use cases</strong>: AI Factory, AI Data Platform, End User Computing, Cyber Resilience, Multi Cloud, SAP</li>
+              <li><strong>Also tracked</strong>: GxP compliance, R&amp;D compute, manufacturing OT, data sovereignty</li>
+              <li><strong>Accounts &amp; competitors</strong>: Roche, Novartis, Sandoz and their peers — M&amp;A, pipelines, plants, market moves</li>
+              <li><strong>Vendor landscape</strong>: who holds compute, storage, data protection, networking, client and services — and where each one is genuinely strong or weak</li>
+              <li><strong>Business impact</strong>: time-to-insight for research, GPU and power headroom, recovery objectives and regulatory exposure, cloud egress and sovereignty, workplace cost per seat, S/4HANA migration risk</li>
+              <li><strong>What to do next</strong>: where you defend an incumbency, where you displace one, and where a segment is still open</li>
             </ul>
             Ask me anything!
           </div>
@@ -71,6 +72,10 @@
         </button>
       </div>
       <div class="input-actions">
+        <label class="toggle-label" id="thinking-label" hidden>
+          <span class="toggle-text">Thinking</span>
+          <select id="thinking-select" class="thinking-select"></select>
+        </label>
         <label class="toggle-label">
           <input type="checkbox" id="web-search-toggle" checked>
           <span class="toggle-text">Web search</span>

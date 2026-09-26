@@ -10,6 +10,7 @@
 #   scripts/switch-stack.sh ollama-ctx               recreate qwen3.8-pharma if its context differs from the Modelfile
 #   scripts/switch-stack.sh mcp-token                create the token agents use to reach pharmaitchat-mcp
 #   scripts/switch-stack.sh mcp start|stop|status    control the pharmaitchat-mcp launchd service
+#   scripts/switch-stack.sh chat-endpoint <stack>    print "<url> <model>" the stack serves chat on
 
 set -euo pipefail
 
@@ -285,31 +286,36 @@ stop_stack() {
   esac
 }
 
+# Where a stack serves chat, as "<base url> <model>". mlx-watchdog.sh reads this
+# too, so the server it probes and restarts is the one the stack really runs.
+chat_endpoint() {
+  case "$1" in
+    mlx) echo "http://localhost:$MLX_CHAT_PORT $MLX_CHAT_MODEL" ;;
+    omlx) echo "http://localhost:$OMLX_PORT $OMLX_CHAT_MODEL" ;;
+    splash) echo "http://localhost:$SPLASH_PORT $SPLASH_CHAT_MODEL" ;;
+    ollama) echo "http://localhost:$OLLAMA_PORT $OLLAMA_CHAT_MODEL" ;;
+    *) log "Unknown stack '$1' (expected ${STACK_NAMES[*]})" >&2; return 1 ;;
+  esac
+}
+
 # Load both models into memory so the first real request doesn't pay for it
 warm_up() {
   local chat_url embed_url chat_model embed_model extra
+  read -r chat_url chat_model <<<"$(chat_endpoint "$1")"
   if [ "$1" = "mlx" ]; then
-    chat_url="http://localhost:$MLX_CHAT_PORT"
     embed_url="http://localhost:$MLX_EMBED_PORT"
-    chat_model="$MLX_CHAT_MODEL"
     embed_model="$MLX_EMBED_MODEL"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
   elif [ "$1" = "omlx" ]; then
-    chat_url="http://localhost:$OMLX_PORT"
     embed_url="$chat_url"
-    chat_model="$OMLX_CHAT_MODEL"
     embed_model="$OMLX_EMBED_MODEL"
     extra='"chat_template_kwargs":{"enable_thinking":false}'
   elif [ "$1" = "splash" ]; then
-    chat_url="http://localhost:$SPLASH_PORT"
     embed_url="http://localhost:$MLX_EMBED_PORT"
-    chat_model="$SPLASH_CHAT_MODEL"
     embed_model="$MLX_EMBED_MODEL"
     extra='"reasoning_effort":"none"'
   else
-    chat_url="http://localhost:$OLLAMA_PORT"
     embed_url="$chat_url"
-    chat_model="$OLLAMA_CHAT_MODEL"
     embed_model="$OLLAMA_EMBED_MODEL"
     extra='"reasoning_effort":"none"'
   fi
@@ -711,6 +717,7 @@ status() {
 case "${1:-}" in
   ollama|mlx|omlx|splash) switch_to "$1" ;;
   ensure-stack) ensure_stack "${2:-}" ;;
+  chat-endpoint) chat_endpoint "${2:-}" ;;
   prepare) prepare ;;
   status) status ;;
   token) ensure_token ;;
@@ -718,5 +725,5 @@ case "${1:-}" in
   ollama-ctx) ensure_ollama_ctx ;;
   mcp-token) ensure_mcp_token ;;
   mcp) mcp_service "${2:-}" ;;
-  *) sed -n '2,12p' "$0"; exit 1 ;;
+  *) sed -n '2,13p' "$0"; exit 1 ;;
 esac

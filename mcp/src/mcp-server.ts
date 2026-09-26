@@ -2,6 +2,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PharmaITChatClient } from "./pharmaitchat-client.js";
+import { registerExportTools } from "./tools/export.js";
 import { registerFeedbackTools } from "./tools/feedback.js";
 import { registerGapTools } from "./tools/gaps.js";
 import { registerGraphTools } from "./tools/graph.js";
@@ -19,5 +20,6 @@ export function buildMcpServer(client: PharmaITChatClient, log: ToolLogger, opti
   registerGapTools(server, client, log, options);
   registerOperationsTools(server, client, log, options);
   registerFeedbackTools(server, client, log);
+  registerExportTools(server, client, log);
   return server;
 }

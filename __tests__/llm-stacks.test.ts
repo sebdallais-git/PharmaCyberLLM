@@ -1,9 +1,25 @@
 import { describe, expect, it } from "@jest/globals";
+import { thinkingBody } from "../src/services/thinking.js";
 import { buildStacks, getActiveStack, isStackName, STACK_NAMES } from "../src/config/llm-stacks.js";
 
 describe("getActiveStack", () => {
-  it("defaults to the ollama stack", () => {
-    expect(getActiveStack({}).name).toBe("ollama");
+  it("falls back to the running stack when LLM_PROVIDER is unset", () => {
+    // A bare shell has no LLM_PROVIDER. Defaulting to ollama pointed such a
+    // process at the wrong collection -- and reindex.ts DELETEs the collection
+    // it is about to rebuild.
+    expect(getActiveStack({}, () => "mlx").name).toBe("mlx");
+  });
+
+  it("prefers an explicit LLM_PROVIDER over the running stack", () => {
+    expect(getActiveStack({ LLM_PROVIDER: "ollama" }, () => "mlx").name).toBe("ollama");
+  });
+
+  it("refuses to guess when neither the env nor the running stack says", () => {
+    expect(() => getActiveStack({}, () => null)).toThrow(/refusing to guess/);
+  });
+
+  it("rejects a corrupt running-stack file rather than falling back", () => {
+    expect(() => getActiveStack({}, () => "lmstudio")).toThrow(/lmstudio/);
   });
 
   it("selects the mlx stack", () => {
@@ -49,8 +65,8 @@ describe("buildStacks", () => {
 
   it("disables thinking on both stacks", () => {
     const { ollama, mlx } = buildStacks({});
-    expect(ollama.chatExtraBody).toEqual({ reasoning_effort: "none" });
-    expect(mlx.chatExtraBody).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+    expect(thinkingBody(ollama, "off")).toEqual({ reasoning_effort: "none" });
+    expect(thinkingBody(mlx, "off")).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   });
 });
 
@@ -157,7 +173,7 @@ describe("the splash stack", () => {
     expect(Object.values(splash).every((v) => v !== undefined && v !== "")).toBe(true);
   });
 
-  // THE CRITICAL FINDING this test exists to pin: chatExtraBody was copied from mlx/omlx's
+  // THE CRITICAL FINDING this test exists to pin: splash's thinking body was copied from mlx/omlx's
   // chat_template_kwargs convention, but Splash's own server, its warm-up in switch-stack.sh, the
   // spec and the README all disable thinking via reasoning_effort. With the wrong field, warm_up
   // warms up successfully with one body while every real chat request through llm-client.ts /
@@ -167,8 +183,8 @@ describe("the splash stack", () => {
   it("disables thinking via reasoning_effort, matching the warm-up, not mlx's chat_template_kwargs", () => {
     const { splash } = buildStacks({});
 
-    expect(splash.chatExtraBody).toEqual({ reasoning_effort: "none" });
-    expect(splash.chatExtraBody).not.toHaveProperty("chat_template_kwargs");
+    expect(thinkingBody(splash, "off")).toEqual({ reasoning_effort: "none" });
+    expect(thinkingBody(splash, "off")).not.toHaveProperty("chat_template_kwargs");
   });
 
   it("honours SPLASH_URL and MLX_EMBED_URL overrides", () => {

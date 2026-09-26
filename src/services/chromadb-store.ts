@@ -13,7 +13,8 @@ const DATABASE = "default_database";
 const EMBED_BATCH_SIZE = 32;
 const UPSERT_BATCH_SIZE = 500;
 
-const BASE = `${CHROMADB_URL}/api/v2/tenants/${TENANT}/databases/${DATABASE}/collections`;
+export const CHROMA_BASE = `${CHROMADB_URL}/api/v2/tenants/${TENANT}/databases/${DATABASE}/collections`;
+const BASE = CHROMA_BASE;
 
 interface ChromaCollection {
   id: string;
@@ -50,6 +51,11 @@ function collectionName(): string {
   return getActiveStack().chromaCollection;
 }
 
+/** The collection the current process would read or write, for scripts that must say so before acting. */
+export function getActiveStackCollectionName(): string {
+  return collectionName();
+}
+
 async function findCollection(): Promise<ChromaCollection | null> {
   const resp = await fetch(BASE);
   if (!resp.ok) {
@@ -60,7 +66,7 @@ async function findCollection(): Promise<ChromaCollection | null> {
 }
 
 // Resolve the active stack's collection ID, creating the collection with index metadata if needed
-async function getCollectionId(): Promise<string> {
+export async function getCollectionId(): Promise<string> {
   const name = collectionName();
   if (cachedCollection?.name === name) return cachedCollection.id;
 

@@ -345,7 +345,7 @@ describe("watchlist store", () => {
         second.close();
 
         const raw = new Database(dbPath);
-        expect(raw.pragma("user_version", { simple: true })).toBe(2);
+        expect(raw.pragma("user_version", { simple: true })).toBe(3);
         raw.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -394,7 +394,7 @@ describe("watchlist store", () => {
         migrated.close();
 
         const raw = new Database(dbPath);
-        expect(raw.pragma("user_version", { simple: true })).toBe(2);
+        expect(raw.pragma("user_version", { simple: true })).toBe(3);
         raw.close();
 
         // Reopening an already-migrated database must be a no-op, not a second migration attempt.
@@ -455,7 +455,7 @@ describe("watchlist store", () => {
         migrated.close();
 
         const raw = new Database(dbPath);
-        expect(raw.pragma("user_version", { simple: true })).toBe(2);
+        expect(raw.pragma("user_version", { simple: true })).toBe(3);
         raw.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -497,11 +497,33 @@ describe("watchlist store", () => {
         reopened.close();
 
         const rawAfter = new Database(dbPath);
-        expect(rawAfter.pragma("user_version", { simple: true })).toBe(2);
+        expect(rawAfter.pragma("user_version", { simple: true })).toBe(3);
         rawAfter.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("item body persistence", () => {
+  // The fetched article body is what makes a watchlist chunk deep enough to
+  // answer a comparison question. Before this, it was embedded into ChromaDB
+  // and then dropped, so a reindex destroyed it with no way to rebuild.
+  it("round-trips the fetched body", () => {
+    const store = openWatchlistStore(":memory:");
+    const body = "Dell announced PowerStore Prime, a mid-range array refresh.";
+
+    store.insertItem({ ...base, urlCanonical: "https://a/body", contentHash: "h-body", body });
+
+    expect(store.findByHash("h-body")?.body).toBe(body);
+  });
+
+  it("defaults the body to an empty string when none was fetched", () => {
+    const store = openWatchlistStore(":memory:");
+
+    store.insertItem({ ...base, urlCanonical: "https://a/nobody", contentHash: "h-nobody" });
+
+    expect(store.findByHash("h-nobody")?.body).toBe("");
   });
 });
