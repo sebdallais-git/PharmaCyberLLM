@@ -17,6 +17,9 @@ export interface HealthCheck {
 
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
 
+// scripts/check-services.sh must wait longer than this for /api/health
+export const GENERATION_PROBE_TIMEOUT_MS = 20000;
+
 // Chat can't work without these; anything else only degrades answers
 export const CRITICAL_CHECKS: readonly string[] = ["llm_chat", "llm_embed", "search_index"];
 
@@ -36,19 +39,34 @@ export function stackProbeUrls(stack: StackConfig): { llm_chat: string; llm_embe
  * being open is liveness; producing a token is readiness, and only the second
  * one means chat works.
  */
-export async function probeGeneration(baseUrl: string, timeoutMs: number = 20000): Promise<HealthCheck> {
+export async function probeGeneration(
+  stack: Pick<StackConfig, "chatBaseUrl" | "chatModel">,
+  timeoutMs: number = GENERATION_PROBE_TIMEOUT_MS,
+): Promise<HealthCheck> {
   const start = Date.now();
   try {
-    const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const resp = await fetch(`${stack.chatBaseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // max_tokens 1 keeps this cheap when healthy; when wedged it costs the
-      // timeout, which is the point.
-      body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
+      // timeout, which is the point. The model is required by every stack
+      // except mlx_lm.server, which falls back to the one it loaded.
+      body: JSON.stringify({
+        model: stack.chatModel,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        stream: false,
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     return { status: resp.ok ? "ok" : "error", latency_ms: Date.now() - start };
-  } catch {
+  } catch (err) {
+    // The chat server takes one request at a time, so a long chat turn or an
+    // export makes this time out too. It cannot tell the two apart; say so.
+    // By name, not instanceof: the DOMException may come from another realm.
+    if (typeof err === "object" && err !== null && "name" in err && err.name === "TimeoutError") {
+      return { status: "unreachable", detail: `no token within ${timeoutMs / 1000}s: busy with another request, or wedged` };
+    }
     return { status: "unreachable" };
   }
 }

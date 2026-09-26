@@ -31,6 +31,25 @@ describe("renderPdf", () => {
     await expect(renderPdf(leaky)).rejects.toThrow(/internal-only/i);
   });
 
+  it("renders model-written text the standard font cannot encode instead of failing the export", async () => {
+    // Helvetica only covers WinAnsi. Summaries and headlines carry arrows, math
+    // signs, CJK and emoji; pdf-lib throws on those and the whole job failed.
+    const unicode: Artifact = {
+      ...artifact,
+      title: "Novartis → cloud ≥ 2027 😀",
+      sections: [{ kind: "prose", heading: "Spend ↑", body: "Azure ≥ AWS → 日本 rollout ≤ Q3 😀", cites: [] }],
+      citations: [],
+    };
+    const buffer = await renderPdf(unicode);
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const { text } = await parser.getText();
+    await parser.destroy();
+
+    expect(text).toContain("Azure >= AWS -> ?? rollout <= Q3 ?");
+    expect(text).toContain("Novartis -> cloud >= 2027 ?");
+    expect((await PDFDocument.load(buffer)).getTitle()).toBe("Novartis → cloud ≥ 2027 😀");
+  });
+
   it("renders a table's column headers and a cell value into extractable text", async () => {
     const buffer = await renderPdf(artifact);
     const parser = new PDFParse({ data: new Uint8Array(buffer) });

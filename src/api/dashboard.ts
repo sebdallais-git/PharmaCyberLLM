@@ -70,7 +70,7 @@ router.get("/health", async (_req: Request, res: Response): Promise<void> => {
   // 2026-09-22 this endpoint reported llm_chat "ok" for a server that timed out
   // a 5-token request at 90s. Liveness is not readiness.
   const [chat, embed] = await Promise.all([
-    probeGeneration(stack.chatBaseUrl),
+    probeGeneration(stack),
     probeUrl(urls.llm_embed),
   ]);
   checks.llm_chat = chat;
